@@ -1,0 +1,20 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildSyncPeople
+## Notes: People: a personal profile card (note, what you like, when you are usually online) shared with your guild through GuildSync.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## Dependencies: GuildSync
+## SavedVariables: GuildSyncPeopleDB
+
+PeopleRules.lua
+PeopleRecord.lua
+PeopleCard.lua
+PeopleDemo.lua
+People.lua
+PeopleRoster.lua
+PeopleStore.lua
+Hooks.lua
+PeopleGrid.lua
+PeopleProfile.lua
+PeopleSection.lua
+PeoplePage.lua

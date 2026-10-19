@@ -1,0 +1,535 @@
+-- GuildSync CraftView: the words and rows of the Crafters, Recipes and Work board pages, the id index and search,
+-- the alert lines, the settings labels and the status line.
+-- Pure: no client calls and no globals, so addon/test/craft_view_test.lua runs it outside the game. Names, icons and
+-- quality come in through the names table ({ items = { [id] = name }, spells = { [id] = name }, version }) and
+-- arguments; the index holds ids only.
+
+local _, ns = ...
+
+local CraftView = {}
+ns.CraftView = CraftView
+
+CraftView.UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
+CraftView.CLEAR_RECIPES = "Clear recipes on this character"
+CraftView.CLEAR_BOARD = "Clear work board and favourites (all your characters)"
+CraftView.NO_REAGENTS = "The game does not give the reagents for this recipe."
+
+local PROF_NAMES = {
+  [164] = "Blacksmithing", [165] = "Leatherworking", [171] = "Alchemy", [182] = "Herbalism", [186] = "Mining",
+  [197] = "Tailoring", [202] = "Engineering", [333] = "Enchanting", [393] = "Skinning", [755] = "Jewelcrafting",
+  [773] = "Inscription", [185] = "Cooking", [129] = "First Aid", [356] = "Fishing",
+}
+
+-- Item quality colours (0 poor .. 7 heirloom), as the client draws them.
+local QUALITY_COLORS = {
+  [0] = "ff9d9d9d", [1] = "ffffffff", [2] = "ff1eff00", [3] = "ff0070dd", [4] = "ffa335ee", [5] = "ffff8000",
+  [6] = "ffe6cc80", [7] = "ff00ccff",
+}
+
+local function lower(s) return type(s) == "string" and string.lower(s) or "" end
+
+local function contains(s, q) return s ~= "" and string.find(lower(s), q, 1, true) ~= nil end
+
+function CraftView.ProfessionName(id)
+  return PROF_NAMES[id] or ("profession " .. tostring(id))
+end
+
+-- Every | doubled, so a note never opens a colour code or a link.
+function CraftView.SafeText(s)
+  if type(s) ~= "string" then return "" end
+  return (string.gsub(s, "|", "||"))
+end
+
+-- A person's name: the roster's name for key when the roster row carries one, else the given (wire) text made safe.
+-- Wire name atoms are never drawn as they came (f1062).
+local function personName(roster, key, fallback)
+  local row = type(roster) == "table" and key ~= nil and roster[key] or nil
+  if type(row) == "table" and type(row.name) == "string" and row.name ~= "" then return row.name end
+  return CraftView.SafeText(fallback ~= nil and tostring(fallback) or tostring(key))
+end
+
+-- ---------- names ----------
+
+function CraftView.RecipeLabel(spellID, names, windowName)
+  local spells = names and names.spells
+  local name = spells and spells[spellID]
+  if type(name) == "string" and name ~= "" then return name end
+  if type(windowName) == "string" and windowName ~= "" then return windowName end
+  return "recipe " .. tostring(spellID)
+end
+
+local function itemName(itemID, names)
+  local items = names and names.items
+  local name = items and items[itemID]
+  if type(name) == "string" and name ~= "" then return name end
+  return "item " .. tostring(itemID)
+end
+
+-- Arguments in CraftCompat.ItemInfo's return order. Uncached: "item <id>" with the unknown icon.
+function CraftView.ItemCell(itemID, name, quality, icon)
+  local cached = type(name) == "string" and name ~= ""
+  return {
+    text = cached and name or ("item " .. tostring(itemID)),
+    icon = cached and icon or CraftView.UNKNOWN_ICON,
+    color = QUALITY_COLORS[quality] or QUALITY_COLORS[1],
+  }
+end
+
+-- ---------- index ----------
+
+local function unpackRecipes(packed)
+  local out = {}
+  if type(packed) ~= "string" then return out end
+  for spell, item in string.gmatch(packed, "(%d+)=(%d+)") do
+    local itemID = tonumber(item)
+    out[#out + 1] = { spell = tonumber(spell), item = itemID ~= 0 and itemID or nil }
+  end
+  return out
+end
+
+-- One entry per (character, profession): directory records, plus roster members whose profession has no record.
+local function build(crafters, own, rosterRows)
+  local entries = {}
+  own, rosterRows = own or {}, rosterRows or {}
+  for key, c in pairs(crafters or {}) do
+    local r = rosterRows[key]
+    for prof, p in pairs(c.profs or {}) do
+      entries[#entries + 1] = {
+        key = key, name = (r and r.name) or c.name or key, prof = prof, profName = CraftView.ProfessionName(prof),
+        rank = p.rank or 0, max = p.max, online = (r and r.online) == true, seen = c.seen,
+        own = own[key] == true, shared = true, recipes = unpackRecipes(p.packed),
+      }
+    end
+  end
+  for key, r in pairs(rosterRows) do
+    local c = crafters and crafters[key]
+    for _, p in ipairs({ r.prof1 or false, r.prof2 or false }) do
+      if p and p.id and not (c and c.profs and c.profs[p.id]) then
+        entries[#entries + 1] = {
+          key = key, name = r.name or key, prof = p.id, profName = PROF_NAMES[p.id] or p.name or CraftView.ProfessionName(p.id),
+          rank = p.rank or 0, online = r.online == true, seen = c and c.seen, own = own[key] == true, shared = false,
+          recipes = {},
+        }
+      end
+    end
+  end
+  return { entries = entries }
+end
+
+local lastIndex = { version = nil, index = nil }
+
+-- Rebuilt only when the directory version changes (one directory per client).
+function CraftView.Index(crafters, own, rosterRows, version)
+  if lastIndex.index and version ~= nil and lastIndex.version == version then return lastIndex.index end
+  local index = build(crafters, own, rosterRows)
+  lastIndex.version, lastIndex.index = version, index
+  return index
+end
+
+-- ---------- search ----------
+
+local searchCache = setmetatable({}, { __mode = "k" }) -- [index] = { [query] = { nv, chips, rows, counts } }
+
+local function sortRows(a, b)
+  if a.fav ~= b.fav then return a.fav end
+  if a.online ~= b.online then return a.online end
+  if a.rank ~= b.rank then return a.rank > b.rank end
+  if a.name ~= b.name then return a.name < b.name end
+  return a.prof < b.prof
+end
+
+-- rows (one per character and profession) and counts { all, online, profs }, taken before the prof and online chips.
+function CraftView.Search(index, names, query, chips)
+  chips = chips or {}
+  local q = lower(query):gsub("^%s+", ""):gsub("%s+$", "")
+  local nv = names and names.version
+  local perIndex = searchCache[index]
+  if not perIndex then perIndex = {}; searchCache[index] = perIndex end
+  local hit = perIndex[q]
+  if hit and hit.nv == nv and hit.chips == chips then return hit.rows, hit.counts end
+
+  local items, spells = names and names.items or {}, names and names.spells or {}
+  local favs = chips.favourites or {}
+  local rows, counts = {}, { all = 0, online = 0, profs = {} }
+  for _, e in ipairs(index and index.entries or {}) do
+    local hits = {}
+    if q ~= "" then
+      for _, rc in ipairs(e.recipes) do
+        if contains(rc.item and items[rc.item] or "", q) or contains(spells[rc.spell] or "", q) then
+          hits[#hits + 1] = { spell = rc.spell, item = rc.item }
+        end
+      end
+    end
+    if q == "" or #hits > 0 or contains(e.name, q) or contains(e.profName, q) then
+      counts.all = counts.all + 1
+      if e.online then counts.online = counts.online + 1 end
+      counts.profs[e.prof] = (counts.profs[e.prof] or 0) + 1
+      if (chips.prof == nil or chips.prof == e.prof) and (not chips.online or e.online) then
+        rows[#rows + 1] = {
+          key = e.key, name = e.name, prof = e.prof, rank = e.rank, max = e.max, online = e.online, seen = e.seen,
+          own = e.own, fav = favs[e.key] == true, shared = e.shared, hits = hits,
+        }
+      end
+    end
+  end
+  table.sort(rows, sortRows)
+  perIndex[q] = { nv = nv, chips = chips, rows = rows, counts = counts }
+  return rows, counts
+end
+
+-- ---------- crafter rows ----------
+
+function CraftView.LastSeen(seen, now, online)
+  if online then return "online" end
+  if type(seen) ~= "number" or type(now) ~= "number" then return "unknown" end
+  local d = now - seen
+  if d < 3600 then return math.max(1, math.floor(d / 60)) .. " min ago" end
+  if d < 86400 then return math.floor(d / 3600) .. " h ago" end
+  local days = math.floor(d / 86400)
+  return days .. (days == 1 and " day ago" or " days ago")
+end
+
+function CraftView.CrafterText(row, now)
+  local prof = CraftView.ProfessionName(row.prof)
+  if not row.shared then
+    return row.name .. ", " .. prof .. " " .. tostring(row.rank) .. ", recipes not shared"
+  end
+  local rank = tostring(row.rank) .. (row.max and ("/" .. tostring(row.max)) or "")
+  return row.name .. ", " .. prof .. " " .. rank .. ", " .. CraftView.LastSeen(row.seen, now, row.online)
+end
+
+-- ---------- recipe book ----------
+
+-- Flat rows in draw order: profession, then its recipes, each followed by who knows it. Shared records only.
+function CraftView.Book(index, names)
+  local profs = {}
+  for _, e in ipairs(index and index.entries or {}) do
+    if e.shared then
+      local p = profs[e.prof]
+      if not p then p = { prof = e.prof, text = CraftView.ProfessionName(e.prof), recipes = {} }; profs[e.prof] = p end
+      for _, rc in ipairs(e.recipes) do
+        local r = p.recipes[rc.spell]
+        if not r then
+          r = { spell = rc.spell, item = rc.item, text = CraftView.RecipeLabel(rc.spell, names), crafters = {} }
+          p.recipes[rc.spell] = r
+        end
+        r.crafters[#r.crafters + 1] = { key = e.key, text = e.name }
+      end
+    end
+  end
+  local byText = function(a, b) return a.text < b.text end
+  local plist = {}
+  for _, p in pairs(profs) do plist[#plist + 1] = p end
+  table.sort(plist, byText)
+  local out = {}
+  for _, p in ipairs(plist) do
+    out[#out + 1] = { kind = "prof", prof = p.prof, text = p.text }
+    local rlist = {}
+    for _, r in pairs(p.recipes) do rlist[#rlist + 1] = r end
+    table.sort(rlist, byText)
+    for _, r in ipairs(rlist) do
+      out[#out + 1] = { kind = "recipe", spell = r.spell, item = r.item, text = r.text }
+      table.sort(r.crafters, byText)
+      for _, c in ipairs(r.crafters) do out[#out + 1] = { kind = "crafter", key = c.key, text = c.text } end
+    end
+  end
+  return out
+end
+
+function CraftView.ReagentLines(reagents, names)
+  if type(reagents) ~= "table" or #reagents == 0 then return { CraftView.NO_REAGENTS } end
+  local out = {}
+  for _, r in ipairs(reagents) do
+    out[#out + 1] = itemName(r.itemID, names) .. " x" .. tostring(r.count or 1)
+  end
+  return out
+end
+
+-- ---------- work board ----------
+
+function CraftView.TimeLeft(expiresAt, now)
+  local d = (expiresAt or 0) - (now or 0)
+  if d <= 0 then return "expired" end
+  if d >= 3600 then return math.floor(d / 3600) .. " h" end
+  return math.max(1, math.floor(d / 60)) .. " min"
+end
+
+-- "i<id>" reads the item name, "s<id>" the recipe name.
+local function requestItem(what, names)
+  local kind, id = string.match(tostring(what or ""), "^([is])(%d+)$")
+  id = tonumber(id)
+  if kind == "s" then return CraftView.RecipeLabel(id, names) end
+  if kind == "i" then return itemName(id, names) end
+  return tostring(what or "")
+end
+
+-- opts = { names, claim = { key, name, at } or nil, roster = { [key] = row } }. Names come from the roster row's name;
+-- a row that is not a table (or has no name) falls back to the wire text, made safe. mark is "" or the unconfirmed
+-- or reported text.
+function CraftView.BoardRow(req, now, opts)
+  opts = opts or {}
+  local claim = ""
+  if opts.claim then
+    local gone = opts.roster and not opts.roster[opts.claim.key]
+    claim = "working on it: " .. (gone and "(left the guild)" or personName(opts.roster, opts.claim.key, opts.claim.name))
+  end
+  local who = personName(opts.roster, req.by, req.byName or req.by)
+  -- d207: a copy relayed by someone else, not yet confirmed by the requester; a done or cancel someone else reported
+  local mark = ""
+  if req.provisional then
+    mark = "unconfirmed, not yet heard from " .. who
+  elseif type(req.reported) == "table" then
+    mark = "reported " .. (req.reported.state == "cancel" and "cancelled" or "done") .. " by "
+      .. personName(opts.roster, req.reported.by, req.reported.by) .. ", awaiting " .. who
+  end
+  return {
+    who = who,
+    mark = mark,
+    item = requestItem(req.what, opts.names),
+    qty = "x" .. tostring(req.qty or 1),
+    mats = req.mats and "brings mats" or "needs mats",
+    tip = (type(req.tip) == "number" and req.tip > 0) and (req.tip .. " g") or "",
+    left = CraftView.TimeLeft(req.expiresAt, now),
+    note = CraftView.SafeText(req.note),
+    claim = claim,
+  }
+end
+
+-- opts = { me, myKeys, claim, canMake, roster } -> actions (claim | drop | release | done | cancel | keep), line
+function CraftView.Actions(req, now, opts)
+  opts = opts or {}
+  local actions, claim = {}, opts.claim
+  if req.provisional then
+    -- d211: unconfirmed and in my name: Keep or Cancel, from that character only; anyone else's takes no action
+    if not (opts.myKeys and opts.myKeys[req.by]) or req.final then return actions, nil end
+    -- d216: who passed it on, and the quantity and tip that Keep would make mine
+    local tip = (type(req.tip) == "number" and req.tip > 0) and ("tip " .. req.tip .. " g") or "no tip"
+    local line = "In your name, not posted from this computer. " .. personName(opts.roster, req.provisional, req.provisional)
+      .. " passed it on, quantity " .. tostring(req.qty or 1) .. ", " .. tip .. "."
+    if opts.me == req.by then return { "keep", "cancel" }, line end
+    return actions, line .. " Log in on " .. personName(opts.roster, req.by, req.byName or req.by) .. " to keep or cancel it."
+  end
+  if opts.me == req.by then
+    -- d215: an expired request of mine can still be marked done or cancelled, not released
+    if claim and (req.expiresAt or 0) > (now or 0) then actions[#actions + 1] = "release" end
+    actions[#actions + 1] = "done"
+    actions[#actions + 1] = "cancel"
+    return actions, nil
+  end
+  if opts.myKeys and opts.myKeys[req.by] then
+    return actions, "Log in on " .. personName(opts.roster, req.by, req.byName or req.by) .. " to change it."
+  end
+  if claim and claim.key == opts.me then
+    actions[#actions + 1] = "drop"
+  elseif opts.canMake and (req.expiresAt or 0) > (now or 0) then
+    actions[#actions + 1] = "claim"
+  end
+  return actions, nil
+end
+
+-- ---------- board layout and request cards ----------
+
+local CARD_W, CARD_H, CARD_GAP = 349, 76, 10
+local FORM_H, FORM_SHIFT = 108, 130
+local TAB_ROW_H = 32 -- the board area starts under the tab row (PanelTopTabButtonTemplate is 32 tall)
+local NEW_W = 120 -- New request / Post request column at the area's right
+local DOT = " \194\183 " -- U+00B7 between the by-line's parts
+
+-- The Crafting page's board area for a page pageW x pageH: two card columns when two cards and the gap fit, else one;
+-- cards from y 30 under the top tabs (48 under today's flat list buttons); the New request form areaW x 108 at the
+-- cards' top pushes them 130 down. Pure: the caller places its frames from these numbers.
+function CraftView.BoardLayout(pageW, pageH, flatTabs)
+  local areaW = pageW - 18
+  return {
+    areaX = 0, areaTop = TAB_ROW_H, areaW = areaW, areaH = pageH - TAB_ROW_H,
+    cols = (areaW >= 2 * CARD_W + CARD_GAP) and 2 or 1,
+    colStep = CARD_W + CARD_GAP, cardW = CARD_W, cardH = CARD_H, rowStep = CARD_H + CARD_GAP,
+    cardsTop = flatTabs and 48 or 30,
+    formW = areaW, formH = FORM_H, formShift = FORM_SHIFT,
+    noteW = areaW - NEW_W - 12 - 280, postX = areaW - NEW_W,
+  }
+end
+
+-- ---------- Crafters and Recipes layout ----------
+
+-- The Crafters tab inside the area box areaW wide: filter row (search, profession dropdown, Online now), status line,
+-- list. The list box is areaW - 16 (Kit.List keeps 16 px for the scroll bar), so rows are that wide; Whisper anchors
+-- RIGHT -4 of the row, never at an absolute x. Pure.
+function CraftView.CraftersLayout(areaW)
+  local rowW = areaW - 16
+  local seenX = math.min(400, rowW - 180)
+  return {
+    searchX = 5, searchY = 1, searchW = 220, dropX = 237, dropW = 190, checkX = 439,
+    statusX = 4, statusY = 34, listTop = 52, rowH = 40, rowW = rowW,
+    starX = 4, starY = 5, classX = 30, classY = 6, nameX = 54, nameY = 6,
+    profX = math.min(232, seenX - 168), seenX = seenX,
+    whisperW = 80, whisperH = 22, whisperRight = -4, line2Y = 22,
+  }
+end
+
+-- The Recipes tab: the book card 220 x areaH at the area's top left, the detail card beside it to the area's right.
+-- rankRight / seenRight are offsets from the detail card's right edge. Pure.
+function CraftView.RecipesLayout(areaW, areaH)
+  return {
+    bookX = 0, bookY = 0, bookW = 220, bookH = areaH, bookRowH = 22,
+    detailX = 230, detailW = areaW - 230, detailH = areaH,
+    rankRight = -130, seenRight = -12,
+  }
+end
+
+local DETAIL_TOP, MAKES_H = 60, 52 -- content under the divider; Makes = label 16 + icon row 28 + gap 8
+local LABEL_H, KNOWN_LINE, REAGENT_LINE, DETAIL_GAP, DETAIL_PAD = 18, 18, 26, 8, 12
+local KNOWN_FIRST = 3 -- Known by keeps at least this many lines when the card is short
+
+-- n items in `slots` lines: all, or slots - 1 named and a "(+N more)" line.
+local function cut(n, slots)
+  if n <= slots then return n, 0 end
+  local named = math.max(slots - 1, 0)
+  return named, n - named
+end
+
+-- The recipe detail card's lines for a card cardH tall: Known by (lines 18) and Reagents (lines 26) each cut with a
+-- "(+N more)" line when they do not fit or pass their pool size (maxKnown / maxReagents count that line). Known by
+-- first gets min(n, 3), the reagents what then fits, Known by the rest. Pure.
+function CraftView.DetailFit(cardH, hasMakes, nKnown, nReagents, maxKnown, maxReagents)
+  local knownY = hasMakes and (DETAIL_TOP + MAKES_H) or DETAIL_TOP
+  local avail = cardH - DETAIL_PAD - knownY - LABEL_H - DETAIL_GAP - LABEL_H
+  local kTotal, rTotal = math.min(nKnown, maxKnown), math.min(nReagents, maxReagents)
+  if kTotal * KNOWN_LINE + rTotal * REAGENT_LINE > avail then
+    local kFirst = math.min(nKnown, KNOWN_FIRST, maxKnown)
+    rTotal = math.max(0, math.min(rTotal, math.floor((avail - kFirst * KNOWN_LINE) / REAGENT_LINE)))
+    kTotal = math.max(0, math.min(kTotal, math.floor((avail - rTotal * REAGENT_LINE) / KNOWN_LINE)))
+  end
+  local knownLines, knownMore = cut(nKnown, kTotal)
+  local reagentLines, reagentsMore = cut(nReagents, rTotal)
+  local knownShown = knownLines + (knownMore > 0 and 1 or 0)
+  return {
+    makesY = DETAIL_TOP, knownY = knownY, knownLines = knownLines, knownMore = knownMore,
+    reagentsY = knownY + LABEL_H + knownShown * KNOWN_LINE + DETAIL_GAP,
+    reagentLines = reagentLines, reagentsMore = reagentsMore,
+  }
+end
+
+-- A card's lines from BoardRow's row and CraftBoard.State's word: right = time left or the end state, by = who, mats
+-- and tip, tail = claim and mark (open or claimed only) and the quoted note. The row's strings are already escaped.
+function CraftView.CardLines(row, st)
+  local right
+  if st == "done" then right = "done"
+  elseif st == "cancel" then right = "cancelled"
+  elseif st == "expired" then right = "expired"
+  else right = row.left .. " left" end
+  local by = row.who .. DOT .. row.mats
+  if row.tip ~= "" then by = by .. DOT .. "tip " .. row.tip end
+  local live = st == "open" or st == "claimed"
+  local tail = {}
+  if live and row.claim ~= "" then tail[#tail + 1] = row.claim end
+  if live and row.mark and row.mark ~= "" then tail[#tail + 1] = row.mark end
+  if row.note ~= "" then tail[#tail + 1] = "\"" .. row.note .. "\"" end
+  return { right = right, by = by, tail = table.concat(tail, ", ") }
+end
+
+-- roster (optional): the requester is named by the roster row's name.
+function CraftView.AlertLine(req, names, roster)
+  return personName(roster, req.by, req.byName or req.by) .. " wants " .. requestItem(req.what, names) .. " x" .. tostring(req.qty or 1)
+    .. " on the Work board."
+end
+
+function CraftView.CatchUpLine(n)
+  if n == 1 then return "1 request you can make is open on the Work board." end
+  return tostring(n) .. " requests you can make are open on the Work board."
+end
+
+-- ---------- settings ----------
+
+local RETENTION = { 14, 30, 60, 90, 0 } -- 0 = forever
+
+function CraftView.NextRetention(days)
+  for i, d in ipairs(RETENTION) do
+    if d == days then return RETENTION[i % #RETENTION + 1] end
+  end
+  return RETENTION[1]
+end
+
+function CraftView.RetentionLabel(days)
+  if days == 0 then return "forever" end
+  return tostring(days) .. " days"
+end
+
+-- ---------- status line ----------
+
+local function thousands(n)
+  local s = tostring(n or 0)
+  local sign, int, rest = string.match(s, "^(-?)(%d+)(.*)$")
+  if not int then return s end
+  int = string.reverse((string.gsub(string.reverse(int), "(%d%d%d)", "%1,")))
+  if string.sub(int, 1, 1) == "," then int = string.sub(int, 2) end
+  return sign .. int .. rest
+end
+
+-- stats = { crafters, lastDigest (text), sent (chunks that went), attempts (every send, optional), received,
+-- lastResult, queue, gate (nil = open, else CanSend's why) }
+function CraftView.StatusLine(stats)
+  stats = stats or {}
+  return "crafters " .. thousands(stats.crafters)
+    .. ", last digest " .. tostring(stats.lastDigest or "never")
+    .. ", sent " .. thousands(stats.sent) .. " chunks"
+    .. (stats.attempts ~= nil and (" (" .. thousands(stats.attempts) .. " attempts)") or "")
+    .. ", received " .. thousands(stats.received) .. " chunks"
+    .. ", last send result " .. tostring(stats.lastResult == nil and "none" or stats.lastResult)
+    .. ", queue " .. thousands(stats.queue)
+    .. ", sending: " .. (stats.gate and ("no (" .. tostring(stats.gate) .. ")") or "yes")
+end
+
+-- ---------- /gsync demo ----------
+
+-- Recipes the made-up crafters know, per profession id, in the directory's packed form (spell=item, 0: no item).
+local DEMO_RECIPES = {
+  [171] = "2330=118,3170=3382", [164] = "2660=2862,2663=2853", [202] = "3922=4359,3918=4357",
+  [165] = "2152=2304,2149=2302", [197] = "2387=2570,2393=2576", [333] = "7418=0,7420=0",
+}
+-- Work board requests: requester, claimer (member positions in GUID order), item, qty, tip, hours ago, state.
+local DEMO_REQUESTS = {
+  { 2, nil, "i118", 5, 2, 2, "open" }, { 5, nil, "i2862", 10, 0, 5, "open" },
+  { 3, 7, "i4359", 20, 5, 3, "claimed" }, { 4, 9, "i2570", 1, 1, 8, "done" },
+}
+
+-- The Crafting module's demo state (Demo.lua calls it with a copy of the made-up guild): { board, crafters, roster },
+-- in CraftBoard's, CraftStore's and Comm.Roster's shapes. Pure: same guild and now, equal tables; guild is not changed.
+-- Each request also carries its state ("open", "claimed", "done") as a plain field.
+function CraftView.DemoState(guild, now)
+  local guids = {}
+  for guid in pairs(type(guild) == "table" and type(guild.members) == "table" and guild.members or {}) do
+    guids[#guids + 1] = guid
+  end
+  table.sort(guids)
+  local roster, crafters, list = {}, {}, {}
+  for _, guid in ipairs(guids) do
+    local m = guild.members[guid]
+    local k = lower(m.name)
+    list[#list + 1] = { key = k, name = m.name }
+    roster[k] = { name = m.name, class = m.class, online = m.online == true, rankIndex = m.rankIndex,
+      prof1 = m.prof1 and { id = m.prof1.id, name = m.prof1.name, rank = m.prof1.rank } or nil,
+      prof2 = m.prof2 and { id = m.prof2.id, name = m.prof2.name, rank = m.prof2.rank } or nil }
+    for _, p in ipairs({ m.prof1 or false, m.prof2 or false }) do
+      if p and DEMO_RECIPES[p.id] then
+        local c = crafters[k] or { name = m.name, seen = now - (m.lastOnlineDays or 0) * 86400, profs = {} }
+        c.profs[p.id] = { rank = p.rank, max = 300, packed = DEMO_RECIPES[p.id] }
+        crafters[k] = c
+      end
+    end
+  end
+  local board = {}
+  for _, r in ipairs(DEMO_REQUESTS) do
+    local by, claimer = list[r[1]], r[2] and list[r[2]]
+    if by then
+      local posted = now - r[6] * 3600
+      local req = { id = string.format("%d-%s", posted, by.key), by = by.key, byName = by.name, what = r[3], qty = r[4],
+        mats = true, tip = r[5], note = "", postedAt = posted, expiresAt = posted + 24 * 3600, claims = {}, drops = {},
+        releasedAt = 0, state = r[7] }
+      if claimer then req.claims[claimer.key] = { name = claimer.name, at = posted + 600 } end
+      if r[7] == "done" then req.final = { kind = "done", at = posted + 3600 } end
+      board[req.id] = req
+    end
+  end
+  return { board = board, crafters = crafters, roster = roster }
+end

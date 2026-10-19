@@ -1,0 +1,25 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: Notice Board
+## Notes: The guild's notice board: guild events from the game's calendar, officer notices and polls. A GuildSync module.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## IconTexture: Interface\Icons\INV_Misc_Note_01
+## Dependencies: GuildSync
+## SavedVariables: GuildSyncNoticeBoardDB
+
+Config.lua
+Rules.lua
+Banners.lua
+Look.lua
+Store.lua
+Calendar.lua
+Event.lua
+Create.lua
+Remind.lua
+Demo.lua
+Status.lua
+PageBoard.lua
+PageWhen.lua
+PageDetail.lua
+PageCreate.lua
+Page.lua

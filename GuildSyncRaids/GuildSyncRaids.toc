@@ -1,0 +1,19 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildSyncRaids
+## Notes: The guild's raid calendar from Raid-Helper in the GuildSync window: an officer pastes it, the guild gets it.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## Dependencies: GuildSync
+## SavedVariablesPerCharacter: GuildSyncRaidsDB
+
+Raids.lua
+Decode.lua
+Codec.lua
+Rules.lua
+Store.lua
+Page.lua
+RaidList.lua
+RaidView.lua
+Signups.lua
+Paste.lua
+Tools.lua

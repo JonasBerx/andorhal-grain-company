@@ -1,0 +1,17 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildKOS
+## Notes: Kill on sight: alerts you when an enemy on the guild's Kill on Sight list is near, and tells the guild where you saw them.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## IconTexture: Interface\Icons\INV_Misc_Bone_HumanSkull_01
+## SavedVariables: GuildKOSDB
+## Dependencies: GuildSync
+
+Codec.lua
+Rules.lua
+Wire.lua
+Compat.lua
+Core.lua
+Sync.lua
+Page.lua
+Hub.lua

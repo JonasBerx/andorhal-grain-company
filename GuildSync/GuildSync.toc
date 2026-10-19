@@ -1,0 +1,27 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildSync
+## Notes: Roster with officer actions (promote, demote, remove, notes), the guild log, this character's level, gold and professions. Everything stays in game.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## SavedVariables: GuildSyncDB3
+## IconTexture: Interface\Icons\INV_Misc_Bag_10
+
+Compat.lua
+Core.lua
+Suite.lua
+DemoGuild.lua
+Demo.lua
+View.lua
+Kit.lua
+Probe.lua
+Professions.lua
+Roster.lua
+Window.lua
+CommWire.lua
+CommQueue.lua
+CommRegistry.lua
+CommSync.lua
+CommVersion.lua
+Links.lua
+LinksStore.lua
+Api.lua

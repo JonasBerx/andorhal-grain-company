@@ -1,0 +1,26 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: Bank
+## Notes: The guild bank: what the bank characters hold, requisitions, member requests and contributions. A GuildSync module.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## IconTexture: Interface\Icons\INV_Misc_Bag_10
+## Dependencies: GuildSync
+## SavedVariables: GuildSyncBankDB
+
+Bank.lua
+Model.lua
+Codec.lua
+Store.lua
+Derive.lua
+Rules.lua
+Ranks.lua
+Items.lua
+Reagents.lua
+Scan.lua
+Mail.lua
+Actions.lua
+Demo.lua
+Health.lua
+Cards.lua
+Page.lua
+PageBanker.lua
