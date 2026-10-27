@@ -525,7 +525,7 @@ local function newDetails(card, x)
       if button ~= "LeftButton" or linked then return end
       local key = x.row and x.row.key
       if key == nil then return end
-      if S.openKey == key then S.openKey = nil else S.openKey = key end
+      if S.openKey == key then S.openKey = nil else S.openKey, S.scrollTo = key, key end
       ns.AnnalsAchievements.refresh(S.holder)
     end)
   end)
@@ -782,27 +782,34 @@ local function refresh(holder)
   -- D10: a visit ends when the counter, the page G or the viewer differs from the ones it began with.
   local v = S.visit
   if v and (v.gen ~= gen or v.G ~= G or v.self ~= me) then v = nil end
-  if not v then
+  local fresh = not v
+  if fresh then
     A.SeenStart()
     v = { gen = gen, G = G, self = me, snap = {} }
-    for id in pairs(View.NewMarks(G, me).ids) do v.snap[id] = true end
     S.visit = v
   end
+  -- One NewMarks serves the snapshot and the leaf ids; a second follows MarkSeen under a leaf (f3516).
+  S.marks = View.NewMarks(G, me)
+  if fresh then for id in pairs(S.marks.ids) do v.snap[id] = true end end
   -- The selected leaf is marked seen on every refresh; its newly marked ids join the snapshot (f3111).
   if S.category ~= "ALL" then
-    local ids = View.NewMarks(G, me).ids
-    for _, id in ipairs(View.LeafIds(G, me, S.category)) do if ids[id] then v.snap[id] = true end end
+    for _, id in ipairs(View.LeafIds(G, me, S.category)) do if S.marks.ids[id] then v.snap[id] = true end end
     A.MarkSeen(S.category)
+    S.marks = View.NewMarks(G, me)
   end
-  S.marks = View.NewMarks(G, me)
+  S.inRefresh = true
   A.PaintTabDot()
+  S.inRefresh = nil
   local L = A.Layout()
-  local rows = View.AchievementRows(G, me, A.Now(), S.category, { date = A.Date })
+  local rows = View.AchievementRows(G, me, A.Now(), S.category, { date = A.Date, open = S.openKey or false })
   drawTree()
+  local scrollTo = S.scrollTo
+  S.scrollTo = nil
   if not S.content then return end
   local w = L.cardW
   S.content:SetWidth(w)
   local y, nLabel, nLately, nCard = 0, 0, 0, 0
+  local top, h = nil, nil
   for _, r in ipairs(rows) do
     if r.kind == "head" then
       drawHead(r, L)
@@ -821,13 +828,25 @@ local function refresh(holder)
       y = y - LINE_H
     elseif r.kind == "feat" then
       nCard = nCard + 1
-      y = y - drawCard(nCard, r, w, y) - CARD_GAP
+      local ch = drawCard(nCard, r, w, y)
+      if scrollTo ~= nil and r.key == scrollTo then top, h = -y, ch end
+      y = y - ch - CARD_GAP
     end
   end
   for i = nLabel + 1, #S.labels do S.labels[i]:Hide() end
   for i = nLately + 1, #S.lately do S.lately[i].b:Hide() end
   for i = nCard + 1, #S.cards do S.cards[i].f:Hide() end
   S.content:SetHeight(-y + GAP)
+  -- 19.below-fold: a card just opened whose opened bottom is below the view scrolls its top into view, once. The
+  -- range is worked out here: the client's GetVerticalScrollRange lags SetHeight.
+  local sh = S.scroll and S.scroll:GetHeight()
+  if top and sh and sh > 0 and S.scroll.SetVerticalScroll then
+    local cur = S.scroll.GetVerticalScroll and S.scroll:GetVerticalScroll() or 0
+    if top + h > cur + sh then
+      local range = math.max(0, -y + GAP - sh)
+      S.scroll:SetVerticalScroll(math.min(math.max(top - GAP, 0), range))
+    end
+  end
 end
 
 ns.AnnalsAchievements = {
@@ -836,7 +855,10 @@ ns.AnnalsAchievements = {
   build = function(holder) build(holder) end,
   refresh = function(holder) refresh(holder) end,
   -- True while any leaf has a new mark (the tab dot, D9); A.PaintTabDot reads it.
-  dot = function() return View.NewMarks(A.PageG(), A.JourneySelf()).any == true end,
+  dot = function()
+    local m = S.inRefresh and S.marks or View.NewMarks(A.PageG(), A.JourneySelf())
+    return m.any == true
+  end,
   -- The hub's window opened (f3103): the visit ends, and a shown tab draws the next one at once.
   windowOpened = function()
     S.visit = nil

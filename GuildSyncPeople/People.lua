@@ -18,8 +18,8 @@ end
 local M = GuildSync and GuildSync.RegisterModule({
   id = "people",
   title = "People",
-  version = "0.3",
-  needs = 7,
+  version = "0.4",
+  needs = 8,
   -- C_Secrets and the chat lockdown are optional (f13 ruling): a missing guard reads as secret / in lockdown.
   apis = { "GetServerTime", "GetGameTime", "GetGuildInfo", "C_Club.GetGuildClubId", "C_Club.GetClubInfo",
     "C_Club.GetClubMembers", "C_Club.GetMemberInfo", "UnitGUID", "UnitIsPlayer", "UnitIsInMyGuild",

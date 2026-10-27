@@ -28,7 +28,7 @@ local DOMAINS = { "bank", "bank_q", "bank_a", "bank_m" }
 local OFFICER = { bank = true, bank_q = true, bank_a = true } -- P rule officer; bank_m is copy
 local MERGED = { b = true, l = true, t = true, a = true }       -- families Mine() joins into n = 1 (d772)
 -- families only a bank character writes (d777, AC5); x (any officer) and m (any member) are not among them
-local BANK_FAMILY = { b = true, k = true, g = true, t = true, q = true, l = true, a = true }
+local BANK_FAMILY = { b = true, k = true, g = true, t = true, q = true, l = true, a = true, j = true, n = true }
 local LISTS = { "receipts", "unpledges", "unsends" }
 local REFUSED_MAX = 500
 local REFRESH_DELAY = 0.5
@@ -98,7 +98,7 @@ local attached = {}                            -- domain -> true | why
 local stores = {}                              -- domain -> the store handed to M.Sync.Attach
 local unheld = {}                              -- family -> { [key] = true } (d784, f5336)
 -- d784, all session-only
-local GUARDED = { l = true, t = true, a = true, q = true }
+local GUARDED = { l = true, t = true, a = true, q = true, n = true }
 local FUTURE = 300           -- seconds a rev may lie ahead of now (the hub's Wire.FUTURE, CommWire.lua:16)
 local PEER_WINDOW = 900      -- the hub's PEER_WINDOW (CommSync.lua:32)
 local LONG_WINDOW = 900 + 300 -- the stores' hEvery + hJitter: the first window after a partial first read (f5329)
@@ -320,7 +320,7 @@ local function emptyAtStart()
   if startedEmpty then return startedEmpty end
   local mine = myKey()
   if not mine then return nil end
-  startedEmpty = { l = true, t = true, a = true, q = true }
+  startedEmpty = { l = true, t = true, a = true, q = true, n = true }
   for _, byKey in pairs(ns.DB().records) do
     for key in pairs(byKey) do
       local family, _, author = ns.ParseKey(key)
@@ -763,8 +763,12 @@ local function newHandle(domain)
     -- d785 early drop (f5264, R7-6): a bad key, or an officer domain's key by a non-officer author, never reaches
     -- the hub's counters
     if not ns.ValidKey(domain, msg.key) then return refuse(msg.key, msg.rev, msg.hash) end
-    local _, _, author = ns.ParseKey(msg.key)
+    local family, _, author = ns.ParseKey(msg.key)
     if OFFICER[domain] and not GuildSync.Comm.IsOfficer(author) then return refuse(msg.key, msg.rev, msg.hash) end
+    -- d1092: a bank-family key by an author who is not a bank character never reaches the hub's counters either
+    if BANK_FAMILY[family] and ranksReady() and not ns.Ranks.IsBankChar(author) then
+      return refuse(msg.key, msg.rev, msg.hash)
+    end
     local drop, took
     if OFFICER[domain] and ownAuthor(msg.key) then drop, took = ownArrival(domain, msg, from, t) end
     if took and fromOfficer(from) and windowEnd[domain] then

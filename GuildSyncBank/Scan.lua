@@ -25,6 +25,11 @@
 -- g, every own key in ns.Sync.UnheldScan(family) beyond the new count becomes {} (d784, f5336); a key a scan writes
 -- leaves that set. An incomplete read neither reads nor writes the set.
 --   ns.Scan.Cut() -> holderKey | nil
+-- Gold ledger (t58): j1~self { scanned, money, e, guild?, guildAt? } through ns.Ledger (d1076). Login at the first ready
+-- scan, then each PLAYER_MONEY; one window at a time (MAIL_SHOW m, GUILDBANKFRAME_OPENED g, MERCHANT_SHOW v). j waits
+-- LIMITS.ledgerDebounce between writes (d1086); a window close and PLAYER_LOGOUT force it. GetMoney must be a whole
+-- number in 0..1e12 or nothing is recorded; nothing under /gsync demo. Guild gold per d1087.
+--   ns.Scan.MailClosed(parts)   Mail.lua's MAIL_CLOSED: the named split of the mail window (d1080, d1084)
 
 local _, ns = ...
 if not ns.M then return end
@@ -47,6 +52,7 @@ local lastAt, held = {}, {} -- key -> time of this session's last write; key -> 
 local guildQueue, guildPending, guildLoaded = {}, nil, {}
 local guildGen = 0 -- bumped by every reset and query; a timer acts only while its generation is current
 local cut = nil   -- this character's key once a scan was cut at a family cap (b, k 6, g 8; d772)
+local guildMoney -- the gold ledger's guild gold read (below), called from the open read
 
 local function plain(v) return GuildSync.Compat.Plain(v) end
 local function call(...) return M.Compat.call(...) end
@@ -162,7 +168,8 @@ local function save(key, body, again, force)
   local old = heldBody(key)
   if old and same(content(old), content(body)) then return end
   local t = body.scanned
-  local wait = tonumber(ns.DB().settings.debounce) or ns.LIMITS.debounce
+  local wait = ns.ParseKey(key) == "j" and ns.LIMITS.ledgerDebounce -- keyed by family (d1086)
+    or tonumber(ns.DB().settings.debounce) or ns.LIMITS.debounce
   local last = lastAt[key]
   if not force and last and t - last < wait then
     if not held[key] then
@@ -351,6 +358,7 @@ local function onGuildBankOpened()
   M.After(OPEN_DELAY, function()
     if not guildOpen or guildGen ~= gen then return end
     if not ready() or not Scan.GuildBankReadable() then return end
+    guildMoney(false)
     for n = 1, guildTabs() do
       local _, _, viewable = call("GetGuildBankTabInfo", n)
       if viewable == true then guildQueue[#guildQueue + 1] = n end
@@ -379,6 +387,90 @@ local function onGuildBankClosed()
   resetGuild()
 end
 
+-- ---------- gold ledger (t58: d1076, d1080, d1086, d1087) ----------
+
+local MAX_MONEY = 1e12
+local jBody, window = nil, nil -- the working j1 body (the held one, then each seam's copy); { kind, at } or nil
+
+-- A plain whole number in 0..1e12, else nil (f6361: a secret, a string, a fraction or out of range records nothing).
+local function whole(v)
+  v = plain(v)
+  if type(v) ~= "number" or v ~= math.floor(v) or v < 0 or v > MAX_MONEY then return nil end
+  return v
+end
+
+-- The ledger's time: a whole second (Clean's time(); a 0.8 s timer can land between server seconds in the sim).
+local function stamp()
+  local t = now()
+  return t and math.floor(t)
+end
+
+-- A mail party is named only when it is a roster row (d1084, q1086).
+local function named(name)
+  local key = type(name) == "string" and GuildSync.Comm.Key(name)
+  return key and GuildSync.Comm.Member(key) ~= nil or false
+end
+
+-- Writes the working body under j1, trimmed to fit; a held write is forced when its timer comes (the wait is over).
+local function saveLedger(force)
+  if not jBody or not ready() then return end
+  local mine = me()
+  local body = ns.Ledger.Trim(jBody, stamp() or jBody.scanned, function(b) return ns.Store.Fit("j", mine, b) ~= nil end)
+  save(ns.Key("j", 1, mine), body, function() saveLedger(true) end, force)
+end
+
+-- The first ready scan: the held j1, with one s entry when the money moved while offline.
+local function ledgerLogin()
+  local old = heldBody(ns.Key("j", 1, me()))
+  -- held even under demo, so a later change never starts a fresh body; one without a whole money starts fresh (f6398)
+  if type(old) == "table" and whole(old.money) then jBody = old end
+  if M.Demo() then return end
+  local t, m = stamp(), whole(call("GetMoney"))
+  if t and m then jBody = ns.Ledger.Login(jBody, m, t) end
+  saveLedger(false)
+end
+
+local function ledgerMoney()
+  if not ready() or M.Demo() then return end
+  local t, m = stamp(), whole(call("GetMoney"))
+  if not t or not m then return end
+  if jBody then jBody = ns.Ledger.Change(jBody, m, t, window) else jBody = ns.Ledger.Login(nil, m, t) end
+  saveLedger(false)
+end
+
+local function closeWindow(kind)
+  if not window or (kind and window.kind ~= kind) then return end
+  window = nil
+  saveLedger(true)
+end
+
+-- A new open closes the old window with no parts (d1076).
+local function openWindow(kind)
+  closeWindow()
+  local t = stamp()
+  if t then window = { kind = kind, at = t } end
+end
+
+-- Ignored unless the open window is the mail window (f6320b): a merchant open may have closed it already.
+function Scan.MailClosed(parts)
+  if not window or window.kind ~= "m" then return end
+  if jBody then jBody = ns.Ledger.Close(jBody, window, parts, named) end
+  closeWindow("m")
+end
+
+-- Guild gold (d1087): the open read writes only a value > 0 or a first one; an update event may write 0.
+guildMoney = function(update)
+  if not ready() or M.Demo() or not jBody or not guildOpen then return end
+  if not Scan.GuildBankReadable() or not GuildSync.Compat.Has("GetGuildBankMoney") then return end
+  local t, v = stamp(), whole(call("GetGuildBankMoney"))
+  if not t or not v or (not update and v == 0 and jBody.guild ~= nil) then return end
+  local out = {}
+  for k, x in pairs(jBody) do out[k] = x end
+  out.guild, out.guildAt, out.scanned = v, t, t
+  jBody = out
+  saveLedger(false)
+end
+
 -- ---------- events ----------
 
 ns.Ranks.OnChange(function()
@@ -388,13 +480,19 @@ ns.Ranks.OnChange(function()
   if not key or not GuildSync.Comm.Member(key) or not ns.Ranks.IsBankChar(key) then return end
   started = true
   scanBags()
+  -- Only a bank character, at its first ready (f6370); Mail.lua loads later, so it is looked up now (d1085).
+  if ns.Mail and ns.Mail.InstallHook then ns.Mail.InstallHook() end
+  ledgerLogin()
 end)
 
 ns.Listen("BAG_UPDATE_DELAYED", function()
   scanBags()
   scanTabs()
 end)
-ns.Listen("PLAYER_MONEY", scanBags)
+ns.Listen("PLAYER_MONEY", function()
+  scanBags()
+  ledgerMoney()
+end)
 ns.Listen("BANKFRAME_OPENED", onBankOpened)
 ns.Listen("BANKFRAME_CLOSED", onBankClosed)
 ns.Listen("PLAYER_INTERACTION_MANAGER_FRAME_SHOW", function(_, kind)
@@ -405,6 +503,17 @@ ns.Listen("PLAYER_INTERACTION_MANAGER_FRAME_HIDE", function(_, kind)
 end)
 ns.Listen("PLAYERBANKSLOTS_CHANGED", scanTabs)
 ns.Listen("BANK_TABS_CHANGED", scanTabs)
-ns.Listen("GUILDBANKFRAME_OPENED", onGuildBankOpened)
+ns.Listen("GUILDBANKFRAME_OPENED", function()
+  onGuildBankOpened()
+  openWindow("g")
+end)
 ns.Listen("GUILDBANKBAGSLOTS_CHANGED", onGuildSlotsChanged)
-ns.Listen("GUILDBANKFRAME_CLOSED", onGuildBankClosed)
+ns.Listen("GUILDBANKFRAME_CLOSED", function()
+  closeWindow("g")
+  onGuildBankClosed()
+end)
+ns.Listen("GUILDBANK_UPDATE_MONEY", function() guildMoney(true) end)
+ns.Listen("MAIL_SHOW", function() openWindow("m") end) -- closed only through Scan.MailClosed (d1080)
+ns.Listen("MERCHANT_SHOW", function() openWindow("v") end)
+ns.Listen("MERCHANT_CLOSED", function() closeWindow("v") end)
+ns.Listen("PLAYER_LOGOUT", function() saveLedger(true) end)

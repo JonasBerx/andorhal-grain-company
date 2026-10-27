@@ -1,7 +1,9 @@
 -- GuildSyncNoticeBoard: the reminders (brief AC28, AC29, AC33 as sliced by ui-slice.md). Local chat lines only,
 -- nothing sent. The login line follows the first guild event list after the roster read (a list event, or the
 -- LIST_WAIT read when it holds a row); the second line (notices
--- since my last login, open polls without my vote) comes SECOND_WAIT seconds after the roster read; the before-start
+-- since my last login, open polls without my vote) comes once, HEARD_WAIT seconds after the first board D, H, P or R
+-- heard from another client after the roster read (Store.WhenBoardHeard; my own sends never count) or SECOND_WAIT seconds after the
+-- roster read, whichever is first; the before-start
 -- line comes `lead` minutes before each event I am signed up or tentative for, once per event per session, unless the
 -- game's own CALENDAR_EVENT_ALARM named it. Titles are the rows' escaped titles (escaped once, in Calendar.lua).
 
@@ -20,6 +22,7 @@ local alarmed = {}   -- eventID -> true when the game's alarm named it inside th
 local function say(text) GuildSync.Say(text) end
 
 local MAX_LEAD = 1440 -- one day, in minutes
+local HEARD_WAIT = 15 -- seconds from the first board message heard to the second line (f6103)
 
 local function lead()
   local n = ns.DB().lead
@@ -143,7 +146,10 @@ M.On("rosterRead", function()
   -- AC28: Calendar.lua retries at LIST_WAIT; when no list has come by another LIST_WAIT, the event line is skipped
   -- this session (a list event much later, say the page opened an hour on, prints no late login line).
   M.After(2 * C.LIST_WAIT, function() loginDone = true end)
-  M.After(C.SECOND_WAIT, function()
+  local said = false
+  local function secondLine()
+    if said then return end
+    said = true
     -- f3: demo's counts are made up; skip the line, in step with MarkSeen (which skips in demo too).
     if ns.InDemo() then return end
     local notices, polls = ns.Store.SinceLastLogin(), ns.Store.OpenUnvoted()
@@ -156,5 +162,9 @@ M.On("rosterRead", function()
     end
     if #parts > 0 then say("You have " .. table.concat(parts, " and ") .. ".") end
     ns.Store.MarkSeen() -- the line has told me: later counts start from now
-  end)
+  end
+  M.After(C.SECOND_WAIT, secondLine)
+  -- f13, f6103: the first board message heard brings the line early, HEARD_WAIT later (the records it announces
+  -- arrive first); the SECOND_WAIT timer still caps it
+  ns.Store.WhenBoardHeard(function() M.After(HEARD_WAIT, secondLine) end)
 end)

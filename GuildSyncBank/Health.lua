@@ -5,7 +5,8 @@
 -- exists; FAIL when this character has the Banker rank but does not count as officer; PASS with the number of holders,
 -- open requisitions and open requests, plus "guild bank: not readable" and "mail: not readable" when so. t42 (V4): FAIL
 -- "domain <id> not attached: <why>"; PASS lines "cut: <holder>", "N own records held by other officers (/gsbank
--- adopt)", and "waiting for the full guild roster" or else "catching up with the other officers" when so (f5314).
+-- adopt)", and "waiting for the full guild roster" or else "catching up with the other officers" when so (f5314). t58:
+-- "N items running low" (view.low, V5) and "more than 6 bank characters: some bank records may arrive late" (d1091).
 
 local _, ns = ...
 if not ns.M then return end
@@ -14,7 +15,7 @@ local M = ns.M
 local Health = {}
 ns.Health = Health
 
-local OWN_FAMILIES = { "l", "t", "a", "q" } -- the officer families a stash can hold (d784)
+local OWN_FAMILIES = { "l", "t", "a", "q", "n" } -- the officer families a stash can hold (d784, d1077)
 
 local function plain(v) return GuildSync.Compat.Plain(v) end
 
@@ -60,6 +61,13 @@ function Health.SelfTest()
   end
 
   local parts = { plural(holders, "holder"), plural(reqs, "open requisition"), plural(requests, "open request") }
+  local low = type(view.low) == "table" and #view.low or 0
+  if low > 0 then parts[#parts + 1] = plural(low, "item") .. " running low" end
+  local bankChars = 0
+  for _ in pairs((ns.DB().ranks or {}).bank or {}) do bankChars = bankChars + 1 end
+  if bankChars > ns.LIMITS.maxBankChars then
+    parts[#parts + 1] = "more than " .. ns.LIMITS.maxBankChars .. " bank characters: some bank records may arrive late"
+  end
   if not ns.Scan.GuildBankReadable() then parts[#parts + 1] = "guild bank: not readable" end
   if not ns.Mail.Readable() then parts[#parts + 1] = "mail: not readable" end
   local cut = ns.Scan.Cut()

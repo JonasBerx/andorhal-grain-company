@@ -379,9 +379,10 @@ end
 
 local function nonEmpty(s) return type(s) == "string" and s ~= "" end
 
--- A list field drawn as text: control bytes (newline, NUL, ...) become a space, then "|" is escaped (S-f1).
+-- A list field drawn as text: control bytes (newline, NUL, ...) become a space, Rules.Strip drops the direction and
+-- invisible code points, then "|" is escaped (S-f1).
 local function shown(src, s)
-  return src.escape((s:gsub("[%z\1-\31\127]", " ")))
+  return src.escape(ns.Rules.Strip((s:gsub("[%z\1-\31\127]", " "))))
 end
 
 function Page.Refresh(frame, src)

@@ -22,10 +22,10 @@ local EVENTS = {
   { "Bank day: bring your spare herbs", "announcement", "GUILD_ANNOUNCEMENT", 170, nil, "notice" },
 }
 
--- { title, body, pinned, days ago posted, days live }
+-- { title, body, pinned, days ago posted, days live, officers only }
 local NOTICES = {
   { "Raid nights are Tuesday and Thursday", "Invites go out at 19:45. Be on time.", true, 3, 30 },
-  { "Guild bank open on Sundays", "Ask the banker for mats you need.", false, 1, 14 },
+  { "Guild bank open on Sundays", "Ask the banker for mats you need.", false, 1, 14, true },
 }
 
 -- { question, options, hours ago posted, hours open }
@@ -72,7 +72,7 @@ function Demo.Build(guild, now)
     local t = now - n[4] * DAY
     local expiresAt = t + n[5] * DAY
     state.notices[i] = { key = Rules.NoticeKey(t, author), rev = t, by = author, author = author, title = n[1],
-      body = n[2], pinned = n[3], expiresAt = expiresAt, keepUntil = expiresAt }
+      body = n[2], pinned = n[3], expiresAt = expiresAt, keepUntil = expiresAt, officers = n[6] }
   end
 
   for i, q in ipairs(POLLS) do

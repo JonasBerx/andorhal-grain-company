@@ -514,6 +514,8 @@ View.PAGES = {
   { key = "modules", label = "Modules", icon = "Interface\\Icons\\INV_Misc_Gear_01" }, -- the suite's addons (R7, q316)
   -- opened by the gear in the title bar, not by a sidebar row
   { key = "settings", label = "Settings", icon = "Interface\\Icons\\INV_Misc_Gear_01", gear = true },
+  -- opened by the search box in the title band, not by a sidebar row (landing 2)
+  { key = "search", label = "Search", icon = "Interface\\Icons\\INV_Misc_Spyglass_03", band = true },
 }
 View.DEFAULT_PAGE = "overview" -- the page the window opens on after a login or a reload
 -- Window size (d140): the size it starts at, and how small and how large the corner grip lets it go.
@@ -561,6 +563,7 @@ function View.SectionArea(panelH, buttons)
 end
 View.ONLINE_GREEN = { 0.1, 1.0, 0.1 }
 View.SEARCH_HINT = "Search name or note"
+View.SEARCH_HINT_BAND = "Search everything" -- the title band's search box (mock se-1)
 -- Roster rows: the class icon, then the name (takes what is left), then fixed rank, level and last online columns.
 View.ROW_COLS = { icon = 20, rank = 110, level = 44, last = 84 }
 
@@ -574,6 +577,7 @@ View.SHELL = {
   banner = { x = 146, y = -34 },
   counts = { x = -59, y = -7 },
   gear = { x = -28, y = 0, w = 25, h = 23 },
+  search = { x = -8, y = -28, w = 200, h = 22 }, -- the title band's search box, TOPRIGHT (mock se-1)
 }
 -- Sidebar rows inside the sidebar inset: Overview, Roster, This character, Modules at rows[i]; module row i at
 -- moduleY - (i - 1) * step.
@@ -907,26 +911,38 @@ function View.AgeText(seconds)
   return math.floor(days / 30) .. " months"
 end
 
+-- The entry's sentence ("Anya Dusk promoted Esk Thorn to Veteran"), each recorded name through esc.
+local function logSentence(kind, e, esc)
+  local actor, target, rank = esc(str(e.actor) or "?"), esc(str(e.target) or "?"), str(e.rank)
+  rank = rank and esc(rank)
+  if kind == "join" then return target .. " joined" end
+  if kind == "leave" then return target .. " left" end
+  if kind == "promote" or kind == "demote" then
+    return actor .. " " .. kind .. "d " .. target .. (rank and (" to " .. rank) or "")
+  end
+  if kind == "remove" then return actor .. " removed " .. target end
+  return actor .. " invited " .. target
+end
+
+-- LogEntry's sentence from the raw fields, unescaped (the search matches it; View.SearchList escapes it), nil for
+-- other kinds.
+function View.LogEntryRaw(e)
+  if type(e) ~= "table" or not LOG_KINDS[e.type] then return nil end
+  return logSentence(LOG_KINDS[e.type], e, function(v) return v end)
+end
+
 -- A recorded guild log entry { type, actor, target, rank, ts } -> { kind, icon, text, age }, nil for other kinds.
 function View.LogEntry(e, now)
   if type(e) ~= "table" then return nil end
   local kind = LOG_KINDS[e.type]
   if not kind then return nil end
-  local actor, target, rank = escape(str(e.actor) or "?"), escape(str(e.target) or "?"), str(e.rank)
-  rank = rank and escape(rank)
-  local text
-  if kind == "join" then text = target .. " joined"
-  elseif kind == "leave" then text = target .. " left"
-  elseif kind == "promote" or kind == "demote" then
-    text = actor .. " " .. kind .. "d " .. target .. (rank and (" to " .. rank) or "")
-  elseif kind == "remove" then text = actor .. " removed " .. target
-  else text = actor .. " invited " .. target end
+  local text = logSentence(kind, e, escape)
   local age = (type(e.ts) == "number" and type(now) == "number") and View.AgeText(math.max(0, now - e.ts)) or "?"
   return { kind = kind, icon = View.LOG_ICONS[kind], text = text, age = age }
 end
 
--- The newest `limit` entries of GuildSyncDB3.guildLog, newest first.
-function View.RecentLog(log, now, limit)
+-- The recorded entries of GuildSyncDB3.guildLog as { e }, newest first (later in the list first on a tie).
+local function logNewestFirst(log)
   local entries = type(log) == "table" and type(log.entries) == "table" and log.entries or {}
   local order = {}
   for i, e in ipairs(entries) do
@@ -936,6 +952,12 @@ function View.RecentLog(log, now, limit)
     if a.ts ~= b.ts then return a.ts > b.ts end
     return a.i > b.i
   end)
+  return order
+end
+
+-- The newest `limit` entries of GuildSyncDB3.guildLog, newest first.
+function View.RecentLog(log, now, limit)
+  local order = logNewestFirst(log)
   local out = {}
   limit = limit or View.LOG_LIMIT
   for _, o in ipairs(order) do
@@ -1188,4 +1210,350 @@ function View.SuiteTooltip(row, api, hubVersion)
   if st == "error" then return "Did not load: see /gsync errors." end
   if st == "needsNewer" then return View.NeedsNewerLine(row.name, row.version, row.needs, hubVersion, api) end
   return "Not installed. Ask an officer for the suite download."
+end
+
+-- ---------- the Guildmates tab (API 8, f6209, d1047, d1049) ----------
+-- One row per roster member in three groups (heard this week, as SuiteHeard counts; heard earlier; no addon heard),
+-- over one merged map (Versions() plus this client's own entry). Rows carry kind "header" or "member".
+
+View.WEEKDAYS = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" } -- fixed English, never the locale's %a
+View.HEARD_NOW = 600 -- seconds that read "now"
+View.TRACKER_OLD = { 1, 0.5, 0.1 } -- an older version's colour
+View.TRACKER_GROUPS = { { "week", "Heard this week" }, { "earlier", "Heard earlier" }, { "none", "No addon heard" } }
+
+-- -> text, grey: "now" within 10 minutes, "HH:MM" earlier today, the weekday under 7 days, then "<n> days" (7-13) and
+-- "<n> weeks", grey from 7 days; "" for no seen.
+function View.HeardText(seen, now)
+  seen, now = tonumber(seen), tonumber(now) or 0
+  if not seen then return "" end
+  if now - seen < View.HEARD_NOW then return "now" end
+  if date("%Y-%m-%d", seen) == date("%Y-%m-%d", now) then return date("%H:%M", seen) end
+  local n = math.floor((now - seen) / 86400)
+  if n < 7 then return View.WEEKDAYS[date("*t", seen).wday] end
+  if n <= 13 then return n .. " days", true end
+  return math.floor(n / 7) .. " weeks", true
+end
+
+-- -1 | 0 | 1, numeric per dotted part, a missing part 0 (CommVersion's Compare; View loads before it).
+local function compareDotted(a, b)
+  local pa, pb = {}, {}
+  for part in tostring(a or ""):gmatch("[^.]+") do pa[#pa + 1] = tonumber(part) or 0 end
+  for part in tostring(b or ""):gmatch("[^.]+") do pb[#pb + 1] = tonumber(part) or 0 end
+  for i = 1, math.max(#pa, #pb) do
+    local x, y = pa[i] or 0, pb[i] or 0
+    if x ~= y then return x > y and 1 or -1 end
+  end
+  return 0
+end
+
+local function isDev(v) return v == (ns.Compat and ns.Compat.DEV_VERSION) end
+
+-- The entry's module ids in suite order (never the hub).
+local function modIds(e)
+  local out = {}
+  if type(e.mods) ~= "table" then return out end
+  for _, s in ipairs(type(ns.SUITE) == "table" and ns.SUITE or {}) do
+    if type(s) == "table" and not s.hub and e.mods[s.id] then out[#out + 1] = s.id end
+  end
+  return out
+end
+
+-- members = { { key, name, class }, ... }, versions = key -> entry, opts = { own = this release version or nil on a
+-- dev build, isOfficer = function(key), ownKey }. -> rows, { week, earlier, none, total }, older (rows marked old).
+-- Old: below the higher of own and the newest officer version (an ordinary member never raises the bar; a dev advert
+-- neither raises it nor is old).
+function View.TrackerRows(members, versions, now, opts)
+  opts, versions = opts or {}, type(versions) == "table" and versions or {}
+  local isOfficer = type(opts.isOfficer) == "function" and opts.isOfficer or function() return false end
+  local bar = opts.own
+  for key, e in pairs(versions) do
+    if type(e) == "table" and goodVersion(e.addon) and not isDev(e.addon) and isOfficer(key)
+      and (not bar or compareDotted(e.addon, bar) > 0) then bar = e.addon end
+  end
+  local since = (tonumber(now) or 0) - View.SUITE_HEARD_DAYS * 86400
+  local groups, total, older = { week = {}, earlier = {}, none = {} }, 0, 0
+  for _, m in ipairs(type(members) == "table" and members or {}) do
+    total = total + 1
+    local e = versions[m.key]
+    local r = { kind = "member", key = m.key, name = escape(m.name or m.key or "?"), class = m.class,
+      you = m.key ~= nil and m.key == opts.ownKey or nil }
+    local g = "none"
+    if type(e) == "table" and e.addon then
+      g = (tonumber(e.seen) or -math.huge) >= since and "week" or "earlier"
+      r.entry, r.dev, r.mods = e, isDev(e.addon), modIds(e)
+      r.version = r.dev and "dev" or escape(e.addon)
+      r.old = not r.dev and bar ~= nil and compareDotted(e.addon, bar) < 0
+      r.heard, r.heardGrey = View.HeardText(e.seen, now)
+      if r.old then older = older + 1 end
+    end
+    table.insert(groups[g], r)
+  end
+  local rows = {}
+  for _, gr in ipairs(View.TRACKER_GROUPS) do
+    local list = groups[gr[1]]
+    if #list > 0 then
+      table.sort(list, function(x, y) return x.name < y.name end)
+      rows[#rows + 1] = { kind = "header", text = gr[2] .. DOT .. #list }
+      for _, r in ipairs(list) do rows[#rows + 1] = r end
+    end
+  end
+  return rows, { week = #groups.week, earlier = #groups.earlier, none = #groups.none, total = total }, older
+end
+
+-- The line over the list (mock tr-1): grey labels, white numbers.
+function View.TrackerSummary(summary, older)
+  local function n(v) return "|cffffffff" .. tostring(tonumber(v) or 0) .. "|r" end
+  return n(summary.week) .. " of " .. n(summary.total) .. " heard this week" .. DOT .. n(summary.earlier) .. " earlier"
+    .. DOT .. n(summary.none) .. " not heard" .. DOT .. n(older) .. " on an older version"
+end
+
+-- A row's tooltip: { header = name, lines = { "GuildSync <v>", "<Module> <v>, ..." (left out with none), "Heard <t>" } },
+-- or nil for an entry without addon. Every stored value escaped once.
+function View.TrackerTooltip(e, suite, now)
+  if type(e) ~= "table" or not e.addon then return nil end
+  local lines, mods = { "GuildSync " .. escape(e.addon) }, {}
+  if type(e.mods) == "table" then
+    for _, s in ipairs(type(suite) == "table" and suite or {}) do
+      local v = type(s) == "table" and not s.hub and e.mods[s.id]
+      if v then mods[#mods + 1] = escape(s.name) .. " " .. escape(v) end
+    end
+  end
+  if #mods > 0 then lines[#lines + 1] = table.concat(mods, ", ") end
+  lines[#lines + 1] = "Heard " .. View.HeardText(e.seen, now)
+  return { header = escape(e.name or "?"), lines = lines }
+end
+
+-- ---------- What's new (API 8, d1040, d1051) ----------
+-- Sections from ns.CHANGELOG (Changelog.lua). The login panel filters (the seen rule, loaded addons, empty sections
+-- dropped, at most NEWS_MAX); the Modules page's tab shows the whole changelog. Lines stay raw until NewsRows.
+
+View.NEWS_DELAY = 5 -- seconds after PLAYER_LOGIN before the panel check (retried every 5 s while in combat)
+View.NEWS_MAX = 3   -- sections the login panel shows at most
+
+local function xyz(v) return type(v) == "string" and v:match("^%d+%.%d+%.%d+$") ~= nil end
+
+local function suiteEntry(folder)
+  for _, e in ipairs(type(ns.SUITE) == "table" and ns.SUITE or {}) do
+    if e.folder == folder then return e end
+  end
+end
+
+local function copyLines(lines)
+  local out = {}
+  for _, l in ipairs(type(lines) == "table" and lines or {}) do
+    if type(l) == "string" then out[#out + 1] = l end
+  end
+  return out
+end
+
+-- changelog = ns.CHANGELOG; seen = settings.seenVersion; version = ns.VERSION; loaded(folder) -> boolean;
+-- opts = { login = true|nil, max = n|nil }. -> { { version, lines, addons = { { folder, name, lines } } } }, newest
+-- first. login: sections above seen (a release build also not above its own version; no seen or a seen that is not
+-- X.Y.Z: the newest only), only loaded addons' groups (GuildSync always), sections with nothing left dropped, then at
+-- most max. No login: every section and every group; loaded is not called.
+function View.NewsSections(changelog, seen, version, loaded, opts)
+  local login = type(opts) == "table" and opts.login == true
+  local firstInstall = not xyz(seen)
+  local out = {}
+  for _, s in ipairs(type(changelog) == "table" and changelog or {}) do
+    local v = type(s) == "table" and s.version
+    local eligible = xyz(v)
+    if eligible and login then
+      eligible = (firstInstall or compareDotted(v, seen) > 0) and (not xyz(version) or compareDotted(v, version) <= 0)
+    end
+    if eligible then
+      local section = { version = v, lines = copyLines(s.lines), addons = {} }
+      for _, g in ipairs(type(s.addons) == "table" and s.addons or {}) do
+        local folder = type(g) == "table" and g.folder
+        if type(folder) == "string" and (not login or folder == "GuildSync" or loaded(folder)) then
+          local e = suiteEntry(folder)
+          section.addons[#section.addons + 1] = { folder = folder, name = e and e.name or folder, lines = copyLines(g.lines) }
+        end
+      end
+      if not login or #section.lines > 0 or #section.addons > 0 then out[#out + 1] = section end
+    end
+  end
+  if login then
+    local max = firstInstall and 1 or (type(opts.max) == "number" and opts.max or View.NEWS_MAX)
+    for i = #out, max + 1, -1 do out[i] = nil end
+  end
+  return out
+end
+
+-- -> { { kind = "version"|"addon"|"line", text, icon? } }: a version row per section, its suite-wide lines, then per
+-- addon group a row with its Suite.lua name (and icon) and its lines. Every text escaped once.
+function View.NewsRows(sections)
+  local rows = {}
+  for _, s in ipairs(type(sections) == "table" and sections or {}) do
+    rows[#rows + 1] = { kind = "version", text = escape(s.version) }
+    for _, l in ipairs(s.lines or {}) do rows[#rows + 1] = { kind = "line", text = escape(l) } end
+    for _, g in ipairs(s.addons or {}) do
+      local e = suiteEntry(g.folder)
+      rows[#rows + 1] = { kind = "addon", text = escape(g.name or g.folder), icon = e and e.icon }
+      for _, l in ipairs(g.lines or {}) do rows[#rows + 1] = { kind = "line", text = escape(l) } end
+    end
+  end
+  return rows
+end
+
+-- ---------- search (API 8; Search.lua runs these) ----------
+-- The hub sources take the query already trimmed and lower-cased (Search.lua) and answer raw rows
+-- { text, detail?, icon?, class?, go? }: nothing is escaped before View.SearchList (f6205).
+
+View.SEARCH_MIN = 2   -- bytes a query needs
+View.SEARCH_MAX = 40  -- bytes of a query any source sees
+View.SEARCH_SHOWN = 5 -- rows per group before "Show all <n>"
+View.SEARCH_CAP = 25  -- rows kept per group
+View.SEARCH_CUT = 80  -- bytes of a module row's text and detail
+View.SEARCH_SHORT = "Type at least 2 letters."
+View.SEARCH_COUNT = "%d results. Escape clears the search and goes back." -- n = every hit kept (d1057)
+
+-- RAID_CLASS_COLORS as hex, so a search row's class colour needs no client call.
+View.CLASS_HEX = {
+  WARRIOR = "c79c6e", PALADIN = "f58cba", HUNTER = "abd473", ROGUE = "fff569", PRIEST = "ffffff", SHAMAN = "0070de",
+  MAGE = "69ccf0", WARLOCK = "9482c9", DRUID = "ff7d0a", DEATHKNIGHT = "c41f3b", MONK = "00ff96",
+  DEMONHUNTER = "a330c9", EVOKER = "33937f",
+}
+
+local function hit(s, q) return type(s) == "string" and string.find(string.lower(s), q, 1, true) ~= nil end
+
+-- Members by name or public note, and by officer note only when the guild table says this character sees them
+-- (the member panel's rule). detail = the rank, plus the matched note. Sorted by name.
+function View.SearchMembers(guild, q)
+  local out = {}
+  if type(guild) ~= "table" or type(guild.members) ~= "table" then return out end
+  local ranks = guild.ranks
+  for guid, m in pairs(guild.members) do
+    if type(m) == "table" and str(m.name) then
+      local note = str(m.note)
+      local officerNote = guild.canSeeOfficerNotes == true and str(m.officerNote) or nil
+      local byName = hit(m.name, q)
+      local matched = not byName and ((hit(note, q) and note) or (hit(officerNote, q) and officerNote)) or nil
+      if byName or matched then
+        local order = rankOrder(m, ranks)
+        local rank = str(m.rank) or (type(ranks) == "table" and order ~= LAST and str(ranks[order + 1])) or "?"
+        -- mock se-1: "<rank> · <level> <class>", the note in quotes only when it matched (f6297, d1065)
+        local detail = rank .. DOT .. tostring(m.level or "?") .. " " .. View.ClassName(m.class)
+        out[#out + 1] = { text = m.name, class = str(m.class), detail = matched and (detail .. DOT .. '"' .. matched .. '"') or detail,
+          go = { page = "roster", guid = tostring(guid) } }
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.text ~= b.text then return a.text < b.text end
+    return a.go.guid < b.go.guid
+  end)
+  return out
+end
+
+-- rows = SearchMembers' rows; personOf(key) -> a Links person { main, chars }; keyOf(name) -> key. One row per person
+-- of 2+ characters, on its main: "Alts: a, b" in the person's order, go = the main's row when it matched.
+function View.SearchAlts(rows, personOf, keyOf)
+  local out, seen, guidOf = {}, {}, {}
+  for _, r in ipairs(rows or {}) do
+    local k = keyOf(r.text)
+    if k and r.go then guidOf[k] = r.go.guid end
+  end
+  for _, r in ipairs(rows or {}) do
+    local key = keyOf(r.text)
+    local p = key and personOf(key)
+    if type(p) == "table" and type(p.chars) == "table" and #p.chars >= 2 and p.main and not seen[p.main] then
+      seen[p.main] = true
+      local main, alts = nil, {}
+      for _, c in ipairs(p.chars) do
+        if c.key == p.main then main = c else alts[#alts + 1] = tostring(c.name) end
+      end
+      if main then
+        out[#out + 1] = { text = tostring(main.name), class = str(main.class), detail = "Alts: " .. table.concat(alts, ", "),
+          go = guidOf[p.main] and { page = "roster", guid = guidOf[p.main] } or nil }
+      end
+    end
+  end
+  return out
+end
+
+-- Guild log sentences (LogEntryRaw) that hold the query, newest first; detail = the date.
+function View.SearchLog(log, q)
+  local out = {}
+  for _, o in ipairs(logNewestFirst(log)) do
+    local text = View.LogEntryRaw(o.e)
+    if text and hit(text, q) then
+      out[#out + 1] = { text = text, icon = View.LOG_ICONS[LOG_KINDS[o.e.type]], go = { page = "overview" },
+        detail = o.ts >= 0 and type(date) == "function" and date("%Y-%m-%d", o.ts) or nil }
+    end
+  end
+  return out
+end
+
+-- chars = ns.ProfessionsCopy(): profession names, then recipe names stored as strings (an item id is skipped: naming
+-- it would need a client call). By character, profession and recipe name.
+function View.SearchProfessions(chars, q)
+  local out, list = {}, {}
+  for _, c in ipairs(type(chars) == "table" and chars or {}) do
+    if type(c) == "table" and type(c.professions) == "table" then list[#list + 1] = c end
+  end
+  table.sort(list, function(a, b) return tostring(a.name) < tostring(b.name) end)
+  for _, c in ipairs(list) do
+    local who, profs = tostring(c.name), {}
+    for id, p in pairs(c.professions) do
+      if type(p) == "table" and str(p.name) then profs[#profs + 1] = { id = id, p = p } end
+    end
+    table.sort(profs, function(a, b) return a.p.name < b.p.name end)
+    for _, e in ipairs(profs) do
+      local p = e.p
+      if hit(p.name, q) then
+        out[#out + 1] = { text = p.name, detail = who, icon = View.ProfessionIcon(e.id, p.name), go = { page = "char" } }
+      end
+      local names = {}
+      for _, r in pairs(type(p.recipes) == "table" and p.recipes or {}) do
+        if hit(r, q) then names[#names + 1] = r end
+      end
+      table.sort(names)
+      for _, r in ipairs(names) do out[#out + 1] = { text = r, detail = p.name .. DOT .. who, go = { page = "char" } } end
+    end
+  end
+  return out
+end
+
+-- suite = ns.SUITE by name or line; pages = { ["m:<id>"] = true } for the registered module pages (else Modules).
+function View.SearchModules(suite, q, pages)
+  local out = {}
+  pages = type(pages) == "table" and pages or {}
+  for _, e in ipairs(type(suite) == "table" and suite or {}) do
+    if type(e) == "table" and (hit(e.name, q) or hit(e.line, q)) then
+      local key = "m:" .. tostring(e.id)
+      out[#out + 1] = { text = tostring(e.name), detail = str(e.line), icon = e.icon,
+        go = { page = pages[key] and key or "modules" } }
+    end
+  end
+  return out
+end
+
+local function searchText(text, class)
+  local hex = class and View.CLASS_HEX[class]
+  if hex then return "|cff" .. hex .. escape(text) .. "|r" end -- the colour wraps the escaped text
+  return escape(text)
+end
+
+-- groups = ns.Search.Run's answer (nil: the query was short) -> display rows { kind = "group"|"row"|"more"|"line",
+-- text, detail?, icon?, class?, group?, row? }: per group its label, 5 rows (all when expanded[key]), then
+-- "Show all <n>". Every text and detail escaped once here. query: the box text, trimmed, for 'No results for "<query>".'.
+-- A group row reads "<label> · <total>" (mock se-2).
+function View.SearchList(groups, expanded, query)
+  if type(groups) ~= "table" then return { { kind = "line", text = View.SEARCH_SHORT } } end
+  if #groups == 0 then return { { kind = "line", text = 'No results for "' .. escape(query or "") .. '".' } } end
+  expanded = type(expanded) == "table" and expanded or {}
+  local out = {}
+  for _, g in ipairs(groups) do
+    local rows = type(g.rows) == "table" and g.rows or {}
+    out[#out + 1] = { kind = "group", text = escape(g.label) .. DOT .. tostring(g.total or #rows), group = g.key }
+    local n = expanded[g.key] and #rows or math.min(#rows, View.SEARCH_SHOWN)
+    for i = 1, n do
+      local r = rows[i]
+      out[#out + 1] = { kind = "row", text = searchText(r.text, r.class), detail = r.detail and escape(r.detail) or nil,
+        icon = r.icon, class = r.class, group = g.key, row = r }
+    end
+    if n < #rows then out[#out + 1] = { kind = "more", text = "Show all " .. tostring(g.total or #rows), group = g.key } end
+  end
+  return out
 end

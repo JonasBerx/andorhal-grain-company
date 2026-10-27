@@ -9,6 +9,7 @@
 Compat.lua
 Core.lua
 Suite.lua
+Changelog.lua
 DemoGuild.lua
 Demo.lua
 View.lua
@@ -24,4 +25,5 @@ CommSync.lua
 CommVersion.lua
 Links.lua
 LinksStore.lua
+Search.lua
 Api.lua

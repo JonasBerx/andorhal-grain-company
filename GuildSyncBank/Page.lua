@@ -5,6 +5,8 @@
 --   ns.Page.Refresh(frame)  redraws from ns.Data: the tab bar (an entry shows when its shown(data) is true), the wait
 --                           line from data.wait (else, with no other officer online, the age of the newest
 --                           officer-domain record, d781), and the chosen tab
+--   ns.Page.Open(id)        choose tab id on the built page and redraw (t58 V4: Running low -> Banker)
+--   ns.Page.Filter(text)    -> true | nil: put text in the Contents search box of the built page, no redraw (s6)
 -- Page.lua puts Requisitions, Contents, Requests and Mine first in ns.TABS; later entries (PageBanker.lua) follow and
 -- are all loaded when the page builds. Every action goes through ns.Do; every text from another player goes through
 -- GuildSync.Escape.
@@ -140,6 +142,53 @@ local function buildContents(frame)
   ui.guild:SetPoint("RIGHT", form, "RIGHT", 0, 0)
 end
 
+-- d1094 (V2): Running low and Raid night above the tiles, only when a minimum (min > 0) exists; each at most CAP cards,
+-- then "and N more". A bank character with a free requisition slot gets Post requisition on a Running low card (V4).
+local CAP = 8
+
+local function hasMinimum(view)
+  for _, m in pairs(view.mins or {}) do if type(m) == "table" and (m.min or 0) > 0 then return true end end
+  return false
+end
+
+local function more(C, ui, n) if n > CAP then C.Line(ui, "and " .. (n - CAP) .. " more") end end
+
+local function lowSections(C, ui, data)
+  local view = data.view
+  local low, raid = view.low or {}, view.raid or {}
+  local canPost = data.who.bank and ns.Store.FreeSlot(view, data.now) ~= nil
+  C.Section(ui, "Running low · " .. #low)
+  if #low == 0 then C.Line(ui, "Nothing is running low.") end
+  for i = 1, math.min(CAP, #low) do
+    local l = low[i]
+    local text, icon, _, quality = ns.Items.Line(l.id)
+    local spec = { kind = "plain", key = "low:" .. tostring(l.id), item = l.id, icon = iconOf(icon) or C.QMARK,
+      count = l.have, title = E(text), quality = quality,
+      pill = l.raid and { text = "Raid night", tone = "gold" } or nil,
+      sub = { "have " .. l.have .. " / min " .. l.min .. " · short " .. l.short } }
+    if canPost then
+      spec.kind = "strip"
+      spec.strip = { buttons = { { "Post requisition", function()
+        ns.Banker.Prefill(l.id, l.short)
+        Page.Open("banker")
+      end, 120 } } }
+    end
+    C.Card(ui, spec)
+  end
+  more(C, ui, #low)
+  if #raid > 0 then
+    C.Section(ui, "Raid night · " .. #raid)
+    for i = 1, math.min(CAP, #raid) do
+      local r = raid[i]
+      local text, icon, _, quality = ns.Items.Line(r.id)
+      C.Card(ui, { kind = "plain", key = "raid:" .. tostring(r.id), item = r.id, icon = iconOf(icon) or C.QMARK,
+        count = r.have, title = E(text), quality = quality, pill = r.low and { text = "low", tone = "red" } or nil,
+        sub = { "have " .. r.have .. " / min " .. r.min } })
+    end
+    more(C, ui, #raid)
+  end
+end
+
 local function refreshContents(frame, data)
   local C, ui = ns.Cards, uis[frame]
   local readable, why = ns.Scan.GuildBankReadable()
@@ -169,7 +218,13 @@ local function refreshContents(frame, data)
     tiles[#tiles + 1] = { id = id, text = E(text), icon = iconOf(icon) or ns.Cards.QMARK, quality = quality }
   end
   table.sort(tiles, function(a, b) if a.text ~= b.text then return a.text < b.text end return a.id < b.id end)
+  local isLow = {}
+  for _, l in ipairs(view.low or {}) do isLow[l.id] = true end
   C.Begin(ui.cards)
+  if hasMinimum(view) then -- with no minimum, Contents is as in 0.3: the tiles only
+    lowSections(C, ui.cards, data)
+    C.Section(ui.cards, "All items · " .. #tiles)
+  end
   for _, t in ipairs(tiles) do
     local it = view.items[t.id]
     local hl = {}
@@ -188,7 +243,8 @@ local function refreshContents(frame, data)
     end
     full, short = table.concat(full, " · "), table.concat(short, " · ")
     local card = C.Card(ui.cards, { kind = "tile", key = tostring(t.id), item = t.id, icon = t.icon, count = it.total,
-      title = t.text, quality = t.quality, sub = { full }, tooltip = tip })
+      title = t.text, quality = t.quality, sub = { full }, tooltip = tip,
+      pill = isLow[t.id] and { text = "low", tone = "red" } or nil })
     C.Fit(card.sub[1], full, short) -- first names when the full line does not fit (C4)
   end
   if #tiles == 0 then C.Line(ui.cards, "Nothing to show.") end
@@ -342,9 +398,12 @@ end
 
 -- M.Kit.Tabs over every ns.TABS entry (all loaded by now), else 0.1's buttons; one holder per tab under the 32-tall
 -- tab row (d667); the page's width drives every list's (d537).
+local built -- the page Page.Build made last, for Page.Open
+
 function Page.Build(page)
   local ui = { holders = {} }
   uis[page] = ui
+  built = page
   local entries = {}
   for i, entry in ipairs(ns.TABS) do entries[i] = { key = entry.id, text = entry.label } end
   ui.tabs = M.Kit.Tabs(page, entries, function(key) M.Safe(choose, page, key) end)
@@ -373,6 +432,20 @@ function Page.Build(page)
   page:HookScript("OnSizeChanged", function(_, w) -- a hook: the hub's own OnSizeChanged on its frame still runs
     M.Safe(function() if ns.Cards.Resize(w) then M.RefreshPage() end end)
   end)
+end
+
+-- Page.Open(id): choose tab id on the built page and redraw (V4 jump); nothing before the page is built.
+function Page.Open(id)
+  if built then choose(built, id) end
+end
+
+-- Page.Filter(text): the Contents search box holds text (a search row's click, s6); nil before the page is built.
+function Page.Filter(text)
+  local holder = built and uis[built].holders.contents
+  local ui = holder and uis[holder]
+  if not (ui and ui.search) then return nil end
+  ui.search:SetText(text)
+  return true
 end
 
 function Page.Refresh(page)

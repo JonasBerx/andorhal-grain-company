@@ -23,6 +23,20 @@ local function recReader()
   end
 end
 
+-- Annals' title and points for a key (hub facts, API 8), raw and unescaped: { title, points }, or nil when either is
+-- missing or of the wrong type. Asked once per key; "facts" from Annals and "demo" drop the cache.
+local standings = {} -- key -> { title, points } | false
+function ns.Standing(key)
+  if type(key) ~= "string" then return nil end
+  local s = standings[key]
+  if s == nil then
+    local title, points = ns.M.Fact("annals", "title", key), ns.M.Fact("annals", "points", key)
+    s = type(title) == "string" and type(points) == "number" and { title = title, points = points } or false
+    standings[key] = s
+  end
+  return s or nil
+end
+
 function ns.RefreshSection(frame, key)
   local pool = pools[frame] or {}
   pools[frame] = pool
@@ -34,7 +48,7 @@ function ns.RefreshSection(frame, key)
   if person then rec = ns.Card.ProfileOf(person, recOf) elseif type(key) == "string" then rec = recOf(key) end
   local width = tonumber(frame:GetWidth()) or 0
   if width <= 0 then width = 166 end
-  local items, height = ns.Card.Section({ key = key, rec = rec }, person, ns.Now(), width)
+  local items, height = ns.Card.Section({ key = key, rec = rec, standing = ns.Standing(key) }, person, ns.Now(), width)
   -- shift: how far the client's real wrapping (measured) has pushed the blocks below past the letter model's place
   local used, shift, bottom = {}, 0, height
   for _, it in ipairs(items) do
@@ -69,3 +83,10 @@ end
 
 -- A person may have changed (a record merged or pruned, a setting, a roster read): redraw the selected member.
 ns.M.On("links", function() ns.M.RefreshMember() end)
+-- Annals' facts changed, or demo turned on or off: ask again and redraw.
+local function restand()
+  standings = {}
+  ns.M.RefreshMember()
+end
+ns.M.On("facts", function(id) if id == "annals" then restand() end end)
+ns.M.On("demo", restand)

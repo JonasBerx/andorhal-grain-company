@@ -130,6 +130,16 @@ local function check(G, now, isRead, members)
   return nil
 end
 
+-- Feats.Own on the real G for the own character (money, zone, an own guild line); answers the new earns and whether
+-- a new capital was stored, or nil and the error when it throws, so the caller finishes its work first.
+local function own(G, now, obs)
+  local guid = Host.MyGuid()
+  if not guid then return nil end
+  local good, res, moved = pcall(Feats.Own, G, guid, now, obs)
+  if not good then return nil, res end
+  return res, nil, moved
+end
+
 read = function()
   local now = Host.Now()
   if lastRead and now - lastRead < Rules.READ_GAP then
@@ -160,6 +170,9 @@ read = function()
   end
   Store.Prune(G, now)
   local err = check(G, now, true, members)
+  local _, ownErr = own(G, now, { money = Host.Money(), zone = Host.Zone() })
+  err = err or ownErr -- the first error wins (f6656)
+  ns.AnnalsModule.FactsDirty(G)
   sayHits(G)
   Host.Refresh()
   if err then error(err, 0) end -- recorded by the Host once the read is done
@@ -192,15 +205,33 @@ local function onEvent(event, ...)
     local now = Host.Now()
     if Store.OwnDing(G, guid, level, now) then
       local err = check(G, now, false)
+      ns.AnnalsModule.FactsDirty(G)
       Host.Refresh()
       if err then error(err, 0) end
     end
+  elseif event == "PLAYER_MONEY" or event == "ZONE_CHANGED_NEW_AREA" or event == "CHAT_MSG_GUILD" then
+    -- the own rows only, no roster read; a guild line counts by its sender guid (payload 12), never its text
+    local obs
+    if event == "CHAT_MSG_GUILD" then
+      if not Host.OwnGuildLine((select(12, ...))) then return end
+      obs = { line = true }
+    elseif event == "PLAYER_MONEY" then
+      obs = { money = Host.Money() }
+    else
+      obs = { zone = Host.Zone() }
+    end
+    local G = Core.G()
+    if not G then return end
+    local earned, err, moved = own(G, Host.Now(), obs)
+    if moved or (earned and #earned > 0) then Host.Refresh() end
+    if err then error(err, 0) end
   else -- GUILD_ROSTER_UPDATE, CLUB_MEMBERS_UPDATED, CLUB_MEMBER_UPDATED, PLAYER_GUILD_UPDATE
     read()
   end
 end
 
 local mod = { events = { "PLAYER_LOGIN", "GUILD_ROSTER_UPDATE", "CLUB_MEMBERS_UPDATED", "CLUB_MEMBER_UPDATED",
-  "PLAYER_GUILD_UPDATE", "GUILD_EVENT_LOG_UPDATE", "PLAYER_LEVEL_UP" } }
+  "PLAYER_GUILD_UPDATE", "GUILD_EVENT_LOG_UPDATE", "PLAYER_LEVEL_UP", "PLAYER_MONEY", "ZONE_CHANGED_NEW_AREA",
+  "CHAT_MSG_GUILD" } }
 Core.mod = mod
 for _, event in ipairs(mod.events) do Host.On(event, onEvent) end

@@ -1,6 +1,7 @@
 -- GuildSync CraftStore: the crafter directory rules (key, digest, compare, merge, tombstone, own records,
--- guild-only, prune, the per-domain limit). Pure Lua 5.1, no client calls: state and time are passed in.
--- Messages are decoded tables in CraftWire.Unpack's shape; CraftWire itself is not needed here.
+-- guild-only, prune, the per-domain limit; the cooldown list and its read rule). Pure Lua 5.1, no client calls:
+-- state and time are passed in. Messages are decoded tables in CraftWire.Unpack's shape; CraftWire itself is
+-- not needed here.
 local _, ns = ...
 local CraftStore = {}
 ns.CraftStore = CraftStore
@@ -196,11 +197,11 @@ function CraftStore.AnswerDelay(r, peers, isOwner)
   return 2 + r * math.max(4, 2 * peers)
 end
 
--- A want is still worth sending: P = I hold the subject at the wanted stamp; R = my stamp (0 if none) is still the
--- one I asked with; D = always.
+-- A want is still worth sending: P (or crafting_c's K) = I hold the subject at the wanted stamp; R = my stamp (0 if
+-- none) is still the one I asked with; D = always.
 function CraftStore.StillWanted(crafters, want, now)
   local mine = crafters[want.subject]
-  if want.t == "P" then return mine ~= nil and mine.stamp == tonumber(want.version) end
+  if want.t == "P" or want.t == "K" then return mine ~= nil and mine.stamp == tonumber(want.version) end
   if want.t == "R" then return (mine and mine.stamp or 0) == (tonumber(want.version) or 0) end
   if want.t == "D" then return true end
   return false
@@ -255,4 +256,130 @@ function CraftStore.NewLimit(rates, window)
     kept[#kept + 1] = t
     return true
   end
+end
+
+-- Cooldowns ------------------------------------------------------------------------------------------------------
+
+local MAX_AHEAD = 691200      -- 8 days: a longer duration is no profession cooldown, so the read is unknown
+local SHORT = 2               -- a duration of 2 s or less with a start is the GCD, not the cooldown (f6613)
+local CD_TOLERANCE = 120      -- two readyAts this close are one (f6611)
+CraftStore.MAX_AHEAD = MAX_AHEAD
+
+-- The tracked cooldowns (AC1), from the DB2 tables of build 1.60.1.70374. No durations: the client's answer
+-- carries them (the transmutes share category 310 but not one duration). Snowmaster is left out (q1172).
+local TR_SOURCE = "SpellCategories cat 310 Transmute - Alchemy; SkillLineAbility 171 (70374)"
+local function transmute(spell, name)
+  return { id = "s" .. spell, kind = "spell", spell = spell, prof = 171, group = "tr", name = name, source = TR_SOURCE }
+end
+CraftStore.COOLDOWNS = {
+  transmute(17187, "Transmute: Arcanite"),          -- SpellCategories 310, CategoryRecoveryTime; SLA 9840
+  transmute(17559, "Transmute: Air to Fire"),       -- SpellCategories 310; SLA 9943
+  transmute(17560, "Transmute: Fire to Earth"),     -- SpellCategories 310; SLA 9946
+  transmute(17561, "Transmute: Earth to Water"),    -- SpellCategories 310; SLA 9944
+  transmute(17562, "Transmute: Water to Air"),      -- SpellCategories 310; SLA 9948
+  transmute(17563, "Transmute: Undeath to Water"),  -- SpellCategories 310; SLA 9947
+  transmute(17564, "Transmute: Water to Undeath"),  -- SpellCategories 310; SLA 9949
+  transmute(17565, "Transmute: Life to Earth"),     -- SpellCategories 310; SLA 9950
+  transmute(17566, "Transmute: Earth to Life"),     -- SpellCategories 310; SLA 9945
+  transmute(1317279, "Transmute: Legionite"),       -- SpellCategories 310; SLA 59405
+  -- SpellCooldowns 18560 RecoveryTime, no category: its own cooldown; SkillLineAbility 10487, Tailoring 197
+  { id = "s18560", kind = "spell", spell = 18560, prof = 197, group = "mc", name = "Mooncloth",
+    source = "SpellCooldowns RecoveryTime; SkillLineAbility 10487 (70374)" },
+  -- ItemEffect 100917 (use spell 19566), SpellCategory 791 "Item - Salt Shaker": an item cooldown. ItemSparse 15846
+  -- RequiredSkill 165 rank 250, so it sits under Leatherworking (q1176); Engineering recipe 19567 makes it.
+  { id = "i15846", kind = "item", item = 15846, prof = 165, group = "ss", name = "Salt Shaker",
+    source = "ItemEffect 100917 cat 791; ItemSparse 15846 RequiredSkill 165 rank 250; "
+      .. "made by Engineering 19567 (70374)" },
+}
+
+-- { { group, name, prof, entries } } in board order tr, mc, ss; built once.
+local GROUP_NAMES = { tr = "Transmute", mc = "Mooncloth", ss = "Salt Shaker" }
+local groups
+function CraftStore.CooldownGroups()
+  if groups then return groups end
+  groups = {}
+  local byGroup = {}
+  for _, e in ipairs(CraftStore.COOLDOWNS) do
+    local g = byGroup[e.group]
+    if not g then
+      g = { group = e.group, name = GROUP_NAMES[e.group], prof = e.prof, entries = {} }
+      byGroup[e.group] = g
+      groups[#groups + 1] = g
+    end
+    g.entries[#g.entries + 1] = e
+  end
+  return groups
+end
+
+-- A plain read { start, duration, enabled, onGCD } (start on the clockNow clock) -> "ready", "skip" (the GCD: keep
+-- what is stored), the readyAt on the serverNow clock, or nil (unknown: a bad field, disabled, a start in the future
+-- as after a reboot, a duration past MAX_AHEAD, or a NaN start or duration, s2). enabled is true or a non-zero number.
+function CraftStore.CooldownReadyAt(read, clockNow, serverNow)
+  if type(read) ~= "table" or type(clockNow) ~= "number" or type(serverNow) ~= "number" then return nil end
+  local start, duration, enabled = read.start, read.duration, read.enabled
+  if type(start) ~= "number" or type(duration) ~= "number" then return nil end
+  if start ~= start or duration ~= duration then return nil end
+  if not (enabled == true or (type(enabled) == "number" and enabled ~= 0)) then return nil end
+  if read.onGCD == true then return "skip" end
+  if start == 0 then return "ready" end
+  if duration <= SHORT then return "skip" end
+  if start > clockNow or duration > MAX_AHEAD then return nil end
+  local remaining = start + duration - clockNow
+  if remaining <= 0 then return "ready" end
+  return serverNow + remaining
+end
+
+-- Two readyAts are the same when both are ready (0 or <= now) or, both still ahead, within CD_TOLERANCE.
+function CraftStore.CooldownSame(old, new, now)
+  if type(old) ~= "number" or type(new) ~= "number" or type(now) ~= "number" then return false end
+  local oldReady, newReady = old <= now, new <= now
+  if oldReady or newReady then return oldReady and newReady end
+  return math.abs(new - old) <= CD_TOLERANCE
+end
+
+-- The cooldown record (crafting_c's K) ------------------------------------------------------------------------------
+
+-- A K's cds list { { group, readyAt } } -> { [group] = readyAt }.
+function CraftStore.CooldownsMap(list)
+  local out = {}
+  for _, c in ipairs(list or {}) do out[c.group] = c.readyAt end
+  return out
+end
+
+-- Canonical cds field: group,readyAt per group, sorted by group. crafting_c's content(key); the hub stamps with
+-- Wire.Hash of it, so CooldownsHash is the same Adler-32.
+function CraftStore.CooldownsString(cds)
+  local groups = {}
+  for group in pairs(cds or {}) do groups[#groups + 1] = group end
+  table.sort(groups)
+  local parts = {}
+  for i, group in ipairs(groups) do parts[i] = group .. "," .. tostring(cds[group]) end
+  return table.concat(parts, ";")
+end
+
+function CraftStore.CooldownsHash(cds) return adler32(CraftStore.CooldownsString(cds)) end
+
+-- A K from the wire, as Merge for a P. Also refused: a readyAt past now + MAX_AHEAD (no profession cooldown is that
+-- long). A past readyAt is taken: it shows as ready.
+function CraftStore.CooldownMerge(store, msg, now, rosterKeys, ownKeys)
+  local key = CraftStore.Key(msg.name)
+  local stamp, seen = tonumber(msg.stamp), tonumber(msg.seen) or 0
+  if not key or not stamp then return "refused" end
+  if stamp > now + FUTURE or seen > now + FUTURE then return "refused" end
+  local cds = CraftStore.CooldownsMap(msg.cds)
+  for _, at in pairs(cds) do
+    if type(at) ~= "number" or at > now + MAX_AHEAD then return "refused" end
+  end
+  if not (rosterKeys and rosterKeys[key]) then return "refused" end
+  if ownKeys and ownKeys[key] then return "refused" end
+
+  local stored = store[key]
+  if stored and stamp < stored.stamp then return "older" end
+  if stored and stamp == stored.stamp then
+    if seen > (stored.seen or 0) then stored.seen = seen end
+    return "same"
+  end
+  store[key] = { name = msg.name, class = msg.class, stamp = stamp, seen = math.max(seen, stored and stored.seen or 0),
+                 cds = cds }
+  return stored and "newer" or "new"
 end

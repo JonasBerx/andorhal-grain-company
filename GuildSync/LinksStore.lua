@@ -372,6 +372,14 @@ function Store.Person(key)
   return Links.PersonOf(key, parsedRecords(), levels(), mine())
 end
 
+-- Store.Persons(keyList) -> { [key] = Store.Person(key) }, levels: the records, roster and own characters read once
+-- for the whole list (Search.lua, f6242), and the roster read (Store.Levels' shape).
+function Store.Persons(keyList)
+  local recs, lv, me, out = parsedRecords(), levels(), mine(), {}
+  for _, key in ipairs(keyList) do out[key] = Links.PersonOf(key, recs, lv, me) end
+  return out, lv
+end
+
 -- Store.Levels() -> { [key] = { name, level, class } }: the viewer's roster as the rules read it (a fresh table).
 Store.Levels = levels
 

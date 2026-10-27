@@ -13,6 +13,7 @@ guild module, so the whole guild runs matching versions.
 | GuildSyncBank | Bank | The guild bank: contents, requisitions and requests. |
 | GuildSyncNoticeBoard | Notice Board | Guild events, officer notices and polls. |
 | GuildSyncCrafting | Crafting | A work board, a crafter finder and recipes. |
+| GuildSyncGames | Games | WoWdle, a WoW word a day, and a game on flights. |
 
 ## Install
 

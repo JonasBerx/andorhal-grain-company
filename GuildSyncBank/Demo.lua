@@ -103,5 +103,26 @@ function Demo.Build(guild, now, keyOf)
     [keys[6]] = { all = 120 },
   })
 
+  -- gold ledger on both bank characters, oldest first; guild gold on me (money as their bag scans above)
+  put("j", 1, 1, now - 10 * 60, { scanned = now - 10 * 60, money = 1234567,
+    guild = 8765432, guildAt = now - 2 * HOUR, e = {
+      { t = now - 3 * DAY, d = 500000, k = "m", w = names[3] },
+      { t = now - 2 * DAY, d = -200000, k = "g" },
+      { t = now - DAY, d = 35000, k = "v" },
+      { t = now - 6 * HOUR, d = -12000, k = "s" },
+      { t = now - HOUR, d = -150000, k = "m", w = names[4] },
+    } })
+  put("j", 1, 2, now - 3 * HOUR, { scanned = now - 3 * HOUR, money = 345678, e = {
+    { t = now - 2 * DAY, d = 100000, k = "g" },
+    { t = now - DAY, d = -5000, k = "o" },
+    { t = now - 4 * HOUR, d = 20000, k = "m", w = names[5] },
+  } })
+
+  -- minimums: 13444, 13446 and 8831 run low; 13444 on both, me's newer entry wins; Dreamfoil (30 held) is a raid
+  -- item above its minimum, so Raid night shows low first and then one that is not (f6392)
+  put("n", 1, 1, now - DAY, { [I[12]] = { m = 40, r = 1, t = now - DAY }, [I[13]] = { m = 20, r = 1, t = now - DAY },
+    [I[4]] = { m = 100, t = now - DAY }, [I[8]] = { m = 20, r = 1, t = now - DAY } })
+  put("n", 1, 2, now - 2 * DAY, { [I[9]] = { m = 10, t = now - 2 * DAY }, [I[12]] = { m = 30, t = now - 2 * DAY } })
+
   return { records = records, bankChars = bankChars, roster = roster, me = me }
 end

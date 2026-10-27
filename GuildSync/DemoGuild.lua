@@ -101,7 +101,36 @@ function DemoGuild.Build(now)
 end
 
 -- The Modules page's Guildmates counts in demo (d408; the approved mock's), each capped at the demo guild's count.
-DemoGuild.SUITE_HEARD = { guildsync = 24, people = 12, annals = 15, kos = 9, raids = 5, bank = 3, board = 0, crafting = 7 }
+DemoGuild.SUITE_HEARD = { guildsync = 24, people = 12, annals = 15, kos = 9, raids = 5, bank = 3, board = 0, crafting = 7, games = 6 }
+
+-- The Guildmates tab's made-up adverts, keyed by key(name): members in GUID order, the first SUITE_HEARD.guildsync
+-- (capped) heard this week, each module on the first SUITE_HEARD[id] of them, so View.SuiteHeard over it gives
+-- SUITE_HEARD; of the rest, half heard weeks ago on an older version, half never heard.
+function DemoGuild.SuiteVersions(guild, now, key)
+  local guids = {}
+  for guid in pairs(type(guild) == "table" and type(guild.members) == "table" and guild.members or {}) do
+    insert(guids, guid)
+  end
+  sort(guids)
+  local week = math.min(DemoGuild.SUITE_HEARD.guildsync, #guids)
+  local out = {}
+  for i, guid in ipairs(guids) do
+    local m = guild.members[guid]
+    local k = key(m.name)
+    if k and i <= week then
+      local mods = {}
+      for id, n in pairs(DemoGuild.SUITE_HEARD) do
+        if id ~= "guildsync" and i <= n then mods[id] = "0.13.0" end
+      end
+      -- online members "now", the rest spread over the last six days
+      out[k] = { name = m.name, addon = "0.13.0", seen = m.online and now or now - (i % 6 + 1) * 86400 + i * 600,
+        mods = mods }
+    elseif k and i <= week + floor((#guids - week) / 2) then
+      out[k] = { name = m.name, addon = "0.12.0", seen = now - (10 + i) * 86400 }
+    end
+  end
+  return out
+end
 
 -- -> every member name of guild and every name its log can carry (members and FORMER), sorted.
 function DemoGuild.Names(guild)

@@ -480,12 +480,349 @@ function CraftView.StatusLine(stats)
     .. ", sending: " .. (stats.gate and ("no (" .. tostring(stats.gate) .. ")") or "yes")
 end
 
+-- ---------- cooldowns ----------
+-- The Cooldowns tab's groups, rows and texts. The cooldown list itself is CraftStore.COOLDOWNS, read at call time.
+-- Dates come from fmt (the client's date, passed in), but day and month names from the fixed English tables below.
+
+local MIN, HOUR, DAY = 60, 3600, 86400
+local NO_TIME = "\226\128\147" -- U+2013, the At column's "no time"
+local CD_ICONS = {
+  tr = "Interface\\Icons\\INV_Misc_StoneTablet_05", mc = "Interface\\Icons\\INV_Fabric_MoonRag_01",
+  ss = "Interface\\Icons\\INV_Egg_05",
+}
+local STATE_ORDER = { ready = 1, wait = 2, unknown = 3 }
+
+CraftView.CD_EMPTY = "No cooldowns in the guild yet."
+CraftView.CD_EMPTY_HINT = "Transmutes, Mooncloth and the Salt Shaker show here once a guildmate who has one logs in"
+  .. " with Crafting. Yours show after you open your profession or use the cooldown."
+
+-- Fixed English, never the locale's day or month names. WEEKDAYS is a copy of GuildSync/View.lua:1219.
+CraftView.WEEKDAYS = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" }
+CraftView.MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+local HEARD_NOW = 600 -- seconds that read "now" (GuildSync/View.lua:1220)
+
+-- -> text, grey. A line-for-line copy of the hub's View.HeardText (GuildSync/View.lua:1226-1235), with the client's
+-- date passed in as fmt: the hub's function is not on the API (R2, D21), so a hub change there is not followed here.
+function CraftView.HeardText(seen, now, fmt)
+  seen, now = tonumber(seen), tonumber(now) or 0
+  if not seen then return "" end
+  if now - seen < HEARD_NOW then return "now" end
+  if fmt("%Y-%m-%d", seen) == fmt("%Y-%m-%d", now) then return fmt("%H:%M", seen) end
+  local n = math.floor((now - seen) / 86400)
+  if n < 7 then return CraftView.WEEKDAYS[fmt("*t", seen).wday] end
+  if n <= 13 then return n .. " days", true end
+  return math.floor(n / 7) .. " weeks", true
+end
+
+-- "Ready" (0 or passed), "in 5 h 20 min" under a day, "in 1 day 14 h" from a day, a zero part left out; at least
+-- "in 1 min"; "unknown" for no readyAt.
+function CraftView.CooldownWhen(readyAt, now)
+  if type(readyAt) ~= "number" then return "unknown" end
+  local d = readyAt - (now or 0)
+  if d <= 0 then return "Ready" end
+  if d >= DAY then
+    local days, h = math.floor(d / DAY), math.floor((d % DAY) / HOUR)
+    return "in " .. days .. (days == 1 and " day" or " days") .. (h > 0 and (" " .. h .. " h") or "")
+  end
+  local h, m = math.floor(d / HOUR), math.floor((d % HOUR) / MIN)
+  if h == 0 then return "in " .. math.max(1, m) .. " min" end
+  return "in " .. h .. " h" .. (m > 0 and (" " .. m .. " min") or "")
+end
+
+-- The At column: the ready time's weekday and HH:MM, or a dash (also when the date gives no table, s4).
+function CraftView.CooldownAt(readyAt, fmt)
+  if type(readyAt) ~= "number" then return NO_TIME end
+  local d = fmt("*t", readyAt)
+  if type(d) ~= "table" then return NO_TIME end
+  return CraftView.WEEKDAYS[d.wday] .. " " .. fmt("%H:%M", readyAt)
+end
+
+-- "Sat 25 Oct", or a dash when the date gives no table (s4)
+local function dayText(t, fmt)
+  local d = fmt("*t", t)
+  if type(d) ~= "table" then return NO_TIME end
+  return CraftView.WEEKDAYS[d.wday] .. " " .. d.day .. " " .. CraftView.MONTHS[d.month]
+end
+
+-- "Transmute: Arcanite" -> "Arcanite"
+local function shortName(name)
+  return string.match(name, "^[^:]+:%s*(.+)$") or name
+end
+
+local function sortCdRows(a, b)
+  if a.state ~= b.state then return STATE_ORDER[a.state] < STATE_ORDER[b.state] end
+  if a.state == "wait" and a.readyAt ~= b.readyAt then return a.readyAt < b.readyAt end
+  return a.name < b.name
+end
+
+-- input = { mine = CraftHost.MyChars(), crafters, roster, cooldowns = CraftSync.Cooldowns(), me = key, names,
+-- fmt = date, own = GuildSyncCraftDB.cooldowns }. One group per cooldown in CraftStore's order, left out when empty. A
+-- row is a character who knows a recipe of the group (own or the directory) or whose record carries the group: ready
+-- (0 or passed), wait, unknown. A key in own (an alt off the roster too, f6642) is one of yours.
+function CraftView.CooldownRows(input, now)
+  local Store = ns.CraftStore
+  local fmt, roster, records = input.fmt, input.roster or {}, input.cooldowns or {}
+  local spells = input.names and input.names.spells or {}
+  local groupOf, entryName = {}, {}
+  for _, e in ipairs(Store.COOLDOWNS) do
+    if e.kind == "spell" then groupOf[e.spell], entryName[e.spell] = e.group, e.name end
+  end
+
+  local chars, own = {}, {} -- [key] = { name, class, seen, knows = { [group] = { [spell] = true } } }
+  local function char(key, name, class, seen)
+    local c = chars[key]
+    if not c then c = { knows = {} }; chars[key] = c end
+    c.name, c.class = c.name or name, c.class or class
+    if type(seen) == "number" and seen > (c.seen or 0) then c.seen = seen end
+    return c
+  end
+  local function knows(c, spell)
+    local g = groupOf[spell]
+    if not g then return end
+    c.knows[g] = c.knows[g] or {}
+    c.knows[g][spell] = true
+  end
+  for key in pairs(input.own or {}) do own[key] = true end
+  for _, m in ipairs(input.mine or {}) do
+    own[m.key] = true
+    local c = char(m.key, m.name, m.class)
+    for _, p in pairs(m.profs or {}) do
+      for spell in pairs(p.recipes or {}) do knows(c, spell) end
+    end
+  end
+  for key, cr in pairs(input.crafters or {}) do
+    local c = char(key, cr.name, cr.class, cr.seen)
+    for _, p in pairs(cr.profs or {}) do
+      for _, rc in ipairs(unpackRecipes(p.packed)) do knows(c, rc.spell) end
+    end
+  end
+  for key, rec in pairs(records) do char(key, rec.name, rec.class, rec.seen) end
+
+  local groups = {}
+  for _, g in ipairs(Store.CooldownGroups()) do
+    local id = g.group
+    local rows, ready = {}, 0
+    for key, c in pairs(chars) do
+      local rec = records[key]
+      local readyAt = rec and type(rec.cds) == "table" and rec.cds[id] or nil
+      if c.knows[id] or readyAt ~= nil then
+        local r = roster[key]
+        local online = type(r) == "table" and r.online == true
+        local seen = online and now or c.seen
+        local state = readyAt == nil and "unknown" or (readyAt <= now and "ready" or "wait")
+        local known = {}
+        for spell in pairs(c.knows[id] or {}) do
+          known[#known + 1] = shortName(spells[spell] or entryName[spell] or ("spell " .. spell))
+        end
+        table.sort(known)
+        local heard, grey = CraftView.HeardText(seen, now, fmt)
+        rows[#rows + 1] = {
+          key = key, name = personName(roster, key, c.name), class = (type(r) == "table" and r.class) or c.class,
+          tag = key == input.me and "(you)" or (own[key] and "(your alt)" or nil),
+          state = state, when = CraftView.CooldownWhen(readyAt, now),
+          at = state == "wait" and CraftView.CooldownAt(readyAt, fmt) or NO_TIME,
+          heard = heard, heardGrey = grey == true, online = online, own = own[key] == true, knows = known,
+          readyAt = readyAt, seen = seen, cdName = g.name, groupSize = #g.entries,
+        }
+        if state == "ready" then ready = ready + 1 end
+      end
+    end
+    if #rows > 0 then
+      table.sort(rows, sortCdRows)
+      groups[#groups + 1] = {
+        group = id, label = g.name .. DOT .. CraftView.ProfessionName(g.prof), prof = g.prof,
+        icon = CD_ICONS[id] or CraftView.UNKNOWN_ICON, ready = ready, total = #rows, rows = rows,
+      }
+    end
+  end
+  return groups
+end
+
+-- -> "9 cooldowns · 4 ready now", the Ready now count, the Online now count.
+function CraftView.CooldownSummary(groups)
+  local n, ready, online = 0, 0, 0
+  for _, g in ipairs(groups or {}) do
+    for _, r in ipairs(g.rows) do
+      n = n + 1
+      if r.state == "ready" then ready = ready + 1 end
+      if r.online then online = online + 1 end
+    end
+  end
+  return n .. " cooldowns" .. DOT .. ready .. " ready now", ready, online
+end
+
+-- A CooldownRows row's tooltip lines: when it is ready, the spells known for a group of more than one, when heard.
+function CraftView.CooldownTip(row, fmt)
+  local lines = {}
+  if row.state == "wait" then
+    lines[1] = row.cdName .. " ready on " .. dayText(row.readyAt, fmt) .. " at " .. fmt("%H:%M", row.readyAt) .. "."
+  elseif row.state == "ready" then
+    lines[1] = row.cdName .. " is ready."
+  else
+    lines[1] = row.cdName .. ": not heard yet."
+  end
+  if row.groupSize > 1 and #row.knows > 0 then lines[#lines + 1] = "Knows: " .. table.concat(row.knows, ", ") .. "." end
+  if type(row.seen) == "number" then
+    local fresh = row.heard ~= "" and not row.heardGrey
+    lines[#lines + 1] = "Heard " .. (fresh and CraftView.CooldownAt(row.seen, fmt) or dayText(row.seen, fmt)) .. "."
+  end
+  return lines
+end
+
+-- ---------- the hub's search (API 8) ----------
+-- One row per crafter (name and professions) and per named recipe, each with one lower-cased haystack whose fields
+-- are joined with "\n", so a query never matches across two fields (S6 f6557). Cooldown states are kept as readyAt
+-- per key and group; "ready" is counted at query time, so passing time needs no rebuild (f6620).
+
+local SEARCH_ROWS, SEARCH_BYTES = 25, 80 -- the hub's caps (API.md, "What API 8 adds")
+
+-- Control bytes stripped, then cut to SEARCH_BYTES at a character boundary (the hub's text rule).
+local function fit(s)
+  s = string.gsub(s, "%c", "")
+  if #s <= SEARCH_BYTES then return s end
+  local n = SEARCH_BYTES
+  while n > 0 and string.byte(s, n + 1) >= 128 and string.byte(s, n + 1) < 192 do n = n - 1 end
+  return string.sub(s, 1, n)
+end
+
+local function byText(a, b)
+  if a.text ~= b.text then return a.text < b.text end
+  return (a.key or a.spell) < (b.key or b.spell)
+end
+
+-- sidx = { crafters, recipes, ready = { [key] = { [group] = readyAt } } }, from CraftView.Index's index, the names
+-- table and CraftSync.Cooldowns(). Unnamed spells are left out (a late name rebuilds through spellVersion).
+function CraftView.SearchIndex(index, names, cooldowns)
+  local spells = names and names.spells or {}
+  local groupOf = {}
+  for _, e in ipairs(ns.CraftStore.COOLDOWNS) do
+    if e.kind == "spell" then groupOf[e.spell] = e.group end
+  end
+  local crafters, recipes, byKey, bySpell = {}, {}, {}, {}
+  for _, e in ipairs(index and index.entries or {}) do
+    local c = byKey[e.key]
+    if not c then
+      c = { key = e.key, text = e.name, first = string.match(e.name, "^(%S+)") or e.name, profs = {} }
+      byKey[e.key] = c
+      crafters[#crafters + 1] = c
+    end
+    c.profs[#c.profs + 1] = { text = e.profName, rank = tostring(e.rank) .. (e.max and ("/" .. tostring(e.max)) or "") }
+    if e.shared then
+      for _, rc in ipairs(e.recipes) do
+        local name = spells[rc.spell]
+        if type(name) == "string" and name ~= "" then
+          local r = bySpell[rc.spell]
+          if not r then
+            r = { text = name, low = lower(name), spell = rc.spell, item = rc.item, prof = e.prof,
+                  group = groupOf[rc.spell], who = {} }
+            bySpell[rc.spell] = r
+            recipes[#recipes + 1] = r
+          end
+          r.who[#r.who + 1] = c
+        end
+      end
+    end
+  end
+  for _, c in ipairs(crafters) do
+    table.sort(c.profs, function(a, b) return a.text < b.text end)
+    local low, parts = { lower(c.text) }, {}
+    for i, p in ipairs(c.profs) do
+      low[#low + 1] = lower(p.text)
+      parts[i] = p.text .. " " .. p.rank
+    end
+    c.low, c.profText = table.concat(low, "\n"), table.concat(parts, DOT)
+  end
+  table.sort(crafters, byText)
+  table.sort(recipes, byText)
+  local ready = {}
+  for key, rec in pairs(cooldowns or {}) do
+    if type(rec) == "table" and type(rec.cds) == "table" then
+      local t = {}
+      for g, at in pairs(rec.cds) do if type(at) == "number" then t[g] = at end end
+      ready[key] = t
+    end
+  end
+  return { crafters = crafters, recipes = recipes, ready = ready }
+end
+
+-- "ready", "wait" or "unknown" for key's group at now (no now: never ready)
+local function cdState(sidx, key, group, now)
+  local at = sidx.ready[key] and sidx.ready[key][group]
+  if type(at) ~= "number" then return "unknown" end
+  return (type(now) == "number" and at <= now) and "ready" or "wait"
+end
+
+-- "Alchemy 168/300 · Tailoring 300/300 · Transmute ready": a tail per ready cooldown, in CraftStore's order.
+local function crafterDetail(sidx, c, now)
+  local parts = { c.profText }
+  for _, g in ipairs(ns.CraftStore.CooldownGroups()) do
+    if cdState(sidx, c.key, g.group, now) == "ready" then parts[#parts + 1] = g.name .. " ready" end
+  end
+  return fit(table.concat(parts, DOT))
+end
+
+-- "4 crafters · 2 ready now", "2 crafters: Morwen, Ysolde · 2 ready now", "1 crafter: Morwen · ready now": first
+-- names for up to 3 crafters (ready first) while they fit in 80 bytes, then the tail; no tail for none ready or no
+-- cooldown.
+local function recipeDetail(sidx, r, now)
+  local n = #r.who
+  local head = n .. (n == 1 and " crafter" or " crafters")
+  local tail, list = nil, {}
+  if r.group then
+    local k = 0
+    for _, c in ipairs(r.who) do
+      local st = cdState(sidx, c.key, r.group, now)
+      if st == "ready" then k = k + 1 end
+      list[#list + 1] = { text = c.first, key = c.key, order = STATE_ORDER[st] }
+    end
+    if k > 0 then tail = n == 1 and "ready now" or (k .. " ready now") end
+  else
+    for _, c in ipairs(r.who) do list[#list + 1] = { text = c.first, key = c.key, order = 0 } end
+  end
+  tail = tail and (DOT .. tail) or ""
+  if n <= 3 then
+    table.sort(list, function(a, b) if a.order ~= b.order then return a.order < b.order end return byText(a, b) end)
+    for i, x in ipairs(list) do list[i] = x.text end
+    local full = head .. ": " .. table.concat(list, ", ") .. tail
+    if #full <= SEARCH_BYTES then return fit(full) end
+  end
+  return fit(head .. tail)
+end
+
+-- The rows for text (already lower-cased by the hub): crafters first, then recipes, each by text; at most 25.
+-- Crafter rows carry key and name, recipe rows spell, prof and item (the caller adds icon and open).
+function CraftView.SearchRows(sidx, text, now)
+  local rows = {}
+  if type(sidx) ~= "table" or type(text) ~= "string" or text == "" then return rows end
+  for _, c in ipairs(sidx.crafters) do
+    if #rows >= SEARCH_ROWS then return rows end
+    if string.find(c.low, text, 1, true) then
+      rows[#rows + 1] = { text = fit(c.text), detail = crafterDetail(sidx, c, now), key = c.key, name = c.text }
+    end
+  end
+  for _, r in ipairs(sidx.recipes) do
+    if #rows >= SEARCH_ROWS then return rows end
+    if string.find(r.low, text, 1, true) then
+      rows[#rows + 1] = { text = fit(r.text), detail = recipeDetail(sidx, r, now), spell = r.spell, prof = r.prof,
+                          item = r.item }
+    end
+  end
+  return rows
+end
+
 -- ---------- /gsync demo ----------
 
 -- Recipes the made-up crafters know, per profession id, in the directory's packed form (spell=item, 0: no item).
+-- Alchemy and Tailoring carry the Arcanite transmute and Mooncloth, so the demo has cooldown rows.
 local DEMO_RECIPES = {
-  [171] = "2330=118,3170=3382", [164] = "2660=2862,2663=2853", [202] = "3922=4359,3918=4357",
-  [165] = "2152=2304,2149=2302", [197] = "2387=2570,2393=2576", [333] = "7418=0,7420=0",
+  [171] = "2330=118,3170=3382,17187=12360", [164] = "2660=2862,2663=2853", [202] = "3922=4359,3918=4357",
+  [165] = "2152=2304,2149=2302", [197] = "2387=2570,2393=2576,18560=14342", [333] = "7418=0,7420=0",
+}
+-- Cooldown records: member position in GUID order, group, seconds after now it is ready (0: ready). The other
+-- alchemists and tailors have none, so they read unknown. 21 is a leatherworker with a ready Salt Shaker (f6608).
+local DEMO_COOLDOWNS = {
+  { 9, "tr", 0 }, { 25, "tr", 0 }, { 1, "tr", 5 * HOUR + 20 * MIN }, { 22, "tr", DAY + 14 * HOUR },
+  { 11, "mc", 0 }, { 8, "mc", 18 * HOUR }, { 18, "mc", 3 * DAY + 2 * HOUR }, { 21, "ss", 0 },
 }
 -- Work board requests: requester, claimer (member positions in GUID order), item, qty, tip, hours ago, state.
 local DEMO_REQUESTS = {
@@ -493,8 +830,9 @@ local DEMO_REQUESTS = {
   { 3, 7, "i4359", 20, 5, 3, "claimed" }, { 4, 9, "i2570", 1, 1, 8, "done" },
 }
 
--- The Crafting module's demo state (Demo.lua calls it with a copy of the made-up guild): { board, crafters, roster },
--- in CraftBoard's, CraftStore's and Comm.Roster's shapes. Pure: same guild and now, equal tables; guild is not changed.
+-- The Crafting module's demo state (Demo.lua calls it with a copy of the made-up guild): { board, crafters, roster,
+-- cooldowns }, in CraftBoard's, CraftStore's, Comm.Roster's and CraftSync.Cooldowns' shapes, built from now. Pure:
+-- same guild and now, equal tables; guild is not changed.
 -- Each request also carries its state ("open", "claimed", "done") as a plain field.
 function CraftView.DemoState(guild, now)
   local guids = {}
@@ -531,5 +869,15 @@ function CraftView.DemoState(guild, now)
       board[req.id] = req
     end
   end
-  return { board = board, crafters = crafters, roster = roster }
+  local cooldowns = {}
+  for _, c in ipairs(DEMO_COOLDOWNS) do
+    local who = list[c[1]]
+    local crafter = who and crafters[who.key]
+    if crafter then
+      local rec = cooldowns[who.key] or { name = who.name, class = roster[who.key].class, seen = crafter.seen, cds = {} }
+      rec.cds[c[2]] = c[3] > 0 and now + c[3] or 0
+      cooldowns[who.key] = rec
+    end
+  end
+  return { board = board, crafters = crafters, roster = roster, cooldowns = cooldowns }
 end

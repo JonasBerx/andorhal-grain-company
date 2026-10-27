@@ -28,6 +28,7 @@ Host.APIS = {
   "GetNumGuildMembers", "QueryGuildEventLog", "GetNumGuildEvents", "GetGuildEventInfo",
   "GetMaxPlayerLevel", "GetMaxLevelForPlayerExpansion",
   "CreateFrame", "C_ClassColor.GetClassColor",
+  "GetMoney", "GetZoneText", "C_ChatInfo.InChatMessagingLockdown",
   "date",
 }
 
@@ -254,6 +255,24 @@ local function encounterRestricted()
   local kind = resolve("Enum.AddOnRestrictionType.Encounter")
   if kind == nil then return false end
   return plain(call("C_RestrictedActions.IsAddOnRestrictionActive", kind)) == true
+end
+
+-- The own character's money in copper, else nil (a secret value reads as nil).
+function Host.Money() return num((call("GetMoney"))) end
+
+-- The zone text the client shows, else nil.
+function Host.Zone() return str((call("GetZoneText"))) end
+
+-- True only for a guild chat line whose sender guid (payload 12; the text is never read) is plainly the own guid,
+-- outside the chat lockdown and the Encounter restriction. The sender is compared first, so another member's line
+-- makes no lockdown or restriction call (f6690).
+function Host.OwnGuildLine(senderGuid)
+  local guid = str(senderGuid)
+  local me = Host.MyGuid()
+  if guid == nil or me == nil or guid ~= me then return false end
+  if plain(call("C_ChatInfo.InChatMessagingLockdown")) == true then return false end
+  if encounterRestricted() then return false end
+  return true
 end
 
 local classTokens = {}

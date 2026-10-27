@@ -33,7 +33,7 @@ local src = { escape = escape, data = pageData, openImport = function() ns.Core.
 local ok, answer = pcall(hub.RegisterModule, {
   id = "kos",
   title = TITLE,
-  version = "0.5",
+  version = "0.5.1",
   needs = 4,
   page = {
     title = TITLE,

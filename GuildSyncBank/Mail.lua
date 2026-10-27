@@ -5,6 +5,9 @@
 --   ns.Mail.Read(reads) -> mails | nil       pure: reads as the readers gave them; nil when any read is nil or secret
 --   ns.Mail.Match(mails, pending, roster, keyOf) -> matches, partials   pure
 -- mails = { { sender = s, items = { { id = n, count = n } } } }
+-- Gold ledger glue (t58, d1084, d1085): in a mail window, the money each sender's mails lost between two inbox reads,
+-- and the sends the SendMail post-hook saw and MAIL_SEND_SUCCESS confirmed; MAIL_CLOSED hands them to ns.Scan.MailClosed.
+--   ns.Mail.InstallHook() -> hooked          idempotent; false when hooksecurefunc, SendMail or GetSendMailMoney is missing
 
 local _, ns = ...
 if not ns.M then return end
@@ -26,15 +29,17 @@ end
 
 function Mail.Current() return current end
 
+local function plain(v) return GuildSync.Compat.Plain(v) end
+
 -- A plain non-empty string, or nil (a secret becomes nil before anything else touches it).
 local function str(v)
-  v = GuildSync.Compat.Plain(v)
+  v = plain(v)
   if type(v) == "string" and v ~= "" then return v end
   return nil
 end
 
 local function num(v)
-  v = GuildSync.Compat.Plain(v)
+  v = plain(v)
   if type(v) == "number" then return v end
   return nil
 end
@@ -132,6 +137,9 @@ local function readInbox()
   for i = 1, MAX_MAILS do
     local ok, icon, _, sender, subject, _, _, daysLeft, hasItem = ns.M.Compat.Try("GetInboxHeaderInfo", i)
     if not ok then return nil end
+    -- every header return plain before any compare (d1084)
+    icon, sender, subject = plain(icon), plain(sender), plain(subject)
+    daysLeft, hasItem = plain(daysLeft), plain(hasItem)
     if icon == nil and sender == nil and subject == nil and daysLeft == nil then break end -- past the last mail
     local items = {}
     -- Slots are not contiguous once an attachment was taken (f6): read every slot, skip the empty ones.
@@ -157,8 +165,105 @@ local function refresh()
   current = readInbox()
 end
 
+-- ---------- gold ledger glue (t58: d1080, d1084, d1085) ----------
+
+local hooked, open = false, false
+local seen, taken, sent, sends, bag -- last inbox money read, { [sender] = copper }, { { to, amount } }, n, GetMoney
+local pending -- at most one send { to, amount, drop } from the hook; drop = the money lost since it
+
+-- A plain whole copper amount in 0..1e12, else nil (as Scan's whole(), f6371).
+local function whole(v)
+  v = num(v)
+  if v and v == math.floor(v) and v >= 0 and v <= 1e12 then return v end
+  return nil
+end
+
+local function money() return whole(ns.M.Compat.call("GetMoney")) end
+
+-- { [sender] = copper } over the inbox, or nil when any read is nil or secret.
+local function readMoney()
+  local out = {}
+  for i = 1, MAX_MAILS do
+    local ok, icon, _, sender, _, copper, _, daysLeft = ns.M.Compat.Try("GetInboxHeaderInfo", i)
+    if not ok then return nil end
+    icon, sender, copper, daysLeft = plain(icon), plain(sender), plain(copper), plain(daysLeft)
+    if icon == nil and sender == nil and daysLeft == nil then break end -- past the last mail
+    sender, copper = str(sender), whole(copper)
+    if not sender or not copper then return nil end
+    out[sender] = (out[sender] or 0) + copper
+  end
+  return out
+end
+
+-- Adds each sender's drop since the last good read to taken; rises (arrivals) never count; a nil read is skipped.
+local function readDrops()
+  if not open or not GuildSync.Compat.Has("GetInboxHeaderInfo") then return end
+  local now = readMoney()
+  if not now then return end
+  for sender, v in pairs(seen or {}) do
+    local d = v - (now[sender] or 0)
+    if d > 0 then taken[sender] = (taken[sender] or 0) + d end
+  end
+  seen = now
+end
+
+local function mailShow()
+  open, seen, taken, sent, sends, pending, bag = true, nil, {}, {}, 0, nil, money()
+  readDrops()
+end
+
+local function mailClosed()
+  current = nil
+  if not open then return end
+  local parts = GuildSync.Compat.Has("GetInboxHeaderInfo") and { taken = taken, sent = sent, sends = sends } or nil
+  open, seen, taken, sent, sends, pending = false, nil, {}, {}, 0, nil
+  if ns.Scan and ns.Scan.MailClosed then ns.Scan.MailClosed(parts) end -- looked up now (d1080)
+end
+
+local function onMoney()
+  if not open then return end
+  local m = money()
+  if not m then return end
+  if pending and bag then pending.drop = pending.drop + (bag - m) end
+  bag = m
+end
+
+-- Confirmed named only when the drop covers the amount, else confirmed unnamed (d1085).
+local function onSent()
+  if not pending then return end
+  sends = sends + 1
+  sent[#sent + 1] = { to = pending.drop >= pending.amount and pending.to or nil, amount = pending.amount }
+  pending = nil
+end
+
+-- The hook body (f6352): argument 1 and GetSendMailMoney, both plain; module locals only. A new send replaces one.
+local function record(to)
+  local name, amount = str(to), whole(ns.M.Compat.call("GetSendMailMoney"))
+  pending = name and amount and { to = name, amount = amount, drop = 0 } or nil
+end
+
+function Mail.InstallHook()
+  if hooked then return true end
+  local Has = GuildSync.Compat.Has
+  if not (Has("hooksecurefunc") and Has("SendMail") and Has("GetSendMailMoney")) then return false end
+  hooksecurefunc("SendMail", function(to) pcall(record, to) end) -- post-hook; _G.SendMail is never assigned
+  hooked = true
+  return true
+end
+
 if ns.Listen then
-  ns.Listen("MAIL_SHOW", refresh)
-  ns.Listen("MAIL_INBOX_UPDATE", refresh)
-  ns.Listen("MAIL_CLOSED", function() current = nil end)
+  -- The window opens before the inbox refresh, so a throw there cannot keep it shut (f6391).
+  ns.Listen("MAIL_SHOW", function()
+    mailShow()
+    refresh()
+  end)
+  ns.Listen("MAIL_INBOX_UPDATE", function()
+    readDrops()
+    refresh()
+  end)
+  ns.Listen("MAIL_CLOSED", mailClosed)
+  ns.Listen("PLAYER_MONEY", onMoney)
+  ns.Listen("MAIL_SEND_SUCCESS", onSent)
+  ns.Listen("MAIL_FAILED", function() pending = nil end)
+  ns.Listen("SECURE_TRANSFER_CANCEL", function() pending = nil end)
 end

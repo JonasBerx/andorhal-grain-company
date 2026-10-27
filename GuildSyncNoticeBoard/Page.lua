@@ -430,3 +430,34 @@ function Page.Show(tab)
   noticesShown()
   Page.Refresh(st.frame)
 end
+
+-- ---------- the search provider's reads (Search.lua, run r-20261020-s6) ----------
+
+-- The Events tab's rows without the preview: a sorted copy of the readable Cal.Rows() rows (f6571), {} while the
+-- calendar is closed (drawList draws none then). Reads only: no client call.
+function Page.Events()
+  local out = {}
+  if ns.Cal.Closed() then return out end
+  for _, row in ipairs(ns.Cal.Rows() or {}) do
+    if row.readable then out[#out + 1] = row end
+  end
+  table.sort(out, before)
+  return out
+end
+
+-- A readable row's day and time as the Events tab writes them: "Wed 21 Oct 19:00".
+function Page.When(row) return dayLabel(row.minutes - row.minutes % 1440) .. " " .. hhmm(row.time) end
+
+-- The Events tab's row click for a row the caller kept: the current row with that eventID (a later read may have
+-- moved its index, f6570); an event no longer listed shows the Events tab only.
+function Page.OpenEvent(row)
+  Page.Show("events")
+  if st and st.events.form then st.events.form:Hide() end
+  local id = type(row) == "table" and row.eventID or nil
+  for _, r in ipairs(Page.Events()) do
+    if r.eventID == id then
+      ns.Event.Select(r)
+      return
+    end
+  end
+end

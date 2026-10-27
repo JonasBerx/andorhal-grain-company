@@ -235,7 +235,8 @@ end
 
 local ITEM_MAX = 2147483647
 local DAY = 86400
-local CAP = { requests = 10, pledges = 30, sends = 30, list = 200, answers = 200, x = 25, items = 400, totals = 500 }
+local CAP = { requests = 10, pledges = 30, sends = 30, list = 200, answers = 200, x = 25, items = 400, totals = 500,
+  ledger = 40, mins = 40 }
 
 -- A refusal carries a fixed why (a table, so a stray error is told apart and never shown).
 local function fail(why) error({ why = why }) end
@@ -398,6 +399,34 @@ function CLEAN.m(b)
   amounts("pledges", L.wanted)
   amounts("sends", L.sent)
   return out
+end
+
+-- j: the gold ledger (d1072, d1074, d1089). A future entry or an e over CAP.ledger refuses the body; an unknown k is
+-- kept (Derive reads it as o); w is stripped and cut to 48 encoded bytes.
+function CLEAN.j(b)
+  if next(b) == nil then return {} end
+  local e = tbl(b.e, "e")
+  if e and #e > CAP.ledger then fail("e") end
+  return { scanned = time(b.scanned) or fail("time"), money = int(b.money, 0, 1e12, "money") or fail("money"),
+    guild = int(b.guild, 0, 1e12, "money"), guildAt = time(b.guildAt), e = e and capList(e, CAP.ledger, function(x)
+      local d = int(x.d, -1e12, 1e12, "d")
+      if not d or d == 0 then fail("d") end
+      if type(x.k) ~= "string" or not x.k:find("^%l%l?%l?%l?$") then fail("k") end
+      local w = str(x.w, 48, "w")
+      return { t = time(x.t) or fail("time"), d = d, k = x.k, w = w and noteCap(w, 48) }
+    end) }
+end
+
+-- n: minimums by item id (d1073, d1074, d1089). An entry in the future is dropped; any r is stored as 1.
+function CLEAN.n(b)
+  return capMap(b, CAP.mins, function(id) int(id, 1, ITEM_MAX, "item") end, function(x)
+    tbl(x, "minimum")
+    if x == nil then fail("minimum") end
+    local m, t = int(x.m, 0, ns.LIMITS.minimum, "minimum"), int(x.t, 0, MAX_INT, "time")
+    if not m or not t then fail("minimum") end
+    if t > now + ns.LIMITS.future then return nil end
+    return { m = m, r = x.r ~= nil and 1 or nil, t = t }
+  end)
 end
 
 function Codec.Clean(family, body, at)

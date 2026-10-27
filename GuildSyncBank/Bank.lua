@@ -13,7 +13,8 @@ local _, ns = ...
 local EVENTS = { "BAG_UPDATE_DELAYED", "PLAYERBANKSLOTS_CHANGED", "BANK_TABS_CHANGED", "BANKFRAME_OPENED",
   "BANKFRAME_CLOSED", "PLAYER_INTERACTION_MANAGER_FRAME_SHOW", "PLAYER_INTERACTION_MANAGER_FRAME_HIDE", "PLAYER_MONEY",
   "GUILDBANKFRAME_OPENED", "GUILDBANKFRAME_CLOSED", "GUILDBANKBAGSLOTS_CHANGED", "GUILDBANK_UPDATE_MONEY", "MAIL_SHOW",
-  "MAIL_CLOSED", "MAIL_INBOX_UPDATE", "ITEM_DATA_LOAD_RESULT" }
+  "MAIL_CLOSED", "MAIL_INBOX_UPDATE", "ITEM_DATA_LOAD_RESULT", "MERCHANT_SHOW", "MERCHANT_CLOSED", "MAIL_SEND_SUCCESS",
+  "MAIL_FAILED", "SECURE_TRANSFER_CANCEL", "PLAYER_LOGOUT" }
 
 local listeners = {} -- event (or "login") -> { fn, ... }
 local M, Key         -- set right after the guard
@@ -45,8 +46,8 @@ end
 M = GuildSync and GuildSync.RegisterModule({
   id = "bank",
   title = "Bank",
-  version = "0.3",
-  needs = 6, -- API 6 for M.Kit.ItemButton/SetItem; the sync run t42 keeps 6
+  version = "0.5",
+  needs = 8, -- API 8 for the search provider (s6); API 6 for M.Kit.ItemButton/SetItem
   apis = {
     "GetServerTime", "GetMoney",
     "C_Container.GetContainerNumSlots", "C_Container.GetContainerItemInfo",
@@ -70,6 +71,9 @@ M = GuildSync and GuildSync.RegisterModule({
       "GetInboxItemLink", -- undocumented, beta check
       "ChatFrameUtil.InsertLink", -- undocumented, beta check
       "ChatEdit_InsertLink", -- undocumented, beta check
+      "SendMail", -- undocumented, beta check
+      "GetSendMailMoney", -- undocumented, beta check
+      "C_Item.GetItemInfoInstant", -- documented
     },
   },
   events = EVENTS,
@@ -82,6 +86,7 @@ M = GuildSync and GuildSync.RegisterModule({
     refresh = function(frame) if ns.Page then ns.Page.Refresh(frame) end end,
   },
   slash = slash,
+  search = { find = function(text) return ns.SearchFind and ns.SearchFind(text) end },
   selftest = function()
     if ns.Health then return ns.Health.SelfTest() end
     return "wait", "loading"

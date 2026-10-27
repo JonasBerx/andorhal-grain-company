@@ -62,7 +62,10 @@ local function linesOf(key, withHeader)
   if type(key) ~= "string" or not ns.ViewOf then return nil end
   local view = ns.ViewOf(key)
   if type(view) ~= "table" then return nil end
-  local lines = ns.Card.Tooltip(view, ns.Now(), withHeader, ns.Person and ns.Person(key) or nil)
+  -- No standing in demo: Annals answers demo keys then, and hovers are on real players (f6531).
+  local demo = ns.M.Demo()
+  local lines = ns.Card.Tooltip(view, ns.Now(), withHeader, ns.Person and ns.Person(key) or nil,
+    not demo and ns.Standing and ns.Standing(key) or nil)
   if type(lines) ~= "table" or #lines <= (withHeader and 1 or 0) then return nil end
   return lines
 end

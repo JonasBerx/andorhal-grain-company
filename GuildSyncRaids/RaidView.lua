@@ -15,6 +15,22 @@ local SHADE_H = 56
 local KINDS = { "primary", "late", "tentative", "bench", "absence" }
 -- The counts strip's cells: the count key, the label, the role icon's atlas suffix.
 local CELLS = { { "T", "Tanks", "tank" }, { "H", "Healers", "heal" }, { "M", "Melee", "dps" }, { "R", "Ranged", "dps" } }
+-- The tabs under the team line (S9 L1, plan Task 3): key and label (a string, or a function of the chosen raid). The
+-- chosen key is ns.PageState.tab, kept across raids and redraws. Ready (S9 L2) is last and shows only on a raid that is
+-- tonight (ns.Tonight); a chosen "ready" draws as Sign-ups on any other raid.
+local TABS = {
+  { key = "signups", text = function(ev) return "Sign-ups (" .. #(ev and ev.signups or {}) .. ")" end },
+  { key = "pulls", text = "Pulls" },
+  { key = "ready", text = "Ready", tonight = true },
+}
+local TAB_H = 32 -- Kit.Tabs' holder height; the plain-button row takes the same room
+-- The Sign-ups tab's own parts on the card, hidden while the Pulls tab is chosen.
+local SIGNUP_PARTS = { "linkLabel", "link", "srLabel", "sr", "share", "strip", "kinds" }
+
+local function tabText(tab, ev)
+  if type(tab.text) == "function" then return tab.text(ev) end
+  return tab.text
+end
 
 local function esc(s) return ns.Escape(tostring(s or "")) end
 local function grey(fs) fs:SetTextColor(ns.GREY[1], ns.GREY[2], ns.GREY[3]) end
@@ -134,11 +150,62 @@ function ns.BuildView(card)
   V.discord:SetText(DISCORD_SENTENCE)
   -- Everything the chosen raid shows (the art aside), hidden together for the empty state. Nil pieces are left out.
   V.top = {}
-  for _, k in ipairs({ "shade", "title", "square", "team", "you", "pill", "linkLabel", "link", "srLabel", "sr", "share",
-    "strip", "kinds" }) do
+  for _, k in ipairs({ "shade", "title", "square", "team", "you", "pill" }) do
     if V[k] then V.top[#V.top + 1] = V[k] end
   end
+  for _, k in ipairs(SIGNUP_PARTS) do
+    if V[k] then V.top[#V.top + 1] = V[k] end
+  end
+  -- The tab strip (Kit.Tabs), else plain buttons in a row (the chosen one disabled). A click sets the tab and redraws.
+  local function choose(key)
+    ns.PageState.tab = key
+    local ui = ns.UI()
+    if ui then ns.RefreshPage(ui.page) end
+  end
+  local entries = {}
+  for i, tab in ipairs(TABS) do entries[i] = { key = tab.key, text = tabText(tab, nil) } end
+  V.tabs = K.Tabs and K.Tabs(body, entries, function(key) M.Safe(choose, key) end)
+  if V.tabs then
+    V.top[#V.top + 1] = V.tabs.holder
+  else
+    V.tabButtons = {}
+    for _, tab in ipairs(TABS) do
+      local key = tab.key
+      local b = CreateFrame("Button", nil, body, "UIPanelButtonTemplate")
+      b:SetSize(100, 22)
+      b:SetText(tabText(tab, nil))
+      b:SetScript("OnClick", function() M.Safe(choose, key) end)
+      V.tabButtons[key] = b
+      V.top[#V.top + 1] = b
+    end
+  end
   if ns.BuildSignups then ns.BuildSignups(card) end
+end
+
+-- The tabs at y (the team line's y + 22) on every draw: the holder re-anchored (a resize moves the banner), each label
+-- set (the Sign-ups count changes), the holder hidden and shown so the template re-sizes the tabs to their text (f9),
+-- and the chosen tab selected. Kit's Select runs no onSelect, so this never redraws.
+local function drawTabs(V, ev, y, chosen, on)
+  if V.tabs then
+    local h = V.tabs.holder
+    h:ClearAllPoints()
+    h:SetPoint("TOPLEFT", 12, -y)
+    h:SetPoint("TOPRIGHT", -12, -y)
+    for _, tab in ipairs(TABS) do V.tabs[tab.key]:SetText(tabText(tab, ev)) end
+    h:Hide()
+    h:Show()
+    V.tabs.ready:SetShown(on)
+    V.tabs:Select(chosen)
+    return tonumber(h:GetHeight()) or TAB_H
+  end
+  for i, tab in ipairs(TABS) do
+    local b = V.tabButtons[tab.key]
+    at(b, 12 + (i - 1) * 104, -(y + 4))
+    b:SetText(tabText(tab, ev))
+    b:SetEnabled(tab.key ~= chosen)
+    if tab.tonight then b:SetShown(on) end
+  end
+  return TAB_H
 end
 
 -- The empty state (d634): the next raid (the first whose finish, else start, is after now) as a dark, desaturated
@@ -224,6 +291,8 @@ function ns.DrawView(card, ev, view, rows, t, layout)
   if not ev then
     -- nothing chosen, or the chosen raid dropped out of the data (f4756): the people panel and its bar hide
     if ns.DrawSignups then ns.DrawSignups(card, nil, view, rows, t, L) end
+    if ns.DrawPulls then ns.DrawPulls(card, nil) end
+    if ns.DrawReady then ns.DrawReady(card, nil) end
     return drawEmpty(V, view, t, L)
   end
   for _, f in ipairs(V.top) do f:Show() end
@@ -257,6 +326,24 @@ function ns.DrawView(card, ev, view, rows, t, layout)
     at(V.you, -12, -y, "TOPRIGHT")
   end
   y = y + 22
+  local chosen = ns.PageState.tab or "signups"
+  local on = ns.Tonight(ev, t, date) and true or false
+  if chosen == "ready" and not on then chosen = "signups" end
+  y = y + drawTabs(V, ev, y, chosen, on)
+  if chosen == "pulls" or chosen == "ready" then
+    -- the sign-up parts hide; the people panel and its bar hide through DrawSignups' own nil path
+    for _, k in ipairs(SIGNUP_PARTS) do
+      if V[k] then V[k]:Hide() end
+    end
+    if ns.DrawSignups then ns.DrawSignups(card, nil, view, rows, t, L) end
+    local pulls = chosen == "pulls" and ev or nil
+    local ready = chosen == "ready" and ev or nil
+    if ns.DrawPulls then ns.DrawPulls(card, pulls, L, y, view.events) end
+    if ns.DrawReady then ns.DrawReady(card, ready, L, y, view.events) end
+    return
+  end
+  if ns.DrawReady then ns.DrawReady(card, nil) end
+  if ns.DrawPulls then ns.DrawPulls(card, nil) end
   at(V.linkLabel, 12, -(y + 6))
   if V.link then
     at(V.link, 84, -y)

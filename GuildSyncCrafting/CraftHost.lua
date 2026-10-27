@@ -1,4 +1,4 @@
--- GuildSyncCrafting, CraftHost: the one adapter between the crafting files and GuildSync's public API (API 5,
+-- GuildSyncCrafting, CraftHost: the one adapter between the crafting files and GuildSync's public API (API 8,
 -- addon/API.md). It reads no GuildSync ns field: everything goes through the global GuildSync and the handle M that
 -- GuildSync.RegisterModule returns (CraftHost.M, set by Register at the end of CraftUI.lua).
 --
@@ -245,6 +245,14 @@ function CraftHost.MyKeys()
   return out
 end
 
+-- Whether the logged-in character (c, its MyChars entry, or nil) has a CraftStore.COOLDOWNS entry to read: a spell
+-- it knows, or the item in its bags or bank (f6623).
+function CraftHost.HoldsCooldown(c, e)
+  if e.kind == "item" then return (CraftCompat.ItemCount(e.item) or 0) > 0 end
+  local p = c and c.profs[e.prof]
+  return e.kind == "spell" and type(p) == "table" and type(p.recipes) == "table" and p.recipes[e.spell] ~= nil
+end
+
 -- what = "i<itemID>" (an own recipe makes that item) or "s<spellID>" (an own recipe is that spell).
 function CraftHost.CanMake(what)
   if type(what) ~= "string" then return false end
@@ -308,9 +316,10 @@ local pageSpec, settingsSpec
 function CraftHost.AddPage(spec) pageSpec = spec end
 function CraftHost.AddSettings(spec) settingsSpec = spec end
 
--- Opens the window (when closed) on the Crafting page; tab goes to spec.onShow.
-function CraftHost.ShowCraft(tab)
-  if pageSpec and pageSpec.onShow then CraftHost.Safe(pageSpec.onShow, tab) end
+-- Opens the window (when closed) on the Crafting page; tab and focus (a search row's target, optional) go to
+-- spec.onShow.
+function CraftHost.ShowCraft(tab, focus)
+  if pageSpec and pageSpec.onShow then CraftHost.Safe(pageSpec.onShow, tab, focus) end
   if CraftHost.M then CraftHost.M.OpenPage() end
 end
 
@@ -411,6 +420,39 @@ function CraftHost.ProbeLine()
     .. (p.guildRecipeLookup and "yes" or "no")
 end
 
+-- ---------- the debug slash (AC13) ----------
+
+local HEARTHSTONE = { { kind = "spell", spell = 8690, name = "Hearthstone" },
+                      { kind = "item", item = 6948, name = "Hearthstone" } }
+
+local function v(x) return tostring(x) end -- x is plain or a word (CraftCompat.CooldownProbe)
+
+local function probeLine(e)
+  local p = CraftCompat.CooldownProbe(e)
+  local text = e.name .. (e.kind == "item" and " item " .. e.item or " spell " .. e.spell) .. ":"
+  if e.kind == "spell" then text = text .. " ShouldSpellCooldownBeSecret=" .. v(p.spellSecret) end
+  text = text .. " ShouldCooldownsBeSecret=" .. v(p.allSecret) .. " start=" .. v(p.start) .. " duration=" .. v(p.duration)
+    .. " enabled=" .. v(p.enabled)
+  if e.kind == "spell" then text = text .. " onGCD=" .. v(p.onGCD) end
+  if p.hasRecipe then text = text .. " GetRecipeCooldown=" .. v(p.recipe) end
+  return text
+end
+
+-- `/gsync crafting cd`: one line per listed cooldown entry the logged-in character knows (a known spell; an item it
+-- holds, as CraftSync reads them), then the Hearthstone spell and item. Reads only: writes and sends nothing.
+local function slash(rest)
+  if string.lower(rest or "") ~= "cd" then
+    CraftHost.Say("Usage: /gsync crafting cd (prints the raw cooldown answers)")
+    return
+  end
+  local key, c = CraftHost.Me(), nil
+  for _, x in ipairs(key and CraftHost.MyChars() or {}) do if x.key == key then c = x end end
+  for _, e in ipairs(ns.CraftStore.COOLDOWNS) do
+    if CraftHost.HoldsCooldown(c, e) then CraftHost.Say(probeLine(e)) end
+  end
+  for _, e in ipairs(HEARTHSTONE) do CraftHost.Say(probeLine(e)) end
+end
+
 -- ---------- registration (D12) ----------
 
 -- Registers the module once with the hub (the last line of CraftUI.lua), then attaches CraftSync. Returns M or nil.
@@ -419,8 +461,10 @@ function CraftHost.Register()
   if not (GuildSync and GuildSync.RegisterModule) then return nil end
   local stored = fields
   local M = GuildSync.RegisterModule({
-    id = ID, title = MODULE, version = VERSION, needs = 5, apis = CraftCompat.APIS,
-    demo = stored.demo, status = stored.status,
+    id = ID, title = MODULE, version = VERSION, needs = 8, apis = CraftCompat.APIS,
+    demo = stored.demo, status = stored.status, slash = slash,
+    -- the hub's search box (API 8): CraftHost.SearchFind is set later, in CraftUI.lua (the S6 thin wrapper)
+    search = { find = function(text) return CraftHost.SearchFind and CraftHost.SearchFind(text) end },
     -- a pass carries the probe's facts: build, crafting orders, guild recipe lookup (d422 q350)
     selftest = stored.selftest and function()
       local state, text = stored.selftest()

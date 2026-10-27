@@ -242,8 +242,8 @@ local DEMO_KINDS = { "primary", "primary", "primary", "late", "tentative", "benc
 local DEMO_SR = "https://softres.it/raid/demo"
 
 -- A made-up two-team calendar from guild (a list of { name, class }; built-in names when nil), as records in the
--- store's shape. Every time comes from now; no client call. The first event starts at now, so it is this week on
--- any weekday; the others are 2, 7 and 9 days on.
+-- store's shape, and its first event. Every time comes from now; no client call. The first event starts at now, so it
+-- is this week on any weekday; the others are 2, 7 and 9 days on.
 function ns.Demo(guild, t)
   guild = (guild and #guild > 0) and guild or DEMO_GUILD
   local half = math.max(1, math.floor(#guild / 2))
@@ -273,13 +273,79 @@ function ns.Demo(guild, t)
   local plan = Rules.Plan(cal, {}, t, "demo")
   local records = {}
   for key, body in pairs(plan and plan.put or {}) do records[key] = { rev = t, hash = "", by = "demo", body = body } end
-  return records
+  return records, events[1]
+end
+
+-- Made-up pulls for the demo's tonight raid ev (Molten Core) over the made-up guild list: 5 pulls from start + 14 min,
+-- 4 kills and a wipe. Every primary or late sign-up is at every pull but two: the second last joins from the third
+-- pull, the last is at none. The first guild member with no sign-up on ev is at every pull. GUIDs are made up.
+-- Built in memory only (Pulls.lua's ns.PullList reads it); never saved, never sent.
+local DEMO_PULLS = { { 663, "Lucifron", true }, { 664, "Magmadar", true }, { 665, "Gehennas", false },
+  { 665, "Gehennas", true }, { 666, "Garr", true } }
+local function demoPulls(ev, list)
+  if not ev then return {} end
+  local guid, onRaid, signed = {}, {}, {}
+  for i, m in ipairs(list) do guid[m.name] = string.format("Player-0-DEMO0%03d", i) end
+  for _, s in ipairs(ev.signups) do
+    onRaid[s.character] = true
+    if s.kind == "primary" or s.kind == "late" then signed[#signed + 1] = s.character end
+  end
+  local unsigned
+  for _, m in ipairs(list) do if not onRaid[m.name] then unsigned = m.name break end end
+  local pulls = {}
+  for i, b in ipairs(DEMO_PULLS) do
+    local people = {}
+    for j, name in ipairs(signed) do
+      if j < #signed - 1 or (j == #signed - 1 and i >= 3) then people[#people + 1] = { guid = guid[name], name = name } end
+    end
+    if unsigned then people[#people + 1] = { guid = guid[unsigned], name = unsigned } end
+    pulls[i] = { at = ev.start + (14 + (i - 1) * 22) * 60, encounterID = b[1], name = b[2], difficultyID = 9,
+      groupSize = 40, success = b[3], duration = b[3] and 150 or 95, snapAge = 20, people = people }
+  end
+  return pulls
+end
+
+-- A made-up ready check for the demo's tonight raid ev at t (ReadyView.lua draws it): 2 minutes ago, led by the
+-- player when an officer, else by the first made-up sign-up (f6713), one row per primary or late sign-up.
+-- The answered rows cycle through four made-up reads (ReadyData ids):
+-- no flask with fire res 112, no food, everything with fire res 100, no world buffs; the last two rows did not
+-- answer. heard is the number of answered rows; the fire res mark is 100. own is the player's made-up read. Built in
+-- memory only; nothing is read from the client's buffs, nothing is sent.
+local DEMO_READS = {
+  { flask = {}, elixir = { 17538 }, food = { 1248422 }, world = { 22888, 15366 }, fire = 112 },
+  { flask = { 17626 }, elixir = { 17538, 17539 }, food = {}, world = { 22888 }, fire = 64 },
+  { flask = { 17626 }, elixir = { 17539 }, food = { 1248422 }, world = { 22888, 15366 }, fire = 100 },
+  { flask = { 17626 }, elixir = { 17538 }, food = { 1248422 }, world = {}, fire = 31 },
+}
+local function demoReady(ev, t)
+  local me = noPipes(GuildSync.Compat.Plain(call("UnitName", "player")))
+  local ready = { checkAt = t - 120, checkLeader = ns.MyKey(), leader = { name = me }, rows = {}, heard = 0, mark = 100,
+    own = { flask = {}, elixir = { 17538 }, food = { 1248422 }, world = { 22888, 15366 }, fire = 47 } }
+  local signed = {}
+  for _, s in ipairs(ev and ev.signups or {}) do
+    if s.kind == "primary" or s.kind == "late" then signed[#signed + 1] = s.character end
+  end
+  local mine = ns.MyKey()
+  if not (mine and ns.IsOfficer(mine)) and signed[1] then
+    ready.checkLeader, ready.leader = keyOf(signed[1]), { name = signed[1] }
+  end
+  for i, name in ipairs(signed) do
+    local row = { name = name, key = keyOf(name), mine = false, cannot = false }
+    if i <= #signed - 2 then
+      local r = DEMO_READS[(i - 1) % #DEMO_READS + 1]
+      row.report = { flask = r.flask, elixir = r.elixir, food = r.food, world = r.world, fire = r.fire }
+      ready.heard = ready.heard + 1
+    end
+    ready.rows[i] = row
+  end
+  return ready
 end
 
 -- The demo state (Raids.lua's demo field holds the hub's guild and time): records from ns.Demo over the made-up
--- members (sorted by key, so the same guild gives the same calendar) and their roster rows, built on first read and
--- kept in the state. nil when demo is off; empty when the hub has no state for this module.
-local DEMO_EMPTY = { records = {}, rows = {} }
+-- members (sorted by key, so the same guild gives the same calendar), their roster rows, the tonight raid's made-up
+-- pulls and its made-up ready check, built on first read and kept in the state. nil when demo is off; empty when the
+-- hub has no state for this module.
+local DEMO_EMPTY = { records = {}, rows = {}, pulls = {} }
 function ns.DemoData()
   local on, st = M.Demo()
   if not on then return nil end
@@ -299,7 +365,10 @@ function ns.DemoData()
       end
     end
     -- never ns.Demo's built-in names: an empty made-up guild gives an empty calendar
-    st.records, st.rows = (#list > 0) and ns.Demo(list, tonumber(st.now) or now()) or {}, rows
+    local records, tonightEv = {}, nil
+    if #list > 0 then records, tonightEv = ns.Demo(list, tonumber(st.now) or now()) end
+    st.records, st.rows, st.pulls = records, rows, demoPulls(tonightEv, list)
+    st.ready = demoReady(tonightEv, tonumber(st.now) or now())
   end
   return st
 end

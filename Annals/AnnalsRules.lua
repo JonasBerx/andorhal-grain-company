@@ -65,6 +65,11 @@ Rules.WELL_DECORATED = 500      -- Well Decorated: achievement points on the ros
 Rules.DING_FRIENDS = 5          -- Ding Together: five: Ding Together pairs with this many different guildmates
 Rules.EARLY_JOIN_LEVEL = 10     -- Early Harvest: a log join below this level ...
 Rules.EARLY_DAYS = 30           -- ... reaching the max level within this many days
+Rules.COIN = 1000000            -- A Coin for the Company: copper held at once (100 gold)
+Rules.PURSE = 10000000          -- A Purse for the Company: the same, 1,000 gold
+Rules.CAPITALS = { "Orgrimmar", "Thunder Bluff", "Undercity" } -- Every Capital: zone texts, exact (enUS)
+Rules.SILENT_DAYS = 30          -- Strong, Silent Type: days with no own guild line
+Rules.AC_MAX = 512              -- a saved ac longer than this is malformed: read as "", replaced at the next write
 -- Zone musters (D14): need online guildmates in one of the zones (English names) at one read.
 Rules.MUSTER_ZONES = {
   dm = { need = 5,  zones = { "Ragefire Chasm", "Wailing Caverns", "The Deadmines", "Deadmines", "Shadowfang Keep",
@@ -460,8 +465,10 @@ function Rules.DemoGuild(now)
     -- The viewer: two matched promotions (Recruit -> Deathguard -> Deathstalker), an inviter and a race.
     { "Aveline Hollow", "PRIEST", 31, true, j = 26, js = "log", r = 2, self = true, fr = 5, ra = "Undead",
       iv = "Darrow Ashgrave", rk = { { 4, 20, 1 }, { 3, 9, 2 } },
-      ea = { { "sl" }, { "fh" }, { "dt", 9 }, { "rl", 4 }, { "dm", 3 }, { "ns", 2 }, { "ma", 1 } },
-      mb = 19, sn = "sl;fh;rl;dm;ma;" }, -- the new rows (run A) are seen, so the lg-5 dots stay on ns and dt
+      ea = { { "sl" }, { "fh" }, { "dt", 9 }, { "rl", 4 }, { "dm", 3 }, { "ns", 2 }, { "ma", 1 },
+        { "g1", 7 }, { "ec", 5 } },
+      mb = 19, sn = "sl;fh;rl;dm;ma;g1;ec;", ac = "cp=7;" }, -- the new rows (runs A, B) are seen, so the lg-5 dots stay
+                                                             -- on ns and dt; st stays unearned (d1191)
   }
   local base, last = now - 30 * DAY, now - 5 * 60
   -- G.ranks / G.actors as the Store keeps them (append-only name lists, plan D3); rk ids index them.
@@ -475,7 +482,8 @@ function Rules.DemoGuild(now)
     local guid = row.self and Rules.DEMO_SELF or string.format("Demo-%04d", i)
     local l = row[3]
     local rec = { n = row[1], c = row[2], l = l, fl = l < 10 and l or 1 + i % 9, r = row.r or 3, nt = row.nt,
-      no = row.no, js = row.js, gh = row.gh, gb = row.gb, fr = row.fr, ra = row.ra, iv = row.iv, sn = row.sn }
+      no = row.no, js = row.js, gh = row.gh, gb = row.gb, fr = row.fr, ra = row.ra, iv = row.iv, sn = row.sn,
+      ac = row.ac }
     -- rk: { rank id, days ago, actor id or nil }: a promotion seen in a 3-hour window, its log time 1 hour in.
     if row.rk then
       local rk = ""

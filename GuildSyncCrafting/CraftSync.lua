@@ -1,7 +1,8 @@
 -- GuildSync crafting, CraftSync: the glue between the hub and the stored data. The directory is the hub's bulk record
--- domain "crafting" (M.Sync.Attach) and the work board its pull domain "crafting_b" (M.Sync.Pull); the hub packs,
--- splits, gates, paces, guards and assembles. Here: the stores, the board H timer, the digest window limits, the
--- login B, own records and the in-memory names table.
+-- domain "crafting" (M.Sync.Attach), the cooldown states its record domain "crafting_c" on GSync and the work board its
+-- pull domain "crafting_b" (M.Sync.Pull); the hub packs, splits, gates, paces, guards and assembles. Here: the stores,
+-- the board H timer, the digest window limits, the login B, own records, the own cooldown read and the in-memory names
+-- table.
 -- The directory half comes first; the board half at the end of the file adds its handlers to HANDLE and BOARD and
 -- uses the locals declared above it.
 --
@@ -19,11 +20,14 @@ local OWN_DEBOUNCE = 10      -- a changed own record goes out 10 s after the cha
 local H_EVERY, H_JITTER = 900, 300
 local PRUNE_EVERY = 3600
 local DAY = 86400
+local CD_DELAY = 2           -- one coalesced cooldown read 2 s after a trigger
+local CD_DEBOUNCE = 10       -- a changed own cooldown record goes out 10 s after the change (as OWN_DEBOUNCE, f6612)
 local EMPTY_HASH = CraftStore.Adler32("")
 
 local S = {
   loggedIn = false, started = false, rosterRef = nil, ownPending = false,
   did = 0, hGen = 0, dirty = false, version = 0,
+  cdVersion = 0, cdPending = false, cdHeld = false, cdOwed = {},
   bAnswered = {}, selfCancelled = {}, selfCancels = {}, sessionStart = nil,
   stats = { received = 0, lastDigest = nil, newer = 0, fApplied = 0, fProvisional = 0, fHint = 0, userRefused = 0 },
 }
@@ -176,6 +180,8 @@ end
 
 -- The module handle once CraftSync.Attach has attached the directory domain "crafting" (M.Sync), else nil.
 local dirM
+-- The module handle once the cooldown domain "crafting_c" is attached, else nil.
+local cdM
 -- The module handle once the board domain "crafting_b" is registered with its pull store, else nil; attachBoard is
 -- set in the board half below.
 local boardM, attachBoard
@@ -251,6 +257,82 @@ local function learnSpell(spellID)
   end
 end
 
+-- ---------- own cooldowns ----------
+-- The logged-in character's listed cooldowns (CraftStore.COOLDOWNS), read out of combat into
+-- GuildSyncCraftDB.cooldowns[key] = { name, class, stamp, seen, cds = { [group] = readyAt } } (account-wide, so an
+-- alt's last read stays; no directory mirror, f6645). readyAt 0 is "ready when read"; a missing group is unknown.
+-- Alts are never read from here: each keeps what it saved itself.
+
+-- The listed spells, for the SPELL_UPDATE_COOLDOWN filter.
+local cdSpells = {}
+for _, e in ipairs(CraftStore.COOLDOWNS) do if e.spell then cdSpells[e.spell] = true end end
+
+-- A stored cooldown change: the board and search follow CooldownVersion.
+local function cdChanged()
+  S.cdVersion = S.cdVersion + 1
+  namesChanged()
+end
+
+-- An own record goes to the hub CD_DEBOUNCE s after its first change, once per key however many changes come in
+-- between; only while the key is on the roster (CraftHost.MyKeys lists own characters on the roster, f6630).
+local function cdPublish(key)
+  if not cdM or S.cdOwed[key] then return end
+  S.cdOwed[key] = true
+  CraftHost.After(CD_DEBOUNCE, function()
+    S.cdOwed[key] = nil
+    local t = CraftCompat.Now()
+    if t and CraftHost.MyKeys()[key] then cdM.Sync.Changed("crafting_c", key, floor(t)) end
+  end)
+end
+
+-- One pass: per group the character holds (a known spell; the Salt Shaker by its count in bags or bank, f6623),
+-- every entry is read. A value wins over "skip" or nil and the latest readyAt is the group's; a group with no value
+-- keeps what is stored (f6631). A combat answer holds the pass back for PLAYER_REGEN_ENABLED.
+local function readOwn()
+  local key = CraftHost.Me()
+  local t, clock = CraftCompat.Now(), CraftCompat.Clock()
+  if not key or not t then return end
+  local c
+  for _, x in ipairs(CraftHost.MyChars()) do if x.key == key then c = x end end
+  if not c then return end
+  local read = {}
+  for _, g in ipairs(CraftStore.CooldownGroups()) do
+    for _, e in ipairs(g.entries) do
+      if CraftHost.HoldsCooldown(c, e) then
+        local answer, why = CraftCompat.CooldownRead(e)
+        if why == "combat" then S.cdHeld = true return end
+        local at = answer and CraftStore.CooldownReadyAt(answer, clock, t)
+        if at == "ready" then at = 0 end
+        if type(at) == "number" and (read[g.group] == nil or at > read[g.group]) then read[g.group] = at end
+      end
+    end
+  end
+  S.cdHeld = false
+  -- write only when the state moved: a readyAt within the tolerance, or ready against a past one, is kept (f6611)
+  local own, ts = db().cooldowns, floor(t)
+  local rec = own[key]
+  local cds, moved = {}, false
+  for group, at in pairs(rec and rec.cds or {}) do cds[group] = at end
+  for group, at in pairs(read) do
+    if not CraftStore.CooldownSame(cds[group], at, t) then cds[group], moved = floor(at), true end
+  end
+  if not moved then return end
+  own[key] = { name = c.name, class = c.class or "", stamp = math.max(ts, (rec and rec.stamp or 0) + 1), seen = ts,
+                cds = cds }
+  cdChanged()
+  cdPublish(key)
+end
+
+-- A trigger: one read CD_DELAY s later, however many triggers come before it.
+local function scheduleRead()
+  if S.cdPending then return end
+  S.cdPending = true
+  CraftHost.After(CD_DELAY, function()
+    S.cdPending = false
+    readOwn()
+  end)
+end
+
 -- ---------- roster, login, timers ----------
 
 -- Any heard board H restarts the window (HANDLE.Hboard), so a same-hash H suppresses mine.
@@ -267,6 +349,7 @@ end
 local function prune(t)
   local keys, partial = CraftHost.Roster()
   if #CraftStore.Prune(crafters(), keys, partial, t, retention()) > 0 then changed() end
+  if #CraftStore.Prune(CraftCompat.Dir().cooldowns, keys, partial, t, retention()) > 0 then cdChanged() end
   CraftBoard.Cleanup(db().board, db().alerted, t, CraftHost.MyKeys())
   if BOARD.prune then BOARD.prune(t) end
 end
@@ -289,6 +372,7 @@ local function onFirstKnown(t)
   if BOARD.login then BOARD.login(t) end
   scheduleH()
   schedulePrune()
+  scheduleRead()
   changed()
 end
 
@@ -307,6 +391,7 @@ local function checkRoster(t)
     for key in pairs(fav) do if not keys[key] then fav[key] = nil end end
     if not S.started then return onFirstKnown(t) end
     if #CraftStore.Prune(cr, keys, false, t, retention()) > 0 then changed() end
+    if #CraftStore.Prune(CraftCompat.Dir().cooldowns, keys, false, t, retention()) > 0 then cdChanged() end -- f6625
   elseif not S.started then
     onFirstKnown(t)
   end
@@ -367,27 +452,45 @@ function CraftSync.Dirty()
   return d
 end
 
--- The share switch changed: own records become tombstones (off) or real again (on), and go out.
+-- The share switch changed: own records become tombstones (off) or real again (on), and go out; own cooldown records
+-- go out with empty cds (off) or their states (on, q1173).
 function CraftSync.ShareChanged()
   local t = CraftCompat.Now()
   if not t or not S.started then return end
   refreshOwn(floor(t), false)
+  for key in pairs(db().cooldowns) do cdPublish(key) end
   changed()
 end
 
--- "Clear recipes on this character": empties this character's directory; own records are mirrored back.
+-- "Clear recipes on this character": empties this character's directory; own records are mirrored back, own
+-- cooldowns are not (they stay in GuildSyncCraftDB and show from there).
 function CraftSync.ClearRecipes()
-  CraftCompat.Dir().crafters = {}
+  local dir = CraftCompat.Dir()
+  dir.crafters, dir.cooldowns = {}, {}
   local t = CraftCompat.Now()
   if t then refreshOwn(floor(t), false) end
   changed()
 end
 
+-- { [key] = { name, class, seen, cds = { [group] = readyAt } } }: guildmates' records with the own ones over them
+-- (own keys on the roster or not); in demo the demo state's.
+function CraftSync.Cooldowns()
+  local demo = CraftHost.DemoState()
+  if demo then return demo.cooldowns or {} end
+  local out, mine = {}, CraftHost.MyKeys()
+  -- s8: an own key never shows a Dir (wire) copy
+  for key, r in pairs(CraftCompat.Dir().cooldowns) do if not mine[key] then out[key] = r end end
+  for key, r in pairs(db().cooldowns) do out[key] = r end
+  return out
+end
+-- Raised by every stored cooldown change.
+function CraftSync.CooldownVersion() return S.cdVersion end
+
 -- The status counters (M6): received, newer, lastDigest and the F outcomes are counted here; sent, queue and
 -- limited, refused come from M.Sync.Stats of each domain.
 function CraftSync.Stats()
   local sent, attempts, queue, limited, refused = 0, 0, 0, 0, 0
-  for id, M in pairs({ crafting = dirM or false, crafting_b = boardM or false }) do
+  for id, M in pairs({ crafting = dirM or false, crafting_c = cdM or false, crafting_b = boardM or false }) do
     local st = M and M.Sync.Stats(id)
     if type(st) == "table" then
       sent = sent + (tonumber(st.sent) or 0)
@@ -403,7 +506,7 @@ function CraftSync.Stats()
     lastDigest = last and date("%H:%M", floor(last)) or nil,
     sent = sent, attempts = attempts, received = S.stats.received, queue = queue,
     limited = limited, refused = refused, newer = S.stats.newer, now = CraftCompat.Now(),
-    dirWhy = S.dirWhy, boardWhy = S.boardWhy,
+    dirWhy = S.dirWhy, cdWhy = S.cdWhy, boardWhy = S.boardWhy,
   }
 end
 
@@ -418,6 +521,7 @@ local function statusLine()
   if S.capped then line = line .. ", own recipes capped at " .. CraftWire.MAX_ROWS .. " per profession" end
   -- a refused domain (f4519): its why, e.g. "prefix off (GSyncB)"
   if stats.dirWhy then line = line .. ", directory not synced: " .. stats.dirWhy end
+  if stats.cdWhy then line = line .. ", cooldowns not synced: " .. stats.cdWhy end
   if stats.boardWhy then line = line .. ", work board not synced: " .. stats.boardWhy end
   local s = S.stats
   if s.fApplied + s.fProvisional + s.fHint > 0 then
@@ -429,10 +533,11 @@ end
 
 -- ---------- events ----------
 
--- Addon messages and the send retries live on the comm core's own frames (D8, d245); this frame keeps late data and
--- guild chat.
+-- Addon messages and the send retries live on the comm core's own frames (D8, d245); this frame keeps late data,
+-- guild chat and the cooldown triggers.
 local frameSpec = { events = { "GET_ITEM_INFO_RECEIVED", "ITEM_DATA_LOAD_RESULT", "SPELL_DATA_LOAD_RESULT",
-                               "CHAT_MSG_GUILD" } }
+                               "CHAT_MSG_GUILD", "SPELL_UPDATE_COOLDOWN", "BAG_UPDATE_COOLDOWN",
+                               "PLAYER_REGEN_ENABLED" } }
 
 local function onFrameEvent(_, event, ...)
   if event == "GET_ITEM_INFO_RECEIVED" or event == "ITEM_DATA_LOAD_RESULT" then
@@ -441,6 +546,14 @@ local function onFrameEvent(_, event, ...)
     learnSpell((...))
   elseif event == "CHAT_MSG_GUILD" then
     if BOARD.guildChat then BOARD.guildChat((...)) end
+  elseif event == "SPELL_UPDATE_COOLDOWN" then
+    -- a plain spellID that is not listed is skipped (f6612); a secret or missing one may be a listed cast
+    local spellID = CraftCompat.Plain((...))
+    if spellID == nil or cdSpells[spellID] then scheduleRead() end
+  elseif event == "BAG_UPDATE_COOLDOWN" then
+    scheduleRead()
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    if S.cdHeld then scheduleRead() end -- only a read combat held back, never one after every fight
   end
 end
 
@@ -643,6 +756,220 @@ local function attachDirectory(M)
   if ok then dirM = M else S.dirWhy = tostring(why) end
 end
 
+-- ---------- the cooldown domain "crafting_c" (q1170, f6610) ----------
+-- A record domain on GSync (not bulk; a record is about 120 bytes): H round, D digest, R ask, K copy, so the logged-in
+-- character also answers for its alts. A record is one character's cooldown states: rev = stamp, hash =
+-- CraftStore.CooldownsHash of the cds it carries. Guildmates' copies live in GuildSyncCraftDir.cooldowns; own records
+-- are read from GuildSyncCraftDB.cooldowns, and only for own characters on the roster (CraftHost.MyKeys, f6630): an alt
+-- off the roster stays saved and shown, but is never listed, minted or sent. Sharing off, an own record carries no cds
+-- (q1173). Logical payloads: K is CraftWire's TYPES.K; H, D and R as the directory's.
+
+-- The record the store speaks about for key: an own one only on the roster, else a guildmate's copy. An own key never
+-- takes a Dir copy (s1): wire content never speaks as own.
+local function cdRecord(key)
+  if type(key) ~= "string" then return nil end
+  local own = db().cooldowns[key]
+  if CraftHost.MyKeys()[key] then return own end
+  if own then return nil end
+  return CraftCompat.Dir().cooldowns[key]
+end
+
+-- key -> record for every key the store speaks about; own ones as { stamp, seen = t } (own keys report seen = t, as in
+-- the directory, f4505).
+local function cdRecords(t)
+  local own, mine, out = db().cooldowns, CraftHost.MyKeys(), {}
+  for key, r in pairs(CraftCompat.Dir().cooldowns) do if not own[key] and not mine[key] then out[key] = r end end
+  for key in pairs(mine) do
+    local o = own[key]
+    if o then out[key] = { stamp = o.stamp, seen = floor(tonumber(t) or tonumber(o.seen) or 0) } end
+  end
+  return out
+end
+
+-- The cds a record carries on the wire: none for an own one while sharing is off (q1173).
+local function cdCds(key, r)
+  if CraftHost.MyKeys()[key] and not sharing() then return {} end
+  return r.cds or {}
+end
+
+-- f6632: a copy of the directory's encodeEntries.
+local function cdEntries(entries, full)
+  local out = {}
+  for i, e in ipairs(entries or {}) do
+    local f = CraftWire.Escape(tostring(e.key)) .. "," .. floor(tonumber(e.rev) or 0)
+    if full then f = f .. "," .. tostring(e.hash or "") .. "," .. floor(tonumber(e.seen) or 0) end
+    out[i] = f
+  end
+  return table.concat(out, ";")
+end
+
+local cdStore = { recordRule = "copy", askBatch = 250,
+                  kinds = { round = "H", digest = "D", ask = "R", record = "K" } }
+
+function cdStore.get(key)
+  local r = cdRecord(key)
+  if not r then return nil end
+  return { rev = r.stamp, hash = CraftStore.CooldownsHash(cdCds(key, r)), seen = r.seen }
+end
+
+function cdStore.keys()
+  local list = {}
+  for key in pairs(cdRecords()) do list[#list + 1] = key end
+  table.sort(list)
+  return list
+end
+
+function cdStore.content(key)
+  local r = cdRecord(key)
+  return r and CraftStore.CooldownsString(cdCds(key, r)) or nil
+end
+
+-- The hub's mint: the own record takes the rev.
+function cdStore.stamp(key, rev)
+  local o = db().cooldowns[key]
+  if o then o.stamp = rev end
+  cdChanged()
+end
+
+function cdStore.build(key, t)
+  local r = cdRecord(key)
+  if not r or type(r.name) ~= "string" then return nil end
+  local cds, groups, list = cdCds(key, r), {}, {}
+  for group in pairs(cds) do groups[#groups + 1] = group end
+  table.sort(groups)
+  for i, group in ipairs(groups) do list[i] = { group = group, readyAt = cds[group] } end
+  local seen = (CraftHost.MyKeys()[key] and tonumber(t)) and floor(t) or r.seen or r.stamp
+  return { t = "K", name = r.name, class = r.class or "", stamp = r.stamp, seen = seen, cds = list }
+end
+
+-- f6627: a stale seen is refused first, as in dirStore.merge.
+function cdStore.merge(msg, t)
+  if stale(msg.seen, t) then return false end
+  local result = CraftStore.CooldownMerge(CraftCompat.Dir().cooldowns, msg, t, (CraftHost.Roster()), CraftHost.MyKeys())
+  if result ~= "new" and result ~= "newer" then return false end
+  S.stats.newer = S.stats.newer + 1
+  cdChanged()
+  return true
+end
+
+function cdStore.round(t)
+  local _, hash = CraftStore.Digest(cdRecords(t), t)
+  return { t = "H", hash = hash }
+end
+
+function cdStore.digest(t)
+  local entries = {}
+  for i, e in ipairs((CraftStore.Digest(cdRecords(t), t))) do
+    entries[i] = { key = e.key, rev = floor(tonumber(e.stamp) or 0), hash = cdStore.get(e.key).hash,
+                   seen = floor(tonumber(e.seen) or 0) }
+  end
+  return { t = "D", entries = entries }
+end
+
+-- As dirStore.compare: never ask for an own key or one off the roster.
+function cdStore.compare(msg, t)
+  local part = { t = msg.t, entries = {} }
+  for i, e in ipairs(msg.entries or {}) do
+    part.entries[i] = { key = e.key, stamp = tonumber(e.rev) or 0, seen = tonumber(e.seen) or 0 }
+  end
+  local send, ask = CraftStore.Compare(cdRecords(t), part, t, retention())
+  local roster, mine, out = (CraftHost.Roster()), CraftHost.MyKeys(), {}
+  for _, a in ipairs(ask) do
+    if roster[a.key] and not mine[a.key] then out[#out + 1] = { key = a.key, rev = a.stamp } end
+  end
+  return send, out
+end
+
+function cdStore.stillWanted(w, t) return CraftStore.StillWanted(cdRecords(t), w, t) end
+
+function cdStore.isOwn(key) return key ~= nil and CraftHost.MyKeys()[key] ~= nil end
+
+-- A copy that beats mine: the hub re-mints above it from content(key), which is already my own states.
+function cdStore.heardOwn() end
+
+function cdStore.pack(msg)
+  if type(msg) ~= "table" then return nil end
+  if msg.t == "K" then return (CraftWire.Pack(msg, CraftCompat.Now() or msg.stamp)) end
+  if msg.t == "H" then return "H:" .. tostring(msg.hash or "") end
+  if msg.t == "D" then return "D:" .. cdEntries(msg.entries, true) end
+  if msg.t == "R" then return "R:" .. cdEntries(msg.entries, false) end
+  return nil
+end
+
+function cdStore.subject(msg)
+  if msg.t == "K" then return CraftStore.Key(msg.name), msg.stamp end
+  return "-", 0
+end
+
+-- f6632: a copy of dirUnpack's H, D and R readers; K through CraftWire.
+local function cdUnpack(logical, _, t)
+  if type(logical) ~= "string" then return nil end
+  local kind, rest = logical:match("^(%u):(.*)$")
+  if kind == "K" then
+    local msg = CraftWire.Unpack(logical, t or CraftCompat.Now() or 0)
+    local key = msg and CraftStore.Key(msg.name)
+    if not key then return nil end
+    msg.key, msg.rev, msg.hash = key, msg.stamp, CraftStore.CooldownsHash(CraftStore.CooldownsMap(msg.cds))
+    return msg
+  end
+  if kind == "H" then
+    if not rest:find("^%x+$") or #rest % 8 ~= 0 or #rest > 8 * MAX_PARTS then return nil end
+    return { t = "H", hash = rest }
+  end
+  if kind == "D" or kind == "R" then
+    local entries = {}
+    for e in (rest .. ";"):gmatch("([^;]*);") do
+      if e ~= "" then
+        local k, r, h, s = e:match("^([^,]*),(%d+),?([^,]*),?(%d*)$")
+        k = k and CraftWire.Unescape(k)
+        if not k or k == "" then return nil end
+        if #r > CraftWire.INT_DIGITS or #s > CraftWire.INT_DIGITS then return nil end
+        if kind == "D" and not h:find("^%x%x%x%x%x%x%x%x$") then return nil end
+        if not future(r, t) and not (s ~= "" and future(s, t)) then
+          entries[#entries + 1] = { key = k, rev = tonumber(r), hash = kind == "D" and h or nil,
+                                    seen = tonumber(s) or 0 }
+        end
+      end
+    end
+    return { t = kind, entries = entries }
+  end
+  return nil
+end
+
+-- As dirHandle: K first runs the own-key precheck (an equal rev with another, lower hash is re-minted here).
+local CD_ROLE = { H = "round", D = "digest", R = "ask", K = "record" }
+local function cdHandle(M)
+  local handle = {}
+  for kind, role in pairs(CD_ROLE) do
+    handle[kind] = function(msg, from, t)
+      S.stats.received = S.stats.received + 1
+      if kind == "K" and cdStore.isOwn(msg.key) then
+        local mine = cdStore.get(msg.key)
+        if mine and msg.rev == mine.rev and msg.hash ~= mine.hash
+           and not newerRev(msg.rev, msg.hash, mine.rev, mine.hash) then
+          M.Sync.Changed("crafting_c", msg.key, t)
+        end
+      end
+      M.Sync.Handle("crafting_c", role, msg, from, t)
+    end
+  end
+  return handle
+end
+
+local CD_RATES, CD_WINDOW = { R = 6, K = 60 }, { round = "H", digest = "D", parts = true }
+
+local function attachCooldowns(M)
+  local ok, why = M.Comm.Register({
+    id = "crafting_c", prefix = "GSync", audience = "guild",
+    kinds = { H = { rule = "round" }, D = { rule = "digest" }, R = { rule = "ask" }, K = { rule = "copy" } },
+    unpack = cdUnpack, handle = cdHandle(M),
+    limit = CraftStore.NewLimit(CD_RATES, CD_WINDOW),
+  })
+  -- a refusal is not an error: the cooldowns stay local, and the status line says why
+  if ok then ok, why = M.Sync.Attach("crafting_c", cdStore) end
+  if ok then cdM = M else S.cdWhy = tostring(why) end
+end
+
 local attached = false -- CraftSync.Attach ran and made its frame
 
 -- Called by CraftHost.Register with the module's handle M: makes the late-data and guild-chat frame (D9). Its events
@@ -650,6 +977,7 @@ local attached = false -- CraftSync.Attach ran and made its frame
 function CraftSync.Attach(M)
   if attached or type(M) ~= "table" then return attached end
   if not dirM then attachDirectory(M) end
+  if not cdM then attachCooldowns(M) end
   if not boardM then attachBoard(M) end
   -- own characters' recipes (M.Professions through CraftHost.MyChars) reach the directory before sync runs (d538);
   -- and a changed one is published at once (the hub fires the event after recording); watchOwn is the backstop
@@ -658,6 +986,7 @@ function CraftSync.Attach(M)
     if not t then return end
     refreshOwn(floor(t), false)
     changed()
+    scheduleRead()
   end)
   local frame = CraftCompat.CreateFrame("Frame")
   if frame then

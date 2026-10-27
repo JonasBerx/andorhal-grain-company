@@ -3,6 +3,7 @@
 -- Pure: no guard, no client call, no global outside the Annals allow-list (check-rules/GuildSyncPeople.json).
 -- view = { key, name, classToken, className, race, level, rank, rankIndex, online, colour = { r, g, b }, rec }
 -- clock = { weekday, hour, minute }, read once by the redraw's owner and passed in (Card never reads the calendar).
+-- standing = { title, points } (Annals' facts, raw) or nil, passed in like clock (Card never asks the hub).
 
 local _, ns = ...
 local C = {}
@@ -12,6 +13,7 @@ C.TOOLTIP_LETTERS = 60 -- the note in the tooltip, then "..."
 C.TOOLTIP_LIKES = 4    -- labels in the tooltip's "Likes:" line, then " +<n>"
 C.TOOLTIP_GROUPS = 2   -- hour groups in the tooltip, then " +<n> more"
 C.TOOLTIP_ALTS = 3     -- alt names in the tooltip's "Alts:" line, then " +<n>" (d832)
+C.STANDING_AT = "top"  -- the Annals title line: first in the section and the tooltip (Look A, d1130)
 
 local function labels(tags)
   local out = {}
@@ -75,13 +77,25 @@ local function linkLine(person)
   return "Alts: " .. table.concat(names, ", ") .. (more > 0 and (" +" .. more) or "")
 end
 
--- The tooltip lines: the main/alt line, note (60 letters, cut before Escape, f4), "Usually online: ...", "Likes: ...".
--- person = GuildSync.Comm.Person's shape or nil. No record and no link line, no lines.
-function C.Tooltip(view, clock, withHeader, person)
+-- "<title> \194\183 <n> points" (title escaped, points floored); nil below 1 point or with no title (d1134).
+function C.StandingText(standing)
+  if type(standing) ~= "table" then return nil end
+  local title, points = standing.title, standing.points
+  if type(title) ~= "string" or title == "" or type(points) ~= "number" then return nil end
+  points = math.floor(points)
+  if points < 1 then return nil end
+  return ns.Escape(title) .. " \194\183 " .. points .. (points == 1 and " point" or " points")
+end
+
+-- The tooltip lines: the title line, the main/alt line, note (60 letters, cut before Escape, f4),
+-- "Usually online: ...", "Likes: ...".
+-- person = GuildSync.Comm.Person's shape or nil. No record, no link line and no title line, no lines (d1133).
+function C.Tooltip(view, clock, withHeader, person, standing)
   local lines = {}
-  local rec, link = view.rec, linkLine(person)
-  if not rec and not link then return lines end
+  local rec, link, title = view.rec, linkLine(person), C.StandingText(standing)
+  if not rec and not link and not title then return lines end
   if withHeader then lines[#lines + 1] = headerLine(view) end
+  if title then lines[#lines + 1] = title end
   if link then lines[#lines + 1] = link end
   if not rec then return lines end
   if type(rec.note) == "string" and rec.note ~= "" then
@@ -206,7 +220,8 @@ end
 function C.NextTop(y, h) return y + (h > C.LINE and h + WRAP_GAP or BLOCK_GAP) end
 
 -- The section's lines: { text, font, x, y, lines, colour, wrap } top to bottom, y from the frame's top, then its height.
--- view = { key, rec } (rec the profile shown); person = GuildSync.Comm.Person's shape or nil. Names come from person.
+-- view = { key, rec, standing } (rec the profile shown; standing as C.StandingText takes it, drawn first, d1130);
+-- person = GuildSync.Comm.Person's shape or nil. Names come from person.
 function C.Section(view, person, clock, width)
   local items, y = {}, 0
   -- wrap (the note and the values): the string's max lines; the section then lays it out from its measured height
@@ -214,6 +229,12 @@ function C.Section(view, person, clock, width)
     items[#items + 1] = { text = text, font = font, x = 0, y = y, lines = lines or 1, colour = colour, wrap = wrap }
   end
   local function after(lines) y = C.NextTop(y, lines * C.LINE) end
+
+  local title = C.StandingText(view and view.standing)
+  if title and C.STANDING_AT == "top" then
+    add(title, LABEL)
+    after(1)
+  end
 
   if type(person) == "table" then
     local main

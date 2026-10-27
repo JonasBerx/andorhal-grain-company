@@ -1,5 +1,5 @@
 -- GuildSyncNoticeBoard: the Notices and Polls tabs (brief AC6, AC7, AC10, AC11, AC13, AC14, AC17, AC31-AC34 as sliced
--- by ui-slice.md: local data only, nothing sent). Page.lua hosts a tab in a frame: PageBoard.Build(root, tab) makes the
+-- by ui-slice.md; every read and write goes through ns.Store, which syncs). Page.lua hosts a tab in a frame: PageBoard.Build(root, tab) makes the
 -- fixed parts once, PageBoard.Refresh(root, tab, width) redraws them from ns.Store. Officers get the post form, Edit,
 -- Remove and Close; everyone gets the list, its ages and the vote buttons. Refresh never writes an EditBox, so an edit
 -- in progress survives every redraw. The one page subscription is the roster read below (AC34: a promoted member gets
@@ -28,6 +28,12 @@ local TRACK_INSET = 6
 
 local NOTICE_LINE = "Every guildmate with the addon receives this. Keep officer matters out."
 local POLL_LINE = "Every guildmate with the addon receives this poll. Keep officer matters out."
+local OFFICERS_LINE = "Only officers with the addon receive this."
+
+-- d1015: the notice form's yellow line follows the Officers only tick (an edit keeps its domain)
+local function noticeLine(st, f)
+  f.line:SetText((f.officers and not st.editing) and OFFICERS_LINE or NOTICE_LINE)
+end
 local VOTES_LINE = "Votes are not secret: every guildmate's addon receives them."
 
 local states = setmetatable({}, { __mode = "k" }) -- root frame -> this tab's UI state
@@ -63,7 +69,8 @@ local function rosterState()
   local Comm = GuildSync.Comm
   local ready = rosterKnown and not rosterPartial
   local me = Comm.MyKey()
-  return ready, ready and me ~= nil and Comm.IsOfficer(me), me
+  -- R-demo: demo shows the officer's view (AC19); every write stays inert in Store
+  return ready, ready and (ns.InDemo() or (me ~= nil and Comm.IsOfficer(me))), me
 end
 
 -- ---------- widgets ----------
@@ -192,7 +199,7 @@ local function buildNoticeForm(st, form)
   f.bodyLabel:SetText("Text")
   f.body = ns.Look.Input(form, WIDE_W - 2 * PAD, C.NOTICE_BODY)
   f.days = C.NOTICE_DAYS
-  f.pinned = false
+  f.pinned, f.officers = false, false
   local days = {}
   for d = 1, C.NOTICE_DAYS_MAX do days[d] = d end
   f.dd = hoursDropdown(f, form, "days", days, 24)
@@ -211,14 +218,31 @@ local function buildNoticeForm(st, form)
       redraw(st)
     end)
   end
+  -- AC18: fixed at post, so hidden while editing; Store reads fields.officers
+  f.offBox = M.Kit.Checkbox(form, "Officers only")
+  if f.offBox then
+    f.offBox:SetScript("OnClick", function(self)
+      M.Safe(function()
+        f.officers = self:GetChecked() and true or false
+        noticeLine(st, f)
+      end)
+    end)
+  else
+    f.off = button(form, "Officers only: no", 140, function()
+      f.officers = not f.officers
+      redraw(st)
+    end)
+  end
   local function reset()
     st.editing = nil
     f.title:SetText("")
     f.body:SetText("")
-    f.days, f.pinned = C.NOTICE_DAYS, false
+    f.days, f.pinned, f.officers = C.NOTICE_DAYS, false, false
+    noticeLine(st, f)
   end
   f.commit = button(form, "Post notice", 120, function()
-    local fields = { title = value(f.title), body = value(f.body), days = f.days, pinned = f.pinned }
+    local fields = { title = value(f.title), body = value(f.body), days = f.days, pinned = f.pinned,
+      officers = f.officers }
     local ok, why
     if st.editing then ok, why = ns.Store.Edit(st.editing, fields) else ok, why = ns.Store.Post(fields) end
     if ok then reset() end
@@ -282,6 +306,7 @@ local function layoutForm(st, w)
   local fieldW = math.min(FIELD_W, inner - 16 - SIDE_W)
   local sideX = PAD + fieldW + 16
   local notices = st.tab == "notices"
+  if notices then noticeLine(st, f) end
   local y = stack(form, notices and { f.line } or { f.line, f.votesLine }, PAD, 9, inner)
   place(notices and f.titleLabel or f.questionLabel, form, PAD, y, fieldW)
   place(f.sideLabel, form, sideX, y, SIDE_W)
@@ -294,8 +319,14 @@ local function layoutForm(st, w)
       f.pinBox:SetChecked(f.pinned)
     end
     y = y + CB_W + GAP
-    place(f.bodyLabel, form, PAD, y, inner)
-    y = y + LINE + 2
+    place(f.bodyLabel, form, PAD, y, fieldW)
+    local offShown = f.offBox ~= nil and st.editing == nil
+    if f.offBox then
+      f.offBox:SetShown(offShown)
+      place(f.offBox, form, sideX, y - 6) -- under Runs for: the label does not fit under Pinned
+      f.offBox:SetChecked(f.officers)
+    end
+    y = y + (offShown and CB_W - 6 or LINE + 2)
     place(f.body, form, PAD, y, inner)
     y = y + 20 + 2 * GAP
     f.commit:SetText(st.editing and "Save" or "Post notice")
@@ -303,6 +334,11 @@ local function layoutForm(st, w)
     if f.pin then
       f.pin:SetText(f.pinned and "Pinned: yes" or "Pinned: no")
       place(f.pin, form, PAD, y)
+    end
+    if f.off then
+      f.off:SetShown(st.editing == nil)
+      f.off:SetText(f.officers and "Officers only: yes" or "Officers only: no")
+      place(f.off, form, PAD + (f.pin and 124 or 0), y)
     end
     rightRow(form, y, { f.commit, f.cancel })
     return y + BUTTON_H + 10
@@ -373,12 +409,15 @@ local function newSlot(st)
   local s = { frame = p, rows = {} }
   s.title = text(p, "GameFontNormal")
   s.pill = ns.Look.Pill(p)
+  s.tag = ns.Look.Pill(p) -- "Officers only", left of the pinned pill (AC18)
   s.meta = text(p, "GameFontDisableSmall")
   s.meta:SetJustifyH("RIGHT")
   s.body = text(p)
   s.state = text(p)
   s.voted = text(p)
   s.tally = text(p)
+  s.waiting = text(p, "GameFontDisable")
+  s.waiting:SetText("Looking for your earlier votes; voting opens within two minutes.")
   for i = 1, C.POLL_OPTS_MAX do s.rows[i] = newRow(st, s, i) end
   s.divider = M.Kit.Divider(p)
   s.edit = button(p, "Edit", 70, function()
@@ -407,8 +446,9 @@ local function newSlot(st)
 end
 
 local function hideAll(s)
-  for _, f in ipairs({ s.body, s.state, s.voted, s.tally, s.edit, s.remove, s.close }) do f:Hide() end
+  for _, f in ipairs({ s.body, s.state, s.voted, s.tally, s.waiting, s.edit, s.remove, s.close }) do f:Hide() end
   ns.Look.SetPill(s.pill, nil)
+  ns.Look.SetPill(s.tag, nil)
   if s.divider then s.divider:Hide() end
   for _, r in ipairs(s.rows) do r.frame:Hide() end
 end
@@ -423,10 +463,19 @@ local function layoutSlot(s, w)
   s.meta:SetWidth(META_W)
   s.pill:ClearAllPoints()
   s.pill:SetPoint("TOPRIGHT", p, "TOPRIGHT", -(PAD + META_W + 8), -6)
-  place(s.title, p, PAD, 9, inner - META_W - PILL_W - 16)
+  local tagged = type(s.tag) == "table" and s.tag:IsShown()
+  if tagged then
+    s.tag:ClearAllPoints()
+    if s.pill:IsShown() then
+      s.tag:SetPoint("TOPRIGHT", s.pill, "TOPLEFT", -4, 0)
+    else
+      s.tag:SetPoint("TOPRIGHT", p, "TOPRIGHT", -(PAD + META_W + 8), -6)
+    end
+  end
+  place(s.title, p, PAD, 9, inner - META_W - PILL_W - 16 - (tagged and PILL_W + 4 or 0))
   -- the meta wraps in its META_W box (a long name stays whole), so the lines start below the taller of the two
   local top = 9 + math.max(height(s.title), height(s.meta)) + GAP
-  local y = stack(p, { s.body, s.state, s.voted, s.tally }, PAD, top, inner)
+  local y = stack(p, { s.body, s.state, s.voted, s.tally, s.waiting }, PAD, top, inner)
   local rows = false
   for _, r in ipairs(s.rows) do
     if r.frame:IsShown() then
@@ -451,6 +500,7 @@ end
 local function fillNotice(st, s, rec, officer)
   s.title:SetText(esc(rec.title))
   ns.Look.SetPill(s.pill, rec.pinned and "pinned" or nil, "gold")
+  ns.Look.SetPill(s.tag, rec.officers and "Officers only" or nil, "red")
   s.meta:SetText("posted by " .. nameOf(rec.author) .. ", " .. ago(Rules.KeyTime(rec.key)))
   if rec.removed then
     s.state:SetText("Removed by an officer.")
@@ -520,8 +570,12 @@ local function fillPoll(st, s, rec, officer, canVote, inner)
   total = total or 0
   s.tally:SetText(total .. (total == 1 and " vote" or " votes") .. ", as heard by this client")
   s.tally:Show()
+  -- AC13: until my earlier votes are heard, one waiting line and no Vote targets
+  local waiting = (open and ns.Store.VoteWaiting and ns.Store.VoteWaiting()) and true or false
+  s.waiting:SetShown(waiting)
   -- in demo the targets show and a click says the inert line (AC43); Store.CanVote is false there
-  s.voteNow = (open and canVote and not mine and (ns.InDemo() or ns.Store.CanVote(rec.key))) and true or false
+  s.voteNow = (open and not waiting and canVote and not mine and (ns.InDemo() or ns.Store.CanVote(rec.key))) and true
+    or false
   for i, o in ipairs(rec.options) do
     if i > C.POLL_OPTS_MAX then break end
     fillRow(s, s.rows[i], o, (counts and counts[i]) or 0, total, voters and voters[i], inner)
@@ -530,10 +584,11 @@ local function fillPoll(st, s, rec, officer, canVote, inner)
   s.remove:SetShown(officer)
 end
 
+-- RC2 readers: the sorts skip a record without a number rev
 local function sortedNotices()
   local t, out = now(), {}
   for _, rec in ipairs(ns.Store.Notices()) do
-    if rec.removed or t < (rec.expiresAt or 0) then out[#out + 1] = rec end
+    if type(rec.rev) == "number" and (rec.removed or t < (rec.expiresAt or 0)) then out[#out + 1] = rec end
   end
   table.sort(out, function(a, b)
     if (a.pinned and true or false) ~= (b.pinned and true or false) then return a.pinned and true or false end
@@ -544,7 +599,9 @@ end
 
 local function sortedPolls()
   local t, out = now(), {}
-  for _, rec in ipairs(ns.Store.Polls()) do out[#out + 1] = rec end
+  for _, rec in ipairs(ns.Store.Polls()) do
+    if type(rec.rev) == "number" then out[#out + 1] = rec end -- RC2: skip a record with no rev
+  end
   local function isOpen(rec) return not rec.removed and t < rec.closeAt end
   table.sort(out, function(a, b)
     if isOpen(a) ~= isOpen(b) then return isOpen(a) end
@@ -635,3 +692,16 @@ M.On("rosterRead", function(partial)
   rosterKnown, rosterPartial = true, partial and true or false
   M.RefreshPage()
 end)
+
+-- ---------- the search provider's reads (Search.lua, run r-20261020-s6) ----------
+
+-- The tabs' own lists (f6553): RC2 and expiry as drawn; removed records are still in them.
+function PageBoard.Notices() return sortedNotices() end
+function PageBoard.Polls() return sortedPolls() end
+
+-- The poll card's "closes in <span>" at t, or nil once the poll is closed.
+function PageBoard.ClosesIn(rec, t)
+  if type(rec) ~= "table" or type(rec.closeAt) ~= "number" or type(t) ~= "number" then return nil end
+  if t >= rec.closeAt then return nil end
+  return "closes in " .. span(math.max(1, math.ceil((rec.closeAt - t) / HOUR)))
+end

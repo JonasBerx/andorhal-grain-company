@@ -1,5 +1,5 @@
 -- Annals AnnalsModule: Annals as a GuildSync module (window plan D2, D4-D8, D14, D17). Registers with the hub
--- (needs 4), builds the Annals page in the GuildSync window with one Kit tab per tab file, owns /annals, the selftest,
+-- (needs 8), builds the Annals page in the GuildSync window with one Kit tab per tab file, owns /annals, the selftest,
 -- the status line, the demo hand-off and the recorded page width, and exports the seam ns.AnnalsModule: the only
 -- thing the tab files (AnnalsJourney, AnnalsRace, AnnalsLevelLog, AnnalsAchievements, AnnalsHealth) reach.
 -- ns.AnnalsModule is always a table; M and Kit are set only when GuildSync registered the module (D2).
@@ -341,13 +341,68 @@ local function status()
   return (string.gsub(string.match(tostring(text or ""), "^[^\n]*"), "||", "|"))
 end
 
+-- ---------- facts for other modules (API 8: title and points by name key) ----------
+
+local Feats = ns.AnnalsFeats
+-- The G of the last read or own ding (A.FactsDirty) and its name key -> guid index, false for a name two records share.
+-- A fact never reads the guild itself (Core.G() can make a saved table), so it answers from this G only (d1137).
+local factsG, index, dirty = nil, nil, true
+local demoKeys = setmetatable({}, { __mode = "k" }) -- demo state -> name key -> guid over the hub's demo members
+
+-- name key -> guid over list[guid][field], false on a second guid (as AnnalsFeats guidsByName).
+local function keyMap(list, field)
+  local out = {}
+  for guid, v in pairs(list or {}) do
+    local k = Rules.NameKey(v[field])
+    if k then out[k] = out[k] == nil and guid or false end
+  end
+  return out
+end
+
+-- Called by AnnalsCore after a read's check and an own ding's check, with the G it checked.
+function A.FactsDirty(G)
+  factsG, dirty = G, true
+  if A.M then A.M.FactsChanged() end
+end
+
+-- The current record a name key names, or nil (no key, unknown, shared, or renamed or removed since the index).
+-- In demo the key is a hub demo member's name and the record Annals' demo record with the same guid (d1135).
+local function recOf(key)
+  if key == nil or not A.M then return nil end
+  local on, state = A.M.Demo()
+  if on then
+    local guid = state and demoKeys[state] and demoKeys[state][key]
+    return guid and state.chars and state.chars[guid] or nil
+  end
+  if not factsG then return nil end
+  if dirty then index, dirty = keyMap(factsG.chars, "n"), false end
+  local rec = index[key] and factsG.chars[index[key]]
+  if not rec or Rules.NameKey(rec.n) ~= key then return nil end
+  return rec
+end
+
+local function points(key)
+  local rec = recOf(key)
+  if rec then return Feats.Points(rec, true) end
+  return nil
+end
+
+local facts = {
+  points = points,
+  title = function(key)
+    local p = points(key)
+    if p then return Rules.Title(p).name end
+    return nil
+  end,
+}
+
 -- ---------- registration (D2) ----------
 
 local M = Host.RegisterModule({
   id = "annals",
   title = "Annals",
-  version = "0.3",
-  needs = 4,
+  version = "0.4",
+  needs = 8,
   page = {
     title = "Annals",
     icon = "Interface\\Icons\\INV_Misc_Book_09",
@@ -357,8 +412,14 @@ local M = Host.RegisterModule({
   slash = function(rest) slash(rest) end,
   selftest = function() return selftest() end,
   status = function() return status() end,
-  -- D7: the made-up guild, session only; Rules.DemoGuild is looked up when the hub calls this.
-  demo = function(_, now) return Rules.DemoGuild(now or Host.Now()) end,
+  -- D7: the made-up guild, session only; Rules.DemoGuild is looked up when the hub calls this. The hub's demo members
+  -- (by guid) give the facts their name keys.
+  demo = function(guild, now)
+    local G = Rules.DemoGuild(now or Host.Now())
+    demoKeys[G] = keyMap(type(guild) == "table" and guild.members, "name")
+    return G
+  end,
+  facts = facts,
 })
 if not M then return end
 -- A.Kit is Annals' own table over the hub's read-only M.Kit, so a test can wrap one piece on it. A.M is the handle

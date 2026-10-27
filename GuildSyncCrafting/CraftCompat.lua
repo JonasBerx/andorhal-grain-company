@@ -4,8 +4,9 @@
 --
 -- Every client function is reached through call() with a dotted name listed in CraftCompat.APIS, or through resolve()
 -- for the names in CraftCompat.VALUES. The probe records the presence of everything in APIS, WATCH and VALUES.
--- It also owns the two saved variables: GuildSyncCraftDB (account-wide: settings, own stamps, favourites, the work
--- board, alert marks, the probe) and GuildSyncCraftDir (per character: guildmates' recipes, this character only).
+-- It also owns the two saved variables: GuildSyncCraftDB (account-wide: settings, own stamps, own cooldowns,
+-- favourites, the work board, alert marks, the probe) and GuildSyncCraftDir (per character: guildmates' recipes and
+-- cooldowns).
 -- Checked against build 1.60.1.69893: the generated API documentation and Blizzard's own interface code.
 
 local _, ns = ...
@@ -23,11 +24,15 @@ CraftCompat.APIS = {
   "C_Item.GetItemInfo", "C_Item.IsItemDataCachedByID", "C_Item.GetItemIconByID", "C_Item.GetItemQualityColor", "C_Item.RequestLoadItemDataByID",
   "C_Spell.GetSpellName", "C_TradeSkillUI.GetRecipeInfo", "C_TradeSkillUI.GetRecipeSchematic",
   "C_TradeSkillUI.IsGuildTradeSkillsEnabled",
-  "PlaySound", "CreateFrame", "hooksecurefunc", "C_ClassColor.GetClassColor",
+  "PlaySound", "CreateFrame", "hooksecurefunc", "C_ClassColor.GetClassColor", "GetTime",
   -- FrameXML helpers (not in the API documentation; in Blizzard's chat code)
   "ChatFrameUtil.SendTell", "ChatFrameUtil.InsertLink",
   -- may be missing without failing the selftest (d536); the probe asks for it first
-  optional = { "C_CraftingOrders.ShouldShowCraftingOrderTab" },
+  -- the cooldown reads (f6614): without them the Cooldowns board shows unknown; GetRecipeCooldown is not in the dump
+  optional = { "C_CraftingOrders.ShouldShowCraftingOrderTab",
+               "C_Spell.GetSpellCooldown", "C_Item.GetItemCooldown", "C_Item.GetItemCount",
+               "C_Secrets.ShouldSpellCooldownBeSecret", "C_Secrets.ShouldCooldownsBeSecret",
+               "C_TradeSkillUI.GetRecipeCooldown" },
 }
 
 -- Names CraftCompat does not call, recorded by the probe only.
@@ -111,7 +116,7 @@ function CraftCompat.DB()
   for k, v in pairs(SETTINGS) do
     if db.settings[k] == nil then db.settings[k] = v end
   end
-  for _, k in ipairs({ "own", "favourites", "board", "alerted", "posted" }) do
+  for _, k in ipairs({ "own", "favourites", "board", "alerted", "posted", "cooldowns" }) do
     if type(db[k]) ~= "table" then db[k] = {} end
   end
   if type(db.glow) ~= "boolean" then db.glow = false end
@@ -131,12 +136,15 @@ function CraftCompat.Dir()
     dir = { v = DIR_SHAPE }
     _G.GuildSyncCraftDir = dir
   end
-  if type(dir.crafters) ~= "table" then dir.crafters = {} end
+  for _, k in ipairs({ "crafters", "cooldowns" }) do
+    if type(dir[k]) ~= "table" then dir[k] = {} end
+  end
   return dir
 end
 
 -- Records the guild both saved variables belong to. A different guild than the stored one clears the work board,
--- alert marks, posted ids, favourites and the directory; settings and own stamps stay.
+-- alert marks, posted ids, favourites and the directory (recipes and cooldowns); settings, own stamps and own
+-- cooldowns stay.
 function CraftCompat.UseGuild(name)
   if type(name) ~= "string" or name == "" then return end
   local db, dir = CraftCompat.DB(), CraftCompat.Dir()
@@ -144,7 +152,7 @@ function CraftCompat.UseGuild(name)
     db.board, db.alerted, db.favourites, db.posted = {}, {}, {}, {}
   end
   db.guild = name
-  if dir.guild ~= nil and dir.guild ~= name then dir.crafters = {} end
+  if dir.guild ~= nil and dir.guild ~= name then dir.crafters, dir.cooldowns = {}, {} end
   dir.guild = name
 end
 
@@ -256,6 +264,85 @@ function CraftCompat.ClassColor(token)
   local r, g, b = num(c.r), num(c.g), num(c.b)
   if r and g and b then return r, g, b end
   return nil
+end
+
+-- ---------- cooldowns ----------
+
+-- The client's uptime clock (GetTime), the one cooldown starts are on, or nil.
+function CraftCompat.Clock() return num(call("GetTime")) end
+
+-- How many of an item this character holds, bags and bank (includeBank), or nil.
+function CraftCompat.ItemCount(itemID)
+  if type(itemID) ~= "number" then return nil end
+  return num(call("C_Item.GetItemCount", itemID, true))
+end
+
+local function secretField(v) return plain(call("issecretvalue", v)) == true end
+-- A C_Secrets answer: true or false, or "missing" when the client lacks the call.
+local function secretFlag(path, ...)
+  if not has(path) then return "missing" end
+  return plain(call(path, ...)) == true
+end
+
+-- One CraftStore.COOLDOWNS entry -> a plain read { start, duration, enabled, onGCD } for CraftStore.CooldownReadyAt,
+-- or nil, why ("combat" | "missing" | "secret" | "malformed"). Out of combat only: an InCombatLockdown that is not
+-- exactly false (nil, a secret) means no read. Then the C_Secrets answers, then the answer and each of its fields
+-- through plain before anything compares them (f6613; a SpellCooldownInfo's fields are not plained by call).
+function CraftCompat.CooldownRead(entry)
+  if type(entry) ~= "table" then return nil, "malformed" end
+  if plain(call("InCombatLockdown")) ~= false then return nil, "combat" end
+  local spell = entry.kind == "spell"
+  local path = spell and "C_Spell.GetSpellCooldown" or "C_Item.GetItemCooldown"
+  if not has(path) then return nil, "missing" end
+  if secretFlag("C_Secrets.ShouldCooldownsBeSecret") == true
+     or (spell and secretFlag("C_Secrets.ShouldSpellCooldownBeSecret", entry.spell) == true) then
+    return nil, "secret"
+  end
+  if not spell then
+    -- start, duration, enable: the third is a bool here, a number in C_Container; CooldownReadyAt takes both
+    local start, duration, enable = call(path, entry.item)
+    start, duration = num(start), num(duration)
+    if not start or not duration then return nil, "malformed" end
+    return { start = start, duration = duration, enabled = plain(enable) }
+  end
+  local info = plain(call(path, entry.spell))
+  if type(info) ~= "table" then return nil, info == nil and "secret" or "malformed" end
+  if secretField(info.startTime) or secretField(info.duration) then return nil, "secret" end
+  local start, duration = num(info.startTime), num(info.duration)
+  if not start or not duration then return nil, "malformed" end
+  return { start = start, duration = duration, enabled = plain(info.isEnabled), onGCD = plain(info.isOnGCD) }
+end
+
+-- For `/gsync crafting cd` only (AC13): what the client answers for one entry ({ kind, spell | item }), raw, in combat
+-- too. Each field comes back plain, the word "secret" (the issecretvalue test runs before anything touches the raw
+-- value, f6628) or "missing" for an absent C_Secrets call. Item fields come from call(), which has already plained
+-- them, so a secret and no answer look the same: either reads "nil (none or secret)" (f6640, s3). recipe is
+-- GetRecipeCooldown's first value, hasRecipe true only when the client has it. Reads only.
+local function shown(v)
+  if secretField(v) then return "secret" end
+  return plain(v)
+end
+local function itemField(v)
+  if v == nil then return "nil (none or secret)" end
+  return v
+end
+function CraftCompat.CooldownProbe(entry)
+  local out = { allSecret = secretFlag("C_Secrets.ShouldCooldownsBeSecret") }
+  if entry.kind == "item" then
+    local start, duration, enable = call("C_Item.GetItemCooldown", entry.item)
+    out.start, out.duration, out.enabled = itemField(start), itemField(duration), itemField(enable)
+    return out
+  end
+  out.spellSecret = secretFlag("C_Secrets.ShouldSpellCooldownBeSecret", entry.spell)
+  local info = plain(call("C_Spell.GetSpellCooldown", entry.spell))
+  if type(info) == "table" then
+    out.start, out.duration = shown(info.startTime), shown(info.duration)
+    out.enabled, out.onGCD = shown(info.isEnabled), shown(info.isOnGCD)
+  end
+  if has("C_TradeSkillUI.GetRecipeCooldown") then
+    out.hasRecipe, out.recipe = true, call("C_TradeSkillUI.GetRecipeCooldown", entry.spell)
+  end
+  return out
 end
 
 -- ---------- chat helpers, sound, frames ----------

@@ -380,3 +380,71 @@ function Rules.compact(view, who, args, now, own)
   end
   return { dropped = dropped }
 end
+
+-- A bank character's minimum for an item (AC9): own n1[item] = { m, r = 1 | nil, t = now }; min 0 clears it as a
+-- tombstone. At each write an own tombstone older than minClearDays leaves when no other bank character holds an
+-- entry for the item (d1078 GC b). Past minItems entries it evicts (d1088): own tombstones no other author holds,
+-- then own entries another author beats, oldest t first in each; a tombstone over another's entry is never evicted.
+function Rules.minimum(view, who, args, now, own)
+  local L = view.ctx.limits or ns.LIMITS
+  if not who.bank then return refuse("not-allowed", NOT_ALLOWED) end
+  local item, min = args.item, args.min
+  if not int(item, 1, 2147483647) then return refuse("item", "Pick the item from the list or shift-click it.") end
+  if not int(min, 0, L.minimum) then
+    return refuse("min", "The minimum must be a whole number from 0 to " .. L.minimum .. ".")
+  end
+  local cur = view.mins and view.mins[item]
+  if min == 0 and not (cur and cur.min > 0) then return refuse("no-minimum", "There is no minimum for that item.") end
+  local key = ns.Key("n", 1, who.key)
+  local old = type(own[key]) == "table" and own[key] or {}
+  local counted = not view.ignored[key]
+  -- what the view says about an own entry: another author holds one too; another author's entry wins
+  local function others(id)
+    local m = view.mins and view.mins[id]
+    return (m and m.n or 0) - ((counted and old[id] ~= nil) and 1 or 0) > 0
+  end
+  local function beaten(id)
+    local m = view.mins and view.mins[id]
+    return counted and m ~= nil and m.by ~= who.key
+  end
+  local body, count = {}, 0
+  for id, e in pairs(old) do
+    local tomb = type(e) == "table" and e.m == 0
+    if id ~= item and not (tomb and type(e.t) == "number" and e.t < now - L.minClearDays * DAY and not others(id)) then
+      body[id] = e
+      count = count + 1
+    end
+  end
+  body[item] = { m = min, r = (min > 0 and args.raid) and 1 or nil, t = now }
+  count = count + 1
+  if count > L.minItems then
+    local tombs, beats = {}, {}
+    for id, e in pairs(body) do
+      if id ~= item then
+        if type(e) == "table" and e.m == 0 and not others(id) then tombs[#tombs + 1] = id
+        elseif beaten(id) then beats[#beats + 1] = id end
+      end
+    end
+    local function at(id) return type(body[id]) == "table" and tonumber(body[id].t) or 0 end
+    local function older(a, b)
+      local ta, tb = at(a), at(b)
+      if ta ~= tb then return ta < tb end
+      return a < b
+    end
+    table.sort(tombs, older)
+    table.sort(beats, older)
+    for _, group in ipairs({ tombs, beats }) do
+      for _, id in ipairs(group) do
+        if count <= L.minItems then break end
+        body[id] = nil
+        count = count - 1
+      end
+    end
+    if count > L.minItems then
+      return refuse("full", "The minimums list is full (" .. L.minItems .. " items). A cleared item keeps its place "
+        .. "until the other bank characters' settings for it are gone.")
+    end
+  end
+  own[key] = body
+  return { item = item }
+end

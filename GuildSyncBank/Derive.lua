@@ -8,6 +8,10 @@
 --            guild = { scanned, by, tabs = { [tab] = { scanned, by } } } | nil   the guild bank: per tab the newest g
 --                    record across bank characters; its items count once in items[id].by[Derive.GUILD] }
 --   holders = { [key] = { scanned, money } }  bag (b) and bank (k) scans only; a g record makes no holder
+--   gold = { total, holders = { { key, money, at } }, guild = { money, at, by } | nil,
+--            entries = { { t, d, k, w, holder, after } } }   newest first; an unknown k reads as "o"
+--   mins = { [id] = { min, raid, at, by, n } }   min 0 is a clear; n = bank characters holding an entry for id
+--   low  = { { id, have, min, short, raid } }    short desc, then id ; raid = { { id, have, min, low } } low first, then id
 --   ns.Derive.GUILD  the guild bank's holder key in items[id].by (holds "~", so it is never a member key)
 -- Every family is read over all n through ns.ParseKey. Order: drop whole records (key, author, B5, roster, time),
 -- then requisitions, pledges, sends, receipts, overrides, cancels, status, expiry, answers, requests, contents, contributions.
@@ -20,7 +24,7 @@ ns.Derive = Derive
 
 local DAY = 86400
 Derive.GUILD = "~guild"
-local BANK_FAMILIES = { b = true, k = true, g = true, t = true, q = true, l = true, a = true }
+local BANK_FAMILIES = { b = true, k = true, g = true, t = true, q = true, l = true, a = true, j = true, n = true }
 
 function Derive.TimeOk(t, now)
   if type(t) ~= "number" or t ~= t or t == math.huge or t == -math.huge then return false end
@@ -45,6 +49,12 @@ local function bodyTimes(family, body, out)
     opt(body.cancelled)
   elseif family == "b" or family == "k" or family == "g" then
     add(body.scanned)
+  elseif family == "j" then
+    add(body.scanned)
+    opt(body.guildAt)
+    for _, e in ipairs(type(body.e) == "table" and body.e or {}) do add(f(e, "t")) end
+  elseif family == "n" then
+    for _, e in pairs(body) do add(f(e, "t")) end
   elseif family == "l" then
     for _, r in ipairs(type(body.receipts) == "table" and body.receipts or {}) do add(f(r, "at")); opt(f(r, "sent")) end
     for _, u in ipairs(type(body.unpledges) == "table" and body.unpledges or {}) do add(f(u, "at")) end
@@ -87,7 +97,7 @@ function Derive.State(records, ctx)
     ignored = {}, aged = {}, slots = {} }
 
   -- 1. whole records: kept ones grouped by family as { key, n, author, body }
-  local fam = { b = {}, k = {}, g = {}, t = {}, q = {}, l = {}, a = {}, x = {}, m = {} }
+  local fam = { b = {}, k = {}, g = {}, t = {}, q = {}, l = {}, a = {}, x = {}, m = {}, j = {}, n = {} }
   for _, domain in pairs(type(records) == "table" and records or {}) do
     for key, rec in pairs(type(domain) == "table" and domain or {}) do
       local family, n, author
@@ -307,6 +317,87 @@ function Derive.State(records, ctx)
     end
     addItems(Derive.GUILD, t.items)
   end
+
+  -- gold: per bank character the money of the newer of its j1 and its money-carrying b; the guild bank's gold from
+  -- the newest guildAt (a tie: the lower author key); ledger entries newest first, each with the balance after it
+  local KINDS = { m = true, g = true, v = true, o = true, s = true }
+  local gold = { total = 0, holders = {}, entries = {} }
+  view.gold = gold
+  local purse = {}
+  local function seen(author, money, at)
+    local had = purse[author]
+    if int(money, 0, 1e12) and isNum(at) and (not had or at > had.at) then
+      purse[author] = { money = money, at = at }
+    end
+  end
+  for _, s in ipairs(fam.b) do
+    if s.body.money ~= nil then seen(s.author, s.body.money, s.body.scanned) end
+  end
+  for _, s in ipairs(fam.j) do
+    local b = s.body
+    seen(s.author, b.money, b.scanned)
+    local g = gold.guild
+    if int(b.guild, 0, 1e12) and isNum(b.guildAt)
+        and (not g or b.guildAt > g.at or (b.guildAt == g.at and s.author < g.by)) then
+      gold.guild = { money = b.guild, at = b.guildAt, by = s.author }
+    end
+    local e = type(b.e) == "table" and b.e or {}
+    local after = int(b.money, 0, 1e12) and b.money or 0
+    for i = #e, 1, -1 do
+      local x = e[i]
+      if type(x) == "table" and isNum(x.t) and isNum(x.d) then
+        gold.entries[#gold.entries + 1] = { t = x.t, d = x.d, k = KINDS[x.k] and x.k or "o", w = str(x.w),
+          holder = s.author, after = after }
+        after = after - x.d
+      end
+    end
+  end
+  for author, p in pairs(purse) do
+    gold.holders[#gold.holders + 1] = { key = author, money = p.money, at = p.at }
+    gold.total = gold.total + p.money
+  end
+  table.sort(gold.holders, function(x, y) return x.key < y.key end)
+  if gold.guild then gold.total = gold.total + gold.guild.money end
+  table.sort(gold.entries, function(x, y)
+    if x.t ~= y.t then return x.t > y.t end
+    if x.holder ~= y.holder then return x.holder < y.holder end
+    return x.after < y.after
+  end)
+
+  -- minimums: per item over every bank character's n1 the newest t (a tie: the higher m, then the lower author);
+  -- m = 0 is a clear. Low: an item whose stock (b, k and the guild bank) is under its minimum; raid: the raid items
+  view.mins, view.low, view.raid = {}, {}, {}
+  for _, s in ipairs(fam.n) do
+    for id, x in pairs(s.body) do
+      if isItem(id) and type(x) == "table" and int(x.m, 0, L.minimum) and isNum(x.t) then
+        local had = view.mins[id]
+        local n = had and had.n + 1 or 1
+        if not had or x.t > had.at or (x.t == had.at and (x.m > had.min or (x.m == had.min and s.author < had.by))) then
+          view.mins[id] = { min = x.m, raid = x.r ~= nil or nil, at = x.t, by = s.author, n = n }
+        else
+          had.n = n
+        end
+      end
+    end
+  end
+  for id, m in pairs(view.mins) do
+    if m.min > 0 then
+      local have = view.items[id] and view.items[id].total or 0
+      local low = have < m.min
+      if low then
+        view.low[#view.low + 1] = { id = id, have = have, min = m.min, short = m.min - have, raid = m.raid }
+      end
+      if m.raid then view.raid[#view.raid + 1] = { id = id, have = have, min = m.min, low = low } end
+    end
+  end
+  table.sort(view.low, function(x, y)
+    if x.short ~= y.short then return x.short > y.short end
+    return x.id < y.id
+  end)
+  table.sort(view.raid, function(x, y)
+    if x.low ~= y.low then return x.low end
+    return x.id < y.id
+  end)
 
   -- 5. contributions: summed across every bank character's t<n>; this month through ns.Month (UTC)
   local month = ns.Month(now)

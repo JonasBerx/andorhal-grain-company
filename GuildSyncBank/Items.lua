@@ -6,6 +6,7 @@
 -- There is no API that lists the client's cached names, so a name is looked up in ns.REAGENTS (Reagents.lua, read at
 -- call time: it loads after this file) and then among the candidate ids the caller passes (the view's items).
 --   ns.Items.Line(itemId) -> text, icon, loading, quality   (quality nil while the item is not cached)
+--   ns.Items.Cached(itemId) -> name, icon | nil             read-only: only a cached id answers; never starts a load
 --   ns.Items.Parse(text, candidateIds) -> itemId | nil, why
 --   ns.Items.Search(query, itemIds) -> itemIds
 --   ns.Items.HookInsert() -> "ChatFrameUtil.InsertLink" | "ChatEdit_InsertLink" | nil
@@ -117,6 +118,15 @@ function Items.Line(id)
   end
   ask(id)
   return fallback, plain(M.Compat.call("C_Item.GetItemIconByID", id)), true
+end
+
+-- cachedName's check, with the icon from the same GetItemInfo call (a search row's icon, s6).
+function Items.Cached(id)
+  if not plain(M.Compat.call("C_Item.IsItemDataCachedByID", id)) then return nil end
+  local name, _, _, _, _, _, _, _, _, icon = M.Compat.call("C_Item.GetItemInfo", id)
+  name = plain(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  return name, plain(icon)
 end
 
 ns.Listen("ITEM_DATA_LOAD_RESULT", function(_, id, success)

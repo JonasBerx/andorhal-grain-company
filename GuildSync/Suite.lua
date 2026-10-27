@@ -32,4 +32,7 @@ ns.SUITE = {
   { folder = "GuildSyncCrafting", id = "crafting", name = "Crafting",
     icon = "Interface\\Icons\\Trade_BlackSmithing",
     line = "Crafting: a work board, a crafter finder and recipes." },
+  { folder = "GuildSyncGames", id = "games", name = "Games",
+    icon = "Interface\\Icons\\INV_Misc_Dice_01",
+    line = "WoWdle, a WoW word a day, and a game on flights." },
 }

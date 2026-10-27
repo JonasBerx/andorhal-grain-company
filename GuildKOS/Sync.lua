@@ -11,6 +11,7 @@ local C, Rules, Wire, Codec, Core = ns.Compat, ns.Rules, ns.Wire, ns.Codec, ns.C
 
 local asm = Wire.NewAssembler()
 local names = {}            -- SenderKey -> the roster's spelling of the name, for printed lines
+local heard = { pair = {}, sender = {} } -- Rules.HeardAllowed state; bounded by roster x list (gated after Find)
 local rosterReady = false   -- C_Club's guild roster is read
 local lastReady = false     -- ready() at the last Sync.ReadyChanged
 local offered = false       -- the login offer went out
@@ -19,6 +20,8 @@ local lastBuild, buildPending
 local held = {}             -- complete lists waiting for the roster (Rules.Hold)
 local answers = {}          -- Rules.Throttle table for offers sent as answers or re-offers
 local passed = {}           -- senderKey -> version whose chunks passed the gate
+local offerFrom = {}        -- Rules.Throttle table: senderKey -> last push scheduled for that member's offer (D84)
+local owed = {}             -- pushes owed to members refused by that throttle (Rules.Owe)
 local lastPush
 local pushState             -- nil | "scheduled" | "running" | "lockdown"
 local pushGen = 0           -- bumped to cancel a scheduled or running push
@@ -88,6 +91,8 @@ local function iAmOfficer()
   return k ~= nil and GuildSync.Comm.IsOfficer(k) == true
 end
 
+function Sync.IAmOfficer() return iAmOfficer() end
+
 -- A list is judged only when C_Club's roster and the hub's (ns.Hub.Ready, Hub.lua) are both read; until then it waits.
 local function ready()
   return rosterReady and (not ns.Hub or ns.Hub.Ready())
@@ -106,7 +111,8 @@ local function onSighting(msg, from, r)
   local list = Core.DB().list
   local entry = list and Rules.Find(list.targets, msg.target)
   if not entry then return end
-  Core.Report(entry, msg.zone, msg.subzone, "heard", msg.spotter)
+  if not Rules.HeardAllowed(heard, from, Rules.Key(entry.target), Core.Now()) then return end
+  Core.Report(entry, msg.zone, msg.subzone, "heard", names[from] or msg.spotter, from)
 end
 
 -- ---------- pushing the list (officers) ----------
@@ -186,9 +192,22 @@ local function answerLater()
   end)
 end
 
-local function onOffer(msg, sender)
-  local what = Rules.OnOffer(mine(), msg.version, iAmOfficer(), isOfficer(sender), Core.Now())
-  if what == "push" then schedulePush() elseif what == "offer" then answerLater() end
+-- A member's offer makes a push once per PUSH_PER_SENDER per sender; a refused one is owed to the window end (D84).
+local function onOffer(msg, sender, from)
+  local now = Core.Now()
+  local officer = isOfficer(sender)
+  local what = Rules.OnOffer(mine(), msg.version, iAmOfficer(), officer, now)
+  if what == "offer" then answerLater() return end
+  if what ~= "push" then return end
+  if officer then
+    schedulePush()
+  elseif pushState then
+    return -- the push under way covers this member
+  elseif Rules.Throttle(offerFrom, from, now, Rules.PUSH_PER_SENDER) then
+    schedulePush()
+  else
+    Rules.Owe(owed, from, msg.version, offerFrom[from] + Rules.PUSH_PER_SENDER)
+  end
 end
 
 -- ---------- receiving the list ----------
@@ -234,6 +253,12 @@ local function sweep()
     passed[expired.sender] = nil
     if Rules.ShouldReoffer(expired, mine(), gated) then sendOfferWithinLimit() end
   end
+  for _, item in ipairs(Rules.TakeOwed(owed, now)) do
+    if not pushState and Rules.OnOffer(mine(), item.version, iAmOfficer(), false, now) == "push"
+      and Rules.Throttle(offerFrom, item.sender, now, Rules.PUSH_PER_SENDER) then
+      schedulePush()
+    end
+  end
   after(Wire.SWEEP_EVERY, sweep)
 end
 
@@ -251,8 +276,8 @@ local function onAddonMessage(prefix, text, channel, sender)
     return
   end
   if msg.kind == "O" then
-    if answerPending and Rules.CancelAnswer(mine(), msg) then cancelAnswer() end
-    onOffer(msg, sender)
+    if answerPending and isOfficer(sender) and Rules.CancelAnswer(mine(), msg) then cancelAnswer() end
+    onOffer(msg, sender, from)
   else
     onChunk(msg, sender, from)
   end
@@ -294,7 +319,7 @@ local function buildMap()
       if type(info) == "table" then
         local name = C.str(info.name)
         local key, order = Rules.SenderKey(name, r), C.num(info.guildRankOrder)
-        if key and order then
+        if key and order and not spelled[key] then
           spelled[key] = name
           count = count + 1
         end

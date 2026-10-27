@@ -42,6 +42,19 @@ end
 -- text with every | doubled, so it shows as written and cannot colour, link or texture a chat line or a font string.
 function ns.Escape(text) return (string.gsub(tostring(text), "|", "||")) end
 
+-- The text rule (f6204) for a module string the hub shows or hands on: control bytes (below 32, and 127) removed,
+-- then cut to cap bytes at a character boundary. Api.lua (fact strings) and Search.lua (rows, the query) use it.
+function ns.PlainLine(s, cap)
+  s = string.gsub(s, "[%z\1-\31\127]", "")
+  local cut = math.min(#s, cap)
+  while cut > 0 and cut < #s do
+    local b = string.byte(s, cut + 1)
+    if b < 128 or b >= 192 then break end -- byte cut+1 starts a character: the cut splits none
+    cut = cut - 1
+  end
+  return string.sub(s, 1, cut)
+end
+
 -- v as a number from lo to hi; default when v is nil, not a number, or NaN (math.min and math.max do not catch NaN in
 -- every Lua 5.1: the explicit v ~= v test does).
 function ns.Limit(v, default, lo, hi)
@@ -322,7 +335,7 @@ end
 -- ---------- hub events (module addons hear them through M.On; only the hub fires them) ----------
 
 local HUB_EVENTS = { rosterRead = true, commGate = true, windowOpened = true, demo = true, professions = true,
-  links = true }
+  links = true, facts = true }
 local listeners = {} -- event -> { { fn =, title = }, ... }
 local gate -- { open =, why = }: the last Compat.CommGate answer, kept only while a commGate listener exists
 
@@ -450,6 +463,7 @@ local function onCoreEvent(event, arg1)
     if ns.Demo then ns.Safe("Demo", ns.Demo.Login) end -- before Window.Login: the first draw already shows demo
     if ns.Window and ns.Window.Login then ns.Safe("Window", ns.Window.Login) end
     for _, mod in ipairs(ns.modules) do runLogin(mod) end
+    if ns.FactsLogin then ns.Safe("Core", ns.FactsLogin) end -- "facts" once for providers registered before login
   elseif event == "PLAYER_LEVEL_UP" then
     local c = ns.Char()
     local level = Compat.Plain(arg1)

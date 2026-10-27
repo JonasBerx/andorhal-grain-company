@@ -13,6 +13,7 @@ Codec.lua
 Store.lua
 Derive.lua
 Rules.lua
+Gold.lua
 Ranks.lua
 Items.lua
 Reagents.lua
@@ -24,3 +25,4 @@ Health.lua
 Cards.lua
 Page.lua
 PageBanker.lua
+Search.lua

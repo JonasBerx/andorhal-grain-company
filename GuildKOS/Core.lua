@@ -9,7 +9,6 @@ local C, Rules, Codec = ns.Compat, ns.Rules, ns.Codec
 
 local SOUND_RAID_WARNING = 8959   -- SOUNDKIT.RAID_WARNING
 local shownOwn = {}               -- throttle for own sightings (alert and send); not saved
-local shownHeard = {}             -- throttle for heard sightings (the heard line); not saved
 -- The Kill on Sight page on the hub (Hub.lua); called when the list, a sighting or a setting changes.
 local function refreshPage() if ns.Hub then ns.Hub.Refresh() end end
 
@@ -35,8 +34,11 @@ function Core.Now()
   return (ok and C.num(t)) or 0
 end
 
+-- A date the client can't format reads "an unknown date" (D86).
 function Core.DateText(version)
-  return date("%Y-%m-%d %H:%M", version)
+  local ok, text = pcall(date, "%Y-%m-%d %H:%M", version)
+  if ok and type(text) == "string" then return text end
+  return "an unknown date"
 end
 
 -- The real list and last-seen data (the hub's demo is drawn by Hub.lua, never stored here).
@@ -55,24 +57,27 @@ end
 
 -- ---------- import ----------
 
+-- Returns ok and the line it printed. The verdict comes before the date is formatted (D86).
 function Core.Import(text)
   local list, reason = Codec.Decode(text or "")
   if not list then
-    print(Rules.RefusalLine(reason))
-    return false
+    local line = Rules.RefusalLine(reason)
+    print(line)
+    return false, line
   end
   local db = Core.DB()
   local mine = db.list and db.list.version
-  local dateText = Core.DateText(list.version)
   local verdict = Rules.ImportVerdict(mine, list.version, Core.Now())
   if verdict ~= "take" then
-    print(Rules.RefusalLine(verdict, dateText))
-    return false
+    local line = Rules.RefusalLine(verdict, Core.DateText(list.version))
+    print(line)
+    return false, line
   end
   Core.Store(list, "import")
-  print(Rules.ImportLine(#list.targets, dateText))
   if ns.Sync then ns.Sync.AfterImport() end
-  return true
+  local line = Rules.ImportLine(#list.targets, Core.DateText(list.version), ns.Sync and ns.Sync.IAmOfficer())
+  print(line)
+  return true, line
 end
 
 local paste
@@ -110,9 +115,32 @@ local function pasteWindow()
   button:SetSize(100, 24)
   button:SetPoint("BOTTOMRIGHT", -14, 12)
   button:SetText("Import")
-  button:SetScript("OnClick", function()
-    if Core.Import(box:GetText()) then f:Hide() end
-  end)
+
+  -- The refusal line from Core.Import (a Rules line, never the pasted text), two lines under the scroll (D94).
+  local status = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  status:SetPoint("BOTTOMLEFT", 16, 10)
+  status:SetPoint("BOTTOMRIGHT", button, "BOTTOMLEFT", -8, -2)
+  status:SetHeight(30)
+  status:SetWordWrap(true)
+  status:SetJustifyH("LEFT")
+  f.status = status
+
+  local function import()
+    local ok, line = Core.Import(box:GetText())
+    if ok then
+      status:SetText("")
+      f:Hide()
+    else
+      status:SetText(line)
+    end
+  end
+  button:SetScript("OnClick", import)
+  box:SetScript("OnEnterPressed", import)
+  box:SetScript("OnTabPressed", function() box:ClearFocus() end)
+
+  -- Escape closes the window even when the box has no focus (after Tab); runs once, the frame is cached.
+  local special = C.frame("UISpecialFrames")
+  if special then table.insert(special, "GuildKOSPasteFrame") end
 
   f:Hide()
   paste = f
@@ -169,8 +197,9 @@ local function playSound()
   if not C.call("C_Sound.PlaySound", SOUND_RAID_WARNING) then C.call("PlaySound", SOUND_RAID_WARNING) end
 end
 
--- Store first, then throttle what is shown and sent (own and heard on separate throttles, triage B). source "self" | "heard"; by is nil for "self".
-function Core.Report(entry, zone, subzone, source, by)
+-- Store first, then throttle what is shown and sent (own sightings only; heard ones were judged by Sync with
+-- Rules.HeardAllowed, D89). source "self" | "heard"; by and senderKey are nil for "self".
+function Core.Report(entry, zone, subzone, source, by, senderKey)
   local db = Core.DB()
   local now = Core.Now()
   local key = Rules.Key(entry.target)
@@ -178,11 +207,14 @@ function Core.Report(entry, zone, subzone, source, by)
   zone, subzone = zone or "", subzone or ""
   Rules.AddSighting(db.sightings, {
     key = key, target = entry.target, by = by, zone = zone, subzone = subzone, at = now, source = source,
-  }, Rules.RING)
-  db.lastSeen[key] = { at = now, zone = zone, subzone = subzone, by = by }
+    sender = senderKey,
+  }, Rules.RING, Rules.RING_PER_SENDER)
+  if source == "self" or not Rules.KeepOwn(db.lastSeen[key], now) then
+    db.lastSeen[key] = { at = now, zone = zone, subzone = subzone, by = by }
+  end
   pcall(refreshPage) -- a page error never stops the alert or the guild send (f711)
 
-  -- Own and heard sightings throttle apart: hearing a target never silences your own alert and send.
+  -- Own sightings throttle here, heard ones in Sync: hearing a target never silences your own alert and send.
   if source == "self" then
     if not Rules.Throttle(shownOwn, key, now, Rules.WINDOW) then return end
     if not db.muted then
@@ -193,7 +225,6 @@ function Core.Report(entry, zone, subzone, source, by)
     end
     if ns.Sync then ns.Sync.SendSighting(entry.target, zone, subzone) end
   else
-    if not Rules.Throttle(shownHeard, key, now, Rules.WINDOW) then return end
     if not db.muted then print(Rules.HeardLine(by or "", entry.target, zone, subzone)) end
   end
 end
@@ -222,8 +253,29 @@ end
 function Core.OpenImport()
   local f = pasteWindow()
   f.box:SetText("")
+  f.status:SetText("")
   f:Show()
   f.box:SetFocus()
+end
+
+-- Officers only, local: clears the list, its last-seen lines and the sighting history, so the next list an officer
+-- sends is taken (D81). Sends nothing; muted, demo and minimap stay.
+function Core.Reset()
+  if not (ns.Sync and ns.Sync.IAmOfficer()) then
+    print(Rules.ResetRefusedLine())
+    return
+  end
+  local db = Core.DB()
+  local list = db.list
+  db.list = nil
+  db.lastSeen = {}
+  db.sightings = {}
+  if list then
+    print(Rules.ResetLine(#list.targets, Core.DateText(list.version)))
+  else
+    print(Rules.ResetLine())
+  end
+  refreshPage()
 end
 
 -- ---------- /kos ----------
@@ -256,8 +308,10 @@ local function slash(msg)
       if type(fn) == "function" then fn(rest == "" and "demo" or ("demo " .. rest))
       else print("KOS: /gsync demo is not available.") end
     end
+  elseif cmd == "reset" then
+    if rest ~= "" then print("Usage: /kos reset") else Core.Reset() end
   else
-    print("KOS: /kos opens the Kill on Sight page, /kos import adds a list, /kos on and /kos off turn alerts on and off, /kos demo shows a demo list (as /gsync demo).")
+    print("KOS: /kos opens the Kill on Sight page, /kos import adds a list, /kos on and /kos off turn alerts on and off, /kos demo shows a demo list (as /gsync demo), /kos reset (officers) clears your list so the next one is taken.")
   end
 end
 

@@ -391,7 +391,7 @@ local function tick()
   local t = ns.Compat.ServerTime()
   local waiting = false
   for _, st in pairs(D) do
-    if not st.started then
+    if not st.started and st.on then -- D214: a refused domain never starts and keeps no tick alive
       if known() then start(st, t) else waiting = true end
     end
   end
@@ -403,6 +403,7 @@ end
 
 -- Hearing any round restarts my window, so a same-hash round suppresses mine (copy of CraftSync's scheduleH).
 function scheduleH(st)
+  if not st.on then return end -- D214
   st.hGen = st.hGen + 1
   local gen = st.hGen
   ns.After((st.store.hEvery or 900) + math.random() * (st.store.hJitter or 300), function()
@@ -1086,7 +1087,7 @@ function Sync.Changed(id, key, t)
   local st = D[id]
   if not st or not st.store then return end
   mint(st, key, t)
-  if not st.started and known() then start(st, t) end
+  if not st.started and st.on and known() then start(st, t) end
   if st.started then queueOwnP(st, key) else st.pending[key] = true end
 end
 

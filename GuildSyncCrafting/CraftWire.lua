@@ -298,6 +298,34 @@ TYPES.P = {
   end,
 }
 
+-- K: one character's cooldown states (crafting_c, q1170). cds = { { group, readyAt } }, readyAt a server time or 0
+-- (ready when read); the groups are CraftStore.COOLDOWNS' (tr, mc, ss), each at most once.
+local CD_GROUPS = { tr = true, mc = true, ss = true }
+TYPES.K = {
+  encode = function(m)
+    return E(m.name) .. ":" .. E(m.class) .. ":" .. n(m.stamp) .. ":" .. n(m.seen) .. ":"
+      .. pairList(m.cds, "group", "readyAt", n, n)
+  end,
+  decode = function(m, f)
+    m.name, m.class, m.stamp, m.seen = atom(f[2]), atom(f[3]), int(f[4]), int(f[5])
+    m.cds = list(f[6], function(e)
+      if #e ~= 2 then error(FORMAT) end
+      return { group = e[1], readyAt = int(e[2]) }
+    end)
+    return m
+  end,
+  check = function(m, now)
+    if not (isName(m.name) and isNameText(m.class) and isInt(m.stamp) and isInt(m.seen)
+            and type(m.cds) == "table") then return "format" end
+    local seen = {}
+    for _, c in ipairs(m.cds) do
+      if type(c) ~= "table" or not CD_GROUPS[c.group] or seen[c.group] or not isInt(c.readyAt) then return "format" end
+      seen[c.group] = true
+    end
+    if future(now, m.stamp, m.seen) then return "future" end
+  end,
+}
+
 TYPES.R = {
   encode = function(m)
     if m.kind == "b" then return "b:" .. pairList(m.entries, "id", "hash", E, n) end
@@ -409,13 +437,13 @@ function CraftWire.Unpack(logical, now)
   return msg
 end
 
--- Subject(msg) -> subject, version: the key and stamp (P), the request id and content hash (F), the id and 0
+-- Subject(msg) -> subject, version: the key and stamp (P, K), the request id and content hash (F), the id and 0
 -- (W, C, X), "-" and 0 (H, D, B, R). The subject is returned unescaped; Split escapes it on the wire.
 -- An F that carries msg.hash (CraftSync sets CraftBoard.Hash of the request) uses it as its version, so the
 -- chunk header carries the one hash of a request; without it, the Adler-32 of the F text.
 function CraftWire.Subject(msg)
   local t = msg.t
-  if t == "P" then return tostring(msg.name or ""):lower(), msg.stamp end
+  if t == "P" or t == "K" then return tostring(msg.name or ""):lower(), msg.stamp end
   if t == "F" then
     if type(msg.hash) == "string" then return msg.id, msg.hash end
     return msg.id, CraftWire.Hash(t .. ":" .. TYPES.F.encode(msg))

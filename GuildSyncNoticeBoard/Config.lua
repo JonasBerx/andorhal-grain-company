@@ -1,6 +1,6 @@
--- Notice Board: a GuildSync module addon (brief noticeboard/brief.md, sliced by ui-slice.md). This slice reads guild
--- events from the game's calendar and keeps officer notices and polls locally: MODE "calendar", needs = 4, and no
--- GuildSync domain (the sync run adds the board domains later; nothing here sends).
+-- Notice Board: a GuildSync module addon (brief noticeboard/brief.md, sliced by ui-slice.md). It reads guild events
+-- from the game's calendar (MODE "calendar", needs = 8 for the search field) and syncs officer notices, polls and
+-- members' votes on the board, board_m and board_o domains (Store.lua).
 -- Config.lua loads first. At load it only sets the constants, the client function and event lists, registers the
 -- module and defines the shared helpers: no frame, no client call. Every module field is a thin closure that finds the
 -- later file's seam at call time and does nothing while that file is absent.
@@ -49,8 +49,8 @@ local EVENTS = {
 local M = GuildSync and GuildSync.RegisterModule({
   id = "board",
   title = "Notice Board",
-  version = "0.2",
-  needs = 4,
+  version = "0.4",
+  needs = 8,
   apis = APIS,
   events = EVENTS,
   onEvent = function(event, ...) ns.Dispatch(event, ...) end,
@@ -59,6 +59,8 @@ local M = GuildSync and GuildSync.RegisterModule({
     build = function(f) if ns.Page then ns.Page.Build(f) end end,
     refresh = function(f) if ns.Page then ns.Page.Refresh(f) end end,
   },
+  -- API 8: the hub's search box (Search.lua)
+  search = { find = function(text) return ns.SearchFind and ns.SearchFind(text) end },
   slash = function(rest) if ns.Status then ns.Status.Slash(rest) end end,
   selftest = function()
     if ns.Status then return ns.Status.Selftest() end

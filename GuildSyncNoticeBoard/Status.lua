@@ -1,5 +1,6 @@
 -- GuildSyncNoticeBoard: the selftest, the status line and the /gsboard slash (brief AC18, AC29, AC31, AC42 as sliced by
--- ui-slice.md: no domain yet, so no "domain not attached" FAIL). Everything here reads; the only write is the lead
+-- ui-slice.md; AC21: the selftest FAILs naming every domain whose Store.Attached() value is not true). Everything
+-- here reads; the only write is the lead
 -- setting. No slash word makes a calendar call: `status` prints values recorded earlier.
 
 local _, ns = ...
@@ -18,6 +19,12 @@ local function plural(n, word) return n .. " " .. word .. (n == 1 and "" or "s")
 
 function Status.Selftest()
   if not rosterSeen then return "wait", "waiting for the guild roster" end
+  local down = {}
+  for _, id in ipairs({ "board", "board_m", "board_o" }) do
+    local v = ns.Store.Attached()[id]
+    if v ~= true then down[#down + 1] = id .. " (" .. tostring(v or "not attached") .. ")" end
+  end
+  if #down > 0 then return "fail", "domain not attached: " .. table.concat(down, ", ") end
   local rows = ns.Cal.Rows() or {}
   local notices, polls = ns.Store.Counts()
   local text = plural(#rows, "event") .. ", " .. plural(notices, "notice") .. ", " .. plural(polls, "open poll")

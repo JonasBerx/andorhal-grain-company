@@ -6,12 +6,15 @@ local Rules = {}
 ns.Rules = Rules
 
 Rules.WINDOW = 60              -- display throttle, push window, answer limit
-Rules.FUTURE = 86400           -- a list dated further ahead than this is refused
+Rules.FUTURE = 900             -- a list dated further ahead than this is refused
 Rules.RING = 100               -- sightings kept
 Rules.HOLD = 120               -- a complete list held while the roster isn't ready
 Rules.REBUILD_EVERY = 10       -- roster names rebuild spacing
 Rules.BANNER = 5               -- seconds the banner shows
 Rules.OFFICER_MAX_RANK = 1     -- not read since 0.5: officers are GuildSync.Comm.IsOfficer's (D240); kept for rules_test
+Rules.HEARD_PER_SENDER = 5     -- heard sightings one spotter gets through in any WINDOW (D89)
+Rules.RING_PER_SENDER = 10     -- heard entries one spotter may hold in the RING (D89)
+Rules.PUSH_PER_SENDER = 300    -- one member-triggered push per officer per sender in this many seconds (D84)
 
 -- Names ---------------------------------------------------------------------
 
@@ -95,11 +98,63 @@ function Rules.TakeHeld(held, now)
   return out
 end
 
+-- One owed push per sender (D84): a member's offer refused by PUSH_PER_SENDER, due at `at` with the newest version.
+function Rules.Owe(owed, senderKey, version, at)
+  owed[senderKey] = { sender = senderKey, version = version, at = at }
+  return owed
+end
+
+function Rules.TakeOwed(owed, now)
+  local out = {}
+  for key, o in pairs(owed) do
+    if now >= o.at then
+      out[#out + 1] = o
+      owed[key] = nil
+    end
+  end
+  return out
+end
+
 function Rules.ShouldReoffer(expired, mine, passedGate)
   return passedGate == true and (expired.version or 0) > (mine or 0)
 end
 
-function Rules.AddSighting(ring, s, cap)
+-- Whether a heard sighting from spotterKey of targetKey is stored and shown (D89, D91). state = { pair = { [spotter] =
+-- { [target] = at } }, sender = { [spotter] = { at, ... } } }, times oldest first. Refused when this spotter's sighting
+-- of this target is younger than WINDOW, or when the spotter's HEARD_PER_SENDER-th latest is; both are checked before
+-- either is stamped, so a refusal stamps neither.
+function Rules.HeardAllowed(state, spotterKey, targetKey, now)
+  local seen = state.pair[spotterKey]
+  local last = seen and seen[targetKey]
+  if last ~= nil and now - last < Rules.WINDOW then return false end
+  local times = state.sender[spotterKey]
+  if times and #times >= Rules.HEARD_PER_SENDER and now - times[1] < Rules.WINDOW then return false end
+  if not seen then seen = {}; state.pair[spotterKey] = seen end
+  if not times then times = {}; state.sender[spotterKey] = times end
+  seen[targetKey] = now
+  times[#times + 1] = now
+  while #times > Rules.HEARD_PER_SENDER do table.remove(times, 1) end
+  return true
+end
+
+-- Whether a last seen is the player's own (no by) and younger than WINDOW, so a heard sighting leaves it.
+function Rules.KeepOwn(seen, now)
+  return seen ~= nil and (seen.by == nil or seen.by == "") and now - seen.at < Rules.WINDOW
+end
+
+-- perSender: at most this many entries with s.sender in the ring; at the share that sender's own oldest goes.
+-- Entries without sender are never counted or evicted by the share; perSender nil is 0.5 behaviour.
+function Rules.AddSighting(ring, s, cap, perSender)
+  if perSender and s.sender ~= nil then
+    local n, first = 0, nil
+    for i, e in ipairs(ring) do
+      if e.sender == s.sender then
+        n = n + 1
+        first = first or i
+      end
+    end
+    if n >= perSender then table.remove(ring, first) end
+  end
   ring[#ring + 1] = s
   while #ring > cap do table.remove(ring, 1) end
   return ring
@@ -135,10 +190,28 @@ end
 
 -- Lines -------------------------------------------------------------------------
 
--- A name or place made safe to print: "|" doubled so the chat frame shows it as text, bytes below 0x20 and 0x7F dropped.
+-- The code points no shown value keeps (o1900): C1, U+200B-F, U+2028-E, U+2066-9, U+061C and U+FEFF.
+local DROP = { "\194[\128-\159]", "\226\128[\139-\143\168-\174]", "\226\129[\166-\169]", "\216\156", "\239\187\191" }
+
+-- A name or place without control bytes (below 0x20 and 0x7F) or the DROP set; "|" untouched. Control bytes go first,
+-- then the set is dropped again until a pass removes nothing, so neither nesting nor a split code point leaves one.
+function Rules.Strip(s)
+  s = s:gsub("[%z\1-\31\127]", "")
+  repeat
+    local removed = 0
+    for _, p in ipairs(DROP) do
+      local n
+      s, n = s:gsub(p, "")
+      removed = removed + n
+    end
+  until removed == 0
+  return s
+end
+
+-- A name or place made safe to print: Strip, then "|" doubled so the chat frame shows it as text.
 -- Applied once per shown value, inside the line functions below; the identity on any other text.
 function Rules.Clean(s)
-  return ((s:gsub("[%z\1-\31\127]", ""):gsub("|", "||")))
+  return ((Rules.Strip(s):gsub("|", "||")))
 end
 
 local Clean = Rules.Clean
@@ -171,8 +244,11 @@ local function ago(seconds)
   return math.floor(hours / 24) .. " days ago"
 end
 
-function Rules.ImportLine(n, dateText)
-  return "KOS: " .. targets(n) .. ", list of " .. dateText
+-- officer: whether this client sends the list on to the guild (D87).
+function Rules.ImportLine(n, dateText, officer)
+  local where = officer and "Officers' clients send it to the whole guild."
+    or "It stays on your client: only an officer's import goes to the guild."
+  return "KOS: " .. targets(n) .. ", list of " .. dateText .. ". " .. where
 end
 
 function Rules.ReceivedLine(sender, n, dateText)
@@ -189,6 +265,17 @@ local REFUSALS = {
 
 function Rules.RefusalLine(reason, dateText)
   return (REFUSALS[reason] or REFUSALS.format)(dateText or "")
+end
+
+-- /kos reset (D81). n and dateText describe the cleared list; nil when there was none.
+function Rules.ResetLine(n, dateText)
+  if not n then return "KOS: Reset. There was no list; cleared the last-seen lines and the sighting history." end
+  return "KOS: Reset. Cleared the list of " .. dateText .. " (" .. targets(n)
+    .. "), its last-seen lines and the sighting history. The next list an officer sends is taken."
+end
+
+function Rules.ResetRefusedLine()
+  return "KOS: Only officers can reset the list. Ask an officer, or import a newer list."
 end
 
 function Rules.SpotLine(entry, zone, subzone)

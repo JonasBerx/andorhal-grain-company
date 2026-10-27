@@ -3,6 +3,10 @@
 -- window (Candidate) and every check. Settled race slots live in G.rs ("<key>;" each, r<M>, c<M><CLASS> or
 -- f<M><RACE>); rec.mb is the own record's best count of guildmates online at one read. Tunables, titles and tenure
 -- live in AnnalsRules.
+-- rec.ac (d1193) holds the own record's counters as "<key>=<value>;" entries: key a lowercase letter and an
+-- alphanumeric, value one or more base-36 tokens [0-9a-z]+ joined by "," (a counter is one token; a part 2 set holds
+-- up to N tokens and stops growing at its row's need). Keys: cp the capitals entered (bit set 0-7), cs where counting
+-- starts and gl the last own guild line (both server seconds). Feats.Own feeds them and earns g1, g2, ec and st.
 -- Pure Lua 5.1, no client calls: data and time are passed in. Check(G, now, ctx) is idempotent: nothing is earned
 -- twice and nothing is ever removed.
 local _, ns = ...
@@ -90,6 +94,50 @@ local function eaOf(rec)
   return type(rec.ea) == "string" and #rec.ea <= Rules.EA_MAX and rec.ea or ""
 end
 
+-- rec.ac: a non-string ac or one over Rules.AC_MAX reads as "" and is replaced whole at the next write (counters
+-- restart); a malformed entry reads as absent on its own.
+local function acOf(rec)
+  return type(rec.ac) == "string" and #rec.ac <= Rules.AC_MAX and rec.ac or ""
+end
+
+-- The counter at key, or nil.
+function Feats.Count(rec, key)
+  for part in string.gmatch(acOf(rec), "([^;]*);") do
+    local k, v = part:match("^(%l%w)=([0-9a-z]+)$")
+    if k == key then return tonumber(v, 36) end
+  end
+  return nil
+end
+
+local B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+-- Writes n (an integer >= 0) at key in place, or appends it; other well-formed entries are kept verbatim and
+-- malformed parts dropped (f6692). false (ac unchanged) when n is no such finite integer or the result would pass
+-- Rules.AC_MAX.
+function Feats.SetCount(rec, key, n)
+  if type(n) ~= "number" or n < 0 or n ~= floor(n) or n == math.huge then return false end
+  local v = ""
+  repeat
+    local r = n % 36
+    v = B36:sub(r + 1, r + 1) .. v
+    n = floor(n / 36)
+  until n == 0
+  local entry, out, done = key .. "=" .. v .. ";", {}, false
+  for part in string.gmatch(acOf(rec), "([^;]*);") do
+    if not part:match("^%l%w=[0-9a-z]+[0-9a-z,]*$") then -- a malformed part is dropped (f6692)
+    elseif part:match("^(%l%w)=") ~= key then
+      out[#out + 1] = part .. ";"
+    elseif not done then
+      out[#out + 1], done = entry, true
+    end
+  end
+  if not done then out[#out + 1] = entry end
+  local ac = table.concat(out)
+  if #ac > Rules.AC_MAX then return false end
+  rec.ac = ac
+  return true
+end
+
 -- The session's realm offset (seconds), set once per session from ADDON_LOADED; nil is the fallback.
 local offset = Rules.REALM_OFFSET_FALLBACK
 function Feats.SetRealmOffset(seconds)
@@ -105,6 +153,59 @@ function Feats.Earn(rec, id, t)
   if t ~= t or Feats.Has(rec, id) then return false end -- f3581: a NaN time writes nothing
   rec.ea = eaOf(rec) .. Rules.EarnEntry(id, t, offset)
   return true
+end
+
+-- Whether bit i (from 1) of n is set; halves by a constant (no division by a variable).
+local function hasBit(n, i)
+  for _ = 2, i do n = floor(n / 2) end
+  return n % 2 == 1
+end
+
+-- Own rows (S8a): what this client sees of its own character. obs = { money = copper|nil, zone = text|nil,
+-- line = true|nil }. Only G.chars[guid] is touched; cs is set on the first call. Returns the new earns
+-- { { guid, id }, ... } and, second, true when a new capital bit was stored (f6670).
+function Feats.Own(G, guid, now, obs)
+  local out = {}
+  local rec = (G.chars or {})[guid]
+  if not rec or type(now) ~= "number" then return out end
+  obs = obs or {}
+  local function earn(id, t)
+    if Feats.Earn(rec, id, t) then out[#out + 1] = { guid = guid, id = id } end
+  end
+  local cs = Feats.Count(rec, "cs")
+  if not cs then
+    cs = now
+    Feats.SetCount(rec, "cs", now)
+  end
+  if type(obs.money) == "number" then
+    if obs.money >= Rules.COIN then earn("g1", now) end
+    if obs.money >= Rules.PURSE then earn("g2", now) end
+  end
+  local moved = false
+  for i, zone in ipairs(Rules.CAPITALS) do
+    if obs.zone == zone then
+      local cp = Feats.Count(rec, "cp") or 0
+      if not hasBit(cp, i) then
+        cp = cp + 2 ^ (i - 1)
+        moved = Feats.SetCount(rec, "cp", cp)
+      end
+      -- every capital's bit set, whatever higher bits hold (f6671, f6695)
+      local all = true
+      for j = 1, #Rules.CAPITALS do
+        if not hasBit(cp, j) then all = false end
+      end
+      if all then earn("ec", now) end
+    end
+  end
+  -- st against the stored gl, before this line moves it: quiet since cs, the last own line and the stretch start
+  -- (a stretch start that is no number is left out, f6693).
+  local start = Rules.StretchStart(rec)
+  if type(start) ~= "number" then start = 0 end
+  local from = math.max(cs, Feats.Count(rec, "gl") or 0, start)
+  local need = Rules.SILENT_DAYS * DAY
+  if now - from >= need then earn("st", from + need) end
+  if obs.line then Feats.SetCount(rec, "gl", now) end
+  return out, moved
 end
 
 -- Checks ------------------------------------------------------------------------------------------------------------
@@ -583,6 +684,15 @@ local function checkFg(G, now, ctx, earn)
   end
 end
 
+-- Every Capital: "<n> of 3 capitals" from the cp bits.
+local function ecProgress(G, rec, now)
+  local cp, n = Feats.Count(rec, "cp") or 0, 0
+  for i = 1, #Rules.CAPITALS do
+    if hasBit(cp, i) then n = n + 1 end
+  end
+  return n .. " of " .. #Rules.CAPITALS .. " capitals"
+end
+
 -- Definitions (D2) --------------------------------------------------------------------------------------------------
 
 Feats.DEFS = {
@@ -661,6 +771,16 @@ Feats.DEFS = {
   { id = "eh", name = "Early Harvest", desc = "Reach the max level within " .. Rules.EARLY_DAYS .. " days of joining "
     .. "below level " .. Rules.EARLY_JOIN_LEVEL .. ".", cat = "Levelling", points = 25, vis = "guild",
     check = checkEh, leaf = "Pace" },
+  -- Run B part 1 (S8a): the own rows, earned by Feats.Own only.
+  { id = "g1", name = "A Coin for the Company", desc = "Hold 100 gold at once.", cat = "Collecting", points = 10,
+    vis = "you", check = Feats.Never, leaf = "Mounts and gold" },
+  { id = "g2", name = "A Purse for the Company", desc = "Hold 1,000 gold at once.", cat = "Collecting", points = 25,
+    vis = "you", check = Feats.Never, leaf = "Mounts and gold" },
+  { id = "ec", name = "Every Capital", desc = "Enter Orgrimmar, Thunder Bluff and the Undercity.", cat = "Collecting",
+    points = 10, vis = "you", check = Feats.Never, progress = ecProgress, leaf = "Travel" },
+  { id = "st", name = "Strong, Silent Type", desc = "30 days in the Company without a word in guild chat, counted "
+    .. "while Annals runs.", cat = "Odd Jobs", points = 10, vis = "you", check = Feats.Never, leaf = "Odd Jobs",
+    secret = true },
 }
 
 local byId = {}

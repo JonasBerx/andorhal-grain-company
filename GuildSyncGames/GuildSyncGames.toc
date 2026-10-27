@@ -1,0 +1,36 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildSyncGames
+## Notes: Games: WoWdle, a WoW word a day shared with your guild, Harvest, Kodo races, Vendor price, and a game on flights. A GuildSync module.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## IconTexture: Interface\Icons\INV_Misc_Dice_01
+## Dependencies: GuildSync
+## SavedVariables: GuildSyncGamesDB
+
+Words.lua
+Items.lua
+Core.lua
+GrainCore.lua
+VendorCore.lua
+CompanyCore.lua
+Limits.lua
+Module.lua
+Store.lua
+SyncKit.lua
+Sync.lua
+Grain.lua
+Boards.lua
+VendorStore.lua
+VendorSync.lua
+CompanyStore.lua
+CompanySync.lua
+Page.lua
+WoWdle.lua
+Harvest.lua
+Races.lua
+Vendor.lua
+Company.lua
+Flight.lua
+Toast.lua
+Demo.lua
+Facts.lua

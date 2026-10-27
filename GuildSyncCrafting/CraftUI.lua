@@ -1,5 +1,5 @@
--- GuildSync crafting, CraftUI: the Crafting page (tabs Work board, Crafters, Recipes), the Work board with its three
--- lists and row actions, the post form, the alert popup and the Crafting part of the Settings page.
+-- GuildSync crafting, CraftUI: the Crafting page (tabs Work board, Crafters, Recipes, Cooldowns), the Work board with
+-- its three lists and row actions, the post form, the alert popup and the Crafting part of the Settings page.
 -- Frames come only from CraftCompat.CreateFrame and the frames CraftHost hands over; words and rows from CraftView;
 -- board rules from CraftBoard. Posting, claiming, changing and clearing go through CraftSync, read at call time, so
 -- the page still opens (and says so) while CraftSync is not there.
@@ -41,10 +41,12 @@ local HOURS = { 1, 4, 12, 24, 48 }
 local DEFAULT_HOURS = 12
 local QTY_MAX, TIP_MAX = 200, 9999
 
-local TABS = { { key = "board", text = "Work board" }, { key = "crafters", text = "Crafters" }, { key = "recipes", text = "Recipes" } }
+local TABS = { { key = "board", text = "Work board" }, { key = "crafters", text = "Crafters" }, { key = "recipes", text = "Recipes" },
+  { key = "cooldowns", text = "Cooldowns" } }
 local LISTS = { { key = "forYou", text = "For you" }, { key = "all", text = "All open" }, { key = "mine", text = "Mine" } }
--- the game's top tabs (CraftHost.Tabs): the three board lists, then Crafters and Recipes; nil -> TABS + LISTS above
-local TOP_TABS = { LISTS[1], LISTS[2], LISTS[3], TABS[2], TABS[3] }
+-- the game's top tabs (CraftHost.Tabs): the three board lists, then Crafters, Recipes and Cooldowns; nil -> TABS + LISTS
+-- above
+local TOP_TABS = { LISTS[1], LISTS[2], LISTS[3], TABS[2], TABS[3], TABS[4] }
 local IS_LIST = {}
 for _, l in ipairs(LISTS) do IS_LIST[l.key] = true end
 local ACTION_TEXT = { claim = "I'll make it", drop = "Drop", release = "Release", done = "Done", cancel = "Cancel", keep = "Keep" }
@@ -961,6 +963,7 @@ local function buildCrafters(p)
     local hint = label(p, SEARCH_HINT, "GameFontDisableSmall")
     hint:SetPoint("LEFT", cu.search, "RIGHT", 8, 0)
   end
+  if cstate.query ~= "" then cu.search:SetText(cstate.query) end -- a search row's name, set before the page was built
   -- Profession: the game's dropdown with a radio per profession and its count, else the chips (drawProfChips)
   cu.profMenu = CraftHost.Dropdown(p, 190, profMenu)
   -- Online now: the game's checkbox with the count in its label, else today's chip button
@@ -1448,11 +1451,252 @@ local function buildRecipes(p)
   end
 end
 
+-- ---------- cooldowns tab ----------
+-- One group per cooldown (CraftView.CooldownRows): a section header in the hub kit's look (Options_ListExpand, icon,
+-- "<Group> · <Profession>", "n of m ready"), then 24 px rows: class icon, name, Ready, At, Last heard, and Whisper
+-- only on a guildmate online on the roster. The summary and both checkbox counts come from the unfiltered groups;
+-- Ready now / Online now filter the rows and drop a group left empty. Read only: no EditBox, no write, no send.
+-- Everything lives in cd (CraftUI.lua is near LuaJIT's 200-local cap, f6626). The columns are offsets from the row's
+-- right edge, so a resize moves nothing but the panel. Kit.List has one extent (24): a 26 px header sits 1 px over
+-- each neighbour. Without Kit.List the panel shows the summary and the counts, no rows.
+local cd = { ROW = 24, HDR = 26, READY = 130, AT = 96, LAST = 90, BTN = 76, HEAD_Y = 26, LIST_Y = 48, TICK = 60,
+             state = { readyOnly = false, online = false }, boxes = {}, handles = {},
+             COLUMN_TABS = "Interface\\FriendsFrame\\WhoFrame-ColumnTabs",
+             NO_TIME = "The server time is not known yet. The cooldowns show once it is." }
+
+-- A column header in Kit.ColumnHeader's look (not on M.Kit): the WhoFrame column tab in three parts, 19 tall.
+function cd.column(p, text)
+  local h = CraftCompat.CreateFrame("Frame", nil, p)
+  h:SetHeight(19)
+  local function part(l, r)
+    local t = h:CreateTexture(nil, "BACKGROUND")
+    t:SetTexture(cd.COLUMN_TABS)
+    t:SetTexCoord(l, r, 0, 0.59375)
+    return t
+  end
+  local left, right, mid = part(0, 0.078125), part(0.90625, 0.96875), part(0.078125, 0.90625)
+  left:SetSize(5, 19)
+  left:SetPoint("TOPLEFT")
+  right:SetSize(4, 19)
+  right:SetPoint("TOPRIGHT")
+  mid:SetPoint("TOPLEFT", left, "TOPRIGHT")
+  mid:SetPoint("BOTTOMRIGHT", right, "BOTTOMLEFT")
+  label(h, text, "GameFontHighlightSmall"):SetPoint("LEFT", 8, 0)
+  return h
+end
+
+-- Ready now / Online now: the game's checkbox (count in its label), else a chip button; key is cd.state's field.
+function cd.check(p, x, key, text)
+  local b = CraftHost.Checkbox(p, text)
+  if b then
+    b:SetPoint("TOPLEFT", p, "TOPRIGHT", x, 3)
+    b:SetScript("OnClick", function(self)
+      CraftHost.Safe(function() cd.state[key] = self:GetChecked() == true cd.draw() end)
+    end)
+  else
+    b = flatButton(p, text, CHIP_W, CHIP_H)
+    b:SetPoint("TOPLEFT", p, "TOPRIGHT", x, 0)
+    b:SetScript("OnClick", function() CraftHost.Safe(function() cd.state[key] = not cd.state[key] cd.draw() end) end)
+  end
+  b.key, b.text0 = key, text
+  cd.boxes[#cd.boxes + 1] = b
+  return b
+end
+
+-- The hovered row: the name in its class colour, then CooldownTip's lines (when ready, Knows, Heard).
+function cd.tip(frame)
+  local r, tip = frame.cd and frame.cd.row, CraftHost.Tooltip()
+  if not (r and tip) then return end
+  local cr, cg, cb = CraftCompat.ClassColor(r.class)
+  tip:SetOwner(frame, "ANCHOR_RIGHT")
+  tip:SetText(CraftView.SafeText(r.name), cr or 1, cg or 1, cb or 1)
+  for _, line in ipairs(CraftView.CooldownTip(r, date)) do tip:AddLine(line, 1, 1, 1, true) end
+  tip:Show()
+end
+
+-- Kit.List's build: the header (26 tall, over the 24 slot) and the row's cells, all on the box's frame.
+function cd.build(frame)
+  local h = {}
+  h.head = CraftCompat.CreateFrame("Frame", nil, frame)
+  h.head:SetHeight(cd.HDR)
+  h.head:SetPoint("TOPLEFT", 0, 1)
+  h.head:SetPoint("TOPRIGHT", 0, 1)
+  local l, m = h.head:CreateTexture(nil, "BACKGROUND"), h.head:CreateTexture(nil, "BACKGROUND")
+  l:SetSize(12, cd.HDR)
+  l:SetPoint("TOPLEFT")
+  m:SetPoint("TOPLEFT", l, "TOPRIGHT")
+  m:SetPoint("BOTTOMRIGHT")
+  -- Kit.SectionHeader's bar, its mirrored right cap left out (the middle runs to the edge); else a rule under it
+  if not (CraftHost.Atlas(l, "Options_ListExpand_Left") and CraftHost.Atlas(m, "_Options_ListExpand_Middle")) then
+    l:Hide()
+    m:Hide()
+    local rule = CraftHost.Divider(h.head)
+    if rule then
+      rule:SetPoint("BOTTOMLEFT")
+      rule:SetPoint("BOTTOMRIGHT")
+    end
+  end
+  h.icon = h.head:CreateTexture(nil, "ARTWORK")
+  h.icon:SetSize(16, 16)
+  h.icon:SetPoint("TOPLEFT", 21, -5)
+  h.label = label(h.head, "", "GameFontNormal")
+  h.label:SetPoint("TOPLEFT", 43, -8)
+  h.count = label(h.head, "", "GameFontHighlightSmall")
+  h.count:SetPoint("TOPRIGHT", -21, -8)
+  h.class = frame:CreateTexture(nil, "ARTWORK")
+  h.class:SetSize(16, 16)
+  h.class:SetPoint("TOPLEFT", 4, -4)
+  local right = cd.BTN + cd.LAST + cd.AT
+  h.name = label(frame, "", "GameFontHighlight")
+  h.name:SetWordWrap(false)
+  h.name:SetPoint("LEFT", 28, 0)
+  h.name:SetPoint("RIGHT", frame, "RIGHT", -(right + cd.READY) - 2, 0)
+  h.ready = label(frame, "", "GameFontHighlight")
+  h.ready:SetPoint("LEFT", frame, "RIGHT", -(right + cd.READY) + 8, 0)
+  h.at = label(frame, "", "GameFontHighlightSmall")
+  h.at:SetPoint("LEFT", frame, "RIGHT", -right + 8, 0)
+  h.last = label(frame, "", "GameFontHighlightSmall")
+  h.last:SetPoint("LEFT", frame, "RIGHT", -(cd.BTN + cd.LAST) + 8, 0)
+  h.whisper = panelButton(frame, "Whisper", 70)
+  h.whisper:SetHeight(20) -- the mock's 20 in the 24 px row (f6605)
+  h.whisper:SetPoint("LEFT", frame, "RIGHT", -cd.BTN + 2, 0)
+  h.whisper:SetScript("OnClick", function(self) CraftHost.Safe(CraftUI.Whisper, self.name) end)
+  h.hover = CraftHost.ListHover(frame, HIGHLIGHT)
+  frame:SetScript("OnEnter", function(self) CraftHost.Safe(cd.tip, self) end)
+  frame:SetScript("OnLeave", function()
+    CraftHost.Safe(function()
+      local tip = CraftHost.Tooltip()
+      if tip then tip:Hide() end
+    end)
+  end)
+  frame.cd = h
+  cd.handles[#cd.handles + 1] = h
+end
+
+-- Kit.List's init: a { head = group } or { row = row } element; every field set both ways (frames are recycled).
+function cd.init(frame, e)
+  local h = frame.cd
+  if not (h and type(e) == "table") then return end
+  local g, r = e.head, e.row
+  h.row, h.whisper.name = r, nil
+  h.head:SetShown(g ~= nil)
+  if h.hover then h.hover:SetShown(r ~= nil) end -- no hover on a section header (f6603)
+  for _, k in ipairs({ "class", "name", "ready", "at", "last" }) do h[k]:SetShown(r ~= nil) end
+  h.whisper:SetShown(r ~= nil and not r.own and r.online)
+  if g then
+    h.icon:SetTexture(g.icon)
+    h.label:SetText(g.label)
+    h.count:SetText(g.ready .. " of " .. g.total .. " ready")
+    return
+  end
+  if not CraftHost.ClassIcon(h.class, r.class) then h.class:Hide() end
+  local cr, cg, cb = CraftCompat.ClassColor(r.class)
+  h.name:SetText(CraftView.SafeText(r.name) .. (r.tag and (" |cff999999" .. r.tag .. "|r") or "")) -- d377
+  h.name:SetTextColor(cr or 1, cg or 1, cb or 1)
+  h.ready:SetText(r.when)
+  if r.state == "ready" then h.ready:SetTextColor(CraftHost.Green())
+  elseif r.state == "unknown" then h.ready:SetTextColor(GREY, GREY, GREY)
+  else h.ready:SetTextColor(1, 1, 1) end
+  h.at:SetText(r.at)
+  if r.state == "wait" then h.at:SetTextColor(1, 1, 1) else h.at:SetTextColor(GREY, GREY, GREY) end
+  h.last:SetText(r.heard)
+  if r.online then h.last:SetTextColor(CraftHost.Green())
+  elseif r.heardGrey then h.last:SetTextColor(GREY, GREY, GREY)
+  else h.last:SetTextColor(1, 1, 1) end
+  if r.online and not r.own then h.whisper.name = r.name end
+end
+
+function cd.panelBuild(p)
+  cd.panel = p
+  cd.summary = label(p, "", "GameFontHighlightSmall")
+  cd.summary:SetPoint("TOPLEFT", 6, -6)
+  cd.summary:SetTextColor(GREY, GREY, GREY)
+  cd.check(p, -300, "readyOnly", "Ready now")
+  cd.check(p, -160, "online", "Online now")
+  -- Name, Ready, At, Last heard over the list's box (the holder less Kit.List's 16 px bar)
+  local edge = 16 + cd.BTN
+  cd.columns = { cd.column(p, "Name"), cd.column(p, "Ready"), cd.column(p, "At"), cd.column(p, "Last heard") }
+  cd.columns[1]:SetPoint("TOPLEFT", 0, -cd.HEAD_Y)
+  cd.columns[1]:SetPoint("RIGHT", p, "RIGHT", -(edge + cd.LAST + cd.AT + cd.READY), 0)
+  for i, w in ipairs({ cd.READY, cd.AT, cd.LAST }) do
+    local c = cd.columns[i + 1]
+    c:SetPoint("TOPLEFT", cd.columns[i], "TOPRIGHT")
+    c:SetWidth(w)
+  end
+  cd.empty = label(p, "", "GameFontHighlight")
+  cd.empty:SetPoint("TOPLEFT", 6, -6)
+  cd.hint = label(p, CraftView.CD_EMPTY_HINT, "GameFontHighlightSmall")
+  cd.hint:SetPoint("TOPLEFT", 6, -28)
+  cd.hint:SetPoint("RIGHT", p, "RIGHT", -6, 0)
+  cd.hint:SetTextColor(GREY, GREY, GREY)
+  cd.holder = CraftCompat.CreateFrame("Frame", nil, p)
+  cd.holder:SetPoint("TOPLEFT", 0, -cd.LIST_Y)
+  cd.holder:SetPoint("BOTTOMRIGHT", 0, 0)
+  cd.list = CraftHost.List(cd.holder, cd.ROW, cd.build, cd.init)
+end
+
+function cd.draw()
+  if not cd.panel then return end
+  local now, groups = CraftCompat.Now(), {}
+  if now then
+    local v, demo = view(), CraftHost.DemoState() ~= nil
+    local fn = syncFn("Cooldowns")
+    -- in demo no own character: the made-up guild has none of this account's
+    groups = CraftView.CooldownRows({ mine = demo and {} or CraftHost.MyChars(), crafters = v.crafters,
+      roster = v.roster, cooldowns = fn and fn() or {}, me = (not demo) and myKey() or nil, names = names(), fmt = date,
+      own = (not demo) and CraftCompat.DB().cooldowns or nil }, now)
+  end
+  -- f6643: one pending redraw TICK s on keeps "in ..." and newly ready rows current; it dies while the tab is hidden
+  if not cd.ticking then
+    cd.ticking = true
+    CraftHost.After(cd.TICK, function()
+      cd.ticking = false
+      if state.tab ~= "cooldowns" then return end
+      -- rv1: with the window closed nothing draws; dirty makes the hub draw the tab when the window shows again
+      if u.page and u.page:IsVisible() then cd.draw() else state.dirty = true end
+    end)
+  end
+  local summary, ready, online = CraftView.CooldownSummary(groups)
+  local empty = #groups == 0
+  cd.empty:SetText(now and CraftView.CD_EMPTY or cd.NO_TIME)
+  cd.empty:SetShown(empty)
+  cd.hint:SetShown(empty and now ~= nil)
+  cd.summary:SetText((string.gsub(summary, "%d+", "|cffffffff%0|r"))) -- the two counts white in the grey line (f6647)
+  cd.summary:SetShown(not empty)
+  for _, c in ipairs(cd.columns) do c:SetShown(not empty) end
+  local counts = { readyOnly = "Ready now (" .. ready .. ")", online = "Online now (" .. online .. ")" }
+  for _, b in ipairs(cd.boxes) do
+    b:SetShown(not empty)
+    if rawget(b, "label") then -- f6607: a chip fallback has no label (the sim's __index answers every name)
+      b:SetChecked(cd.state[b.key])
+      b.label:SetText(counts[b.key])
+    else
+      markSelected(b, cd.state[b.key])
+      b:SetText(counts[b.key])
+    end
+  end
+  local els = {}
+  for _, g in ipairs(groups) do
+    local head = #els + 1
+    for _, r in ipairs(g.rows) do
+      if (not cd.state.readyOnly or r.state == "ready") and (not cd.state.online or r.online) then
+        if #els < head then els[head] = { head = g } end
+        els[#els + 1] = { row = r }
+      end
+    end
+  end
+  cd.holder:SetShown(not empty)
+  if not cd.list then return end
+  for _, h in ipairs(cd.handles) do h.row, h.whisper.name = nil, nil end -- data only: a frame not shown acts for no one
+  cd.list:SetRows(els, true)
+end
+
 local function draw()
   state.dirty = false
   if state.tab == "board" then drawBoard()
   elseif state.tab == "crafters" then drawCrafters()
-  elseif state.tab == "recipes" then drawRecipes() end
+  elseif state.tab == "recipes" then drawRecipes()
+  elseif state.tab == "cooldowns" then cd.draw() end
 end
 
 local function redraw()
@@ -1535,7 +1779,7 @@ local function showList(key)
   draw()
 end
 
--- A top tab: a board list (the board on that list) or Crafters / Recipes.
+-- A top tab: a board list (the board on that list) or Crafters / Recipes / Cooldowns.
 local function onTop(key)
   if IS_LIST[key] then
     setList(key)
@@ -1885,8 +2129,9 @@ local function buildBoard(p, flat)
   u.form.open = new
 end
 
--- The page: the game's top tabs (For you, All open, Mine, Crafters, Recipes) when CraftHost gives them, else today's
--- flat tabs (Work board, Crafters, Recipes) with the list buttons on the board. The panels sit under the tab row.
+-- The page: the game's top tabs (For you, All open, Mine, Crafters, Recipes, Cooldowns) when CraftHost gives them, else
+-- today's flat tabs (Work board, Crafters, Recipes, Cooldowns) with the list buttons on the board. The panels sit under
+-- the tab row.
 local function build(page)
   u.page = page
   u.panels = {}
@@ -1911,16 +2156,30 @@ local function build(page)
   buildBoard(u.board, flat)
   buildCrafters(u.panels.crafters)
   buildRecipes(u.panels.recipes)
+  cd.panelBuild(u.panels.cooldowns)
   for _, t in ipairs(TABS) do
     if t.key == state.tab then u.panels[t.key]:Show() else u.panels[t.key]:Hide() end
   end
 end
 
--- tab: "board" | "crafters" | "recipes", a board list "forYou" | "all" | "mine", or nil for the tab shown last
-local function onShow(tab)
+-- tab: "board" | "crafters" | "recipes" | "cooldowns", a board list "forYou" | "all" | "mine", or nil for the tab
+-- shown last. focus (a search row's): { query } puts the name in the Crafters search box, { prof, spell } opens that
+-- profession on Recipes with the recipe chosen; both are state, so a page built later shows them too.
+local function onShow(tab, focus)
   if IS_LIST[tab] then
     setList(tab)
     tab = "board"
+  end
+  if type(focus) == "table" then
+    if tab == "crafters" and type(focus.query) == "string" then
+      cstate.prof, cstate.online = nil, false -- no filter hides the crafter asked for (f6641)
+      chipsChanged()
+      cstate.query = focus.query
+      if u.crafters then u.crafters.search:SetText(focus.query) end
+    elseif tab == "recipes" and focus.prof ~= nil and focus.spell ~= nil then
+      rstate.prof, rstate.spell = focus.prof, focus.spell
+      rstate.open[focus.prof] = true
+    end
   end
   showTab(tab or state.tab)
 end
@@ -1935,8 +2194,9 @@ local function relayout(L)
   u.board:ClearAllPoints()
   u.board:SetPoint("TOPLEFT", u.page, "TOPLEFT", B.areaX, -B.areaTop)
   u.board:SetSize(B.areaW, B.areaH)
-  -- the Crafters and Recipes panels on the same area box; their contents from CraftersLayout / RecipesLayout
-  for _, key in ipairs({ "crafters", "recipes" }) do
+  -- the Crafters, Recipes and Cooldowns panels on the same area box; their contents from CraftersLayout /
+  -- RecipesLayout (Cooldowns' columns hang off its right edge)
+  for _, key in ipairs({ "crafters", "recipes", "cooldowns" }) do
     local p = u.panels[key]
     p:ClearAllPoints()
     p:SetPoint("TOPLEFT", u.page, "TOPLEFT", B.areaX, -B.areaTop)
@@ -1966,6 +2226,34 @@ local function isDirty()
   if state.dirty then return true end
   local fn = syncFn("Dirty")
   return fn and fn() and true or false
+end
+
+-- ---------- the hub's search (API 8) ----------
+-- The registered find (CraftHost's thin wrapper) calls this. Read only and cheap: the tabs' id index and names, the
+-- cooldown records through CraftSync; CraftView.SearchIndex runs again only on a new directory or roster, spell
+-- name, cooldown state or demo state (dirVersion carries the demo serial). The item icon is asked only when cached.
+function CraftHost.SearchFind(text)
+  if type(text) ~= "string" then return nil end
+  local nm = names()
+  local cds, cv = syncFn("Cooldowns"), syncFn("CooldownVersion")
+  local key = dirVersion() .. ":" .. tostring(nm.spellVersion) .. ":" .. tostring(cv and cv() or 0)
+  if cstate.searchKey ~= key then
+    cstate.search = CraftView.SearchIndex(crafterIndex(), nm, cds and cds() or {})
+    cstate.searchKey = key
+  end
+  local rows = CraftView.SearchRows(cstate.search, text, CraftCompat.Now())
+  for _, r in ipairs(rows) do
+    if r.key then
+      local focus = { query = r.name }
+      r.open = function() CraftHost.ShowCraft("crafters", focus) end
+    else
+      local name, _, icon = CraftCompat.ItemInfo(r.item)
+      r.icon = name and icon or CraftHost.ProfessionIcon(r.prof)
+      local focus = { prof = r.prof, spell = r.spell }
+      r.open = function() CraftHost.ShowCraft("recipes", focus) end
+    end
+  end
+  return rows
 end
 
 -- /gsync demo on or off: the crafter chips (they cache the favourites) and every tab are drawn again.

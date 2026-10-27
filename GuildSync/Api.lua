@@ -1,4 +1,6 @@
--- GuildSync's public API (API 7 adds the member field, M.RefreshMember, Comm.Person, M.MyCharacters and M.SetLinks; API 6 the kit art; API 5 the pull store, bulk, limit and the menu and book-row kit pieces; API 4 the officers audience; API 3
+-- GuildSync's public API (API 8 adds the search and facts fields, M.Fact, M.FactsChanged and the "facts" hub event;
+-- API 7 the member field, M.RefreshMember, Comm.Person, M.MyCharacters and M.SetLinks; API 6 the kit art; API 5 the
+-- pull store, bulk, limit and the menu and book-row kit pieces; API 4 the officers audience; API 3
 -- M.Kit; API 2 the demo field, M.Demo and the "demo" hub event): the one global,
 -- GuildSync, for module addons in their own folders (`## Dependencies: GuildSync`). Last in the TOC: the global is assigned as this file's last statement, so it exists
 -- only after every hub file has run. Internal code keeps using ns; the global is a chosen subset, never ns itself.
@@ -13,7 +15,7 @@
 
 local ADDON, ns = ...
 
-local API, MIN_API = 7, 1
+local API, MIN_API = 8, 1
 local MAX_NEEDS = 99 -- a needs above this is a mistake, not a future API (math.huge passes the whole-number check)
 local MAX_ID, MAX_TITLE, MAX_NAMES = 12, 32, 5
 -- /gsync words a module id may not take (Core.lua's slash command)
@@ -413,14 +415,9 @@ local function byLevel(a, b)
   return a.key < b.key
 end
 
--- Comm.Person's answer, built new per call: the main first, then level desc; nil off the roster or for a non-string.
-local function personOf(nameOrKey)
-  local S = linksStore()
-  if type(nameOrKey) ~= "string" or not S then return nil end
-  local key = ns.Comm.Wire.Key(nameOrKey)
-  local p = key and S.Person(key)
-  if type(p) ~= "table" then return nil end
-  local lv, chars, unconfirmed = S.Levels(), {}, {}
+-- A store person (keys) as Comm.Person's rows over the roster read lv: the main first, then level desc.
+local function personRows(p, lv)
+  local chars, unconfirmed = {}, {}
   for _, k in ipairs(p.chars) do chars[#chars + 1] = linkRow(lv, k) end
   table.sort(chars, function(a, b)
     if (a.key == p.main) ~= (b.key == p.main) then return a.key == p.main end
@@ -428,6 +425,25 @@ local function personOf(nameOrKey)
   end)
   for _, k in ipairs(p.unconfirmed) do unconfirmed[#unconfirmed + 1] = linkRow(lv, k) end
   return { key = p.key, main = p.main, chars = chars, unconfirmed = unconfirmed }
+end
+
+-- Comm.Person's answer, built new per call; nil off the roster or for a non-string.
+local function personOf(nameOrKey)
+  local S = linksStore()
+  if type(nameOrKey) ~= "string" or not S then return nil end
+  local key = ns.Comm.Wire.Key(nameOrKey)
+  local p = key and S.Person(key)
+  if type(p) ~= "table" then return nil end
+  return personRows(p, S.Levels())
+end
+
+-- Hub-only (Search.lua, f6242): { [key] = Comm.Person's answer } for a list of keys, the store read once for all.
+function ns.PeopleOf(keyList)
+  local S, out = linksStore(), {}
+  if not S then return out end
+  local persons, lv = S.Persons(keyList)
+  for key, p in pairs(persons) do out[key] = personRows(p, lv) end
+  return out
 end
 
 -- M.MyCharacters' answer: this account's characters in this guild (last full read), level order, and the pick.
@@ -446,6 +462,79 @@ local function myCharacters()
   for _, row in ipairs(list) do row.main = type(p) == "table" and p.main == row.key end
   table.sort(list, byLevel)
   return list, pick
+end
+
+-- ---------- API 8: module facts ----------
+
+local MAX_FACTS, MAX_FACT_NAME, MAX_FACT_TEXT, MAX_FACT_KEY = 8, 16, 64, 64
+
+-- A fact's answer as the reader gets it: a string (the text rule, ns.PlainLine), a finite number or a boolean;
+-- anything else nil.
+local function plainFact(v)
+  v = ns.Compat.Plain(v)
+  local t = type(v)
+  if t == "string" then return ns.PlainLine(v, MAX_FACT_TEXT) end
+  if t == "number" then
+    if v ~= v or v == math.huge or v == -math.huge then return nil end
+    return v
+  end
+  if t == "boolean" then return v end
+  return nil
+end
+
+-- RegisterModule's facts field -> a copy { [name] = fn }, or nil and the refusal. Walked with the global next over
+-- the raw table (no __index, no __pairs), name before value, and it stops at the 9th name.
+local function copyFacts(title, facts)
+  if type(facts) ~= "table" then return nil, title .. ": facts is not a table" end
+  local copy, n = {}, 0
+  local name, fn = next(facts)
+  while name ~= nil do
+    n = n + 1
+    if n > MAX_FACTS then return nil, title .. ": facts has more than " .. MAX_FACTS .. " names" end
+    if type(name) ~= "string" or #name > MAX_FACT_NAME or not string.find(name, "^[a-z][a-z0-9]*$") then
+      return nil, title .. ": facts has a bad name"
+    end
+    if type(fn) ~= "function" then return nil, title .. ": facts." .. name .. " is not a function" end
+    copy[name] = fn
+    name, fn = next(facts, name)
+  end
+  return copy
+end
+
+-- "facts"(id) for one module, at most once per frame: every fire cause goes through here (LinksStore's pattern).
+local function factsChanged(rec)
+  -- a change signalled while one of its facts runs is covered by that read (f6241: no read-nudge-read loop)
+  if not rec.facts or rec.factsArmed or rec.factsBusy then return end
+  rec.factsArmed = true
+  ns.After(0, function()
+    rec.factsArmed = false
+    ns.Fire("facts", rec.id)
+  end, rec.name)
+end
+
+-- Core runs this at PLAYER_LOGIN: once, a frame later, "facts" for every module that declared facts before login.
+function ns.FactsLogin()
+  ns.After(0, function()
+    for _, rec in ipairs(ns.modules) do
+      if rec.factsEarly then factsChanged(rec) end
+    end
+  end, "Core")
+end
+
+-- M.Fact's answer: module id's fact name run with key under that module's title; nil for a bad call, a throw, a
+-- value that is not plain, or a re-entrant call into the same module while one of its facts runs.
+local function readFact(id, name, key)
+  if type(id) ~= "string" or type(name) ~= "string" then return nil end
+  if key ~= nil and (type(key) ~= "string" or #key > MAX_FACT_KEY) then return nil end
+  local rec
+  for _, m in ipairs(ns.modules) do if m.id == id then rec = m break end end
+  local fn = rec and rec.facts and rec.facts[name]
+  if type(fn) ~= "function" or rec.factsBusy then return nil end
+  rec.factsBusy = true
+  local ok, v = ns.Safe(rec.name, fn, key)
+  rec.factsBusy = false
+  if not ok then return nil end
+  return plainFact(v)
 end
 
 local function newHandle(rec, calls, needs)
@@ -544,6 +633,11 @@ local function newHandle(rec, calls, needs)
       return S.Set(pick, hidden)
     end
   end
+  -- API 8: another module's fact, and "facts" for this module's own (nothing without facts).
+  if needs >= 8 then
+    function M.Fact(factId, name, key) return readFact(factId, name, key) end
+    function M.FactsChanged() factsChanged(rec) end
+  end
   return M
 end
 
@@ -638,6 +732,21 @@ function api.RegisterModule(mod)
     if type(refresh) ~= "function" then refuse(title .. ": member.refresh is not a function") return nil end
     member = { id = id, title = title, build = build, refresh = refresh }
   end
+  -- API 8: facts = { <name> = function(key) return value end }, read once and copied (needs 1-7 ignore it).
+  local facts = needs >= 8 and mod.facts or nil
+  if facts ~= nil then
+    local why
+    facts, why = copyFacts(title, facts)
+    if not facts then refuse(why) return nil end
+    if next(facts) == nil then facts = nil end -- an empty table declares no facts (f6219): no fires, FactsChanged inert
+  end
+  -- API 8: search = { find(text) -> rows }, read once and find raw once (f4352); Search.lua runs it (needs 1-7 ignore it).
+  local search = needs >= 8 and mod.search or nil
+  if search ~= nil then
+    if type(search) ~= "table" then refuse(title .. ": search is not a table") return nil end
+    search = rawget(search, "find")
+    if type(search) ~= "function" then refuse(title .. ": search.find is not a function") return nil end
+  end
 
   local events = stringList(mod.events)
   if not events then refuse(title .. ": events is not a list of event names") return nil end
@@ -658,7 +767,8 @@ function api.RegisterModule(mod)
   end
 
   local rec = { name = title, id = id, status = escapedStatus(mod.status), scan = mod.scan, slash = mod.slash, events = events,
-    onEvent = mod.onEvent, onLogin = mod.onLogin, demo = demo, missingEvents = {} }
+    onEvent = mod.onEvent, onLogin = mod.onLogin, demo = demo, missingEvents = {},
+    facts = facts, factsEarly = facts ~= nil and not ns.LoggedIn(), search = search }
   if mod.selftest or apis or #events > 0 then
     rec.selftest = wrapSelftest(rec, mod.selftest, required, optional)
   end
@@ -668,12 +778,14 @@ function api.RegisterModule(mod)
   local calls = type(ns.Compat.CallList) == "function" and ns.Compat.CallList(all) or nil
 
   ns.RegisterModule(rec)
+  if facts and not rec.factsEarly then factsChanged(rec) end -- a provider that loaded after login
   local page = mod.page
   local W = ns.Window
   if page and type(W.AddModulePage) == "function" then
     local ok = W.AddModulePage({ key = "m:" .. id, title = title, label = title, icon = page.icon,
       build = page.build, refresh = page.refresh })
-    if not ok then say(title .. ": page skipped, the window was already built; /reload shows it.") end
+    if ok then rec.page = "m:" .. id -- Search.lua's Modules rows open it
+    else say(title .. ": page skipped, the window was already built; /reload shows it.") end
   end
   if settings and type(W.AddModuleSettings) == "function" then
     W.AddModuleSettings({ title = title, add = settingsAdder(id, title, settings, needs) })

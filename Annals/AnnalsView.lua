@@ -81,6 +81,7 @@ do
   local onlineSure = atRead .. " Another member's Annals reads at other moments, so theirs can differ."
   local onlineOpen = "Your Annals counts who's online at each read on your own client."
   local zoneOpen = "The roster has to show the zone. Inside some instances it shows none."
+  local goldOpen = "Your Annals checks your gold at login and whenever it changes."
   View.T_DETAILS = {
     sl = { counts = "In the Company. Dated by your join in the guild log, or by the first roster read that listed you.",
       sure = "Dated %day, from the guild log or your Annals' first read of you.",
@@ -175,6 +176,18 @@ do
         .. "joining below level " .. Rules.EARLY_JOIN_LEVEL .. ".",
       sure = "Your Annals saw it on %day, inside " .. Rules.EARLY_DAYS .. " days of your join.",
       open = "Only a join read from the guild log counts." },
+    g1 = { counts = "Hold 100 gold on this character at once.",
+      sure = "Your Annals saw 100 gold on this character on %day.", open = goldOpen },
+    g2 = { counts = "Hold 1,000 gold on this character at once.",
+      sure = "Your Annals saw 1,000 gold on this character on %day.", open = goldOpen },
+    ec = { counts = "Enter Orgrimmar, Thunder Bluff and the Undercity on this character, counted since this version of "
+        .. "Annals first ran on it.",
+      sure = "Your Annals saw you enter the last of the three on %day.",
+      open = "Capitals entered before this version of Annals ran on this character do not count." },
+    st = { counts = "30 days in the Company with no line of yours in guild chat, counted since this version of Annals "
+        .. "first ran on this character.",
+      sure = "Your Annals counted 30 quiet days, ending %day.",
+      open = "A line written while the game locks chat for addons (some boss fights and PvP) is not seen." },
   }
 end
 
@@ -673,14 +686,15 @@ local function alsoList(all, selfGuid, d, id)
   return out
 end
 
--- The card's key, id, def, leaf, t and details (plan D8, D12, Seams); e is the earn, nil for an open row.
+-- The card's key, id, def, leaf, t and details (plan D8, D12, Seams); e is the earn, nil for an open row. "Also" is
+-- built only for show.open's row: nil builds it for every row, false for none (f3516).
 local function addDetails(row, d, e, all, selfGuid)
   local id = e and e.id or d.id
   row.key, row.id, row.def, row.leaf, row.t = id, id, d.id, d.leaf, e and e.t or nil
   local texts = View.T_DETAILS[d.id]
   local sure = e and (string.gsub(texts.sure, "%%(%a+)", { day = day(e.t) })) or texts.open
   local details = { counts = texts.counts, sure = sure }
-  if d.vis == "guild" then
+  if d.vis == "guild" and (show.open == nil or show.open == id) then
     details.also = alsoList(all, selfGuid, d, e and e.id)
     details.alsoHead = e and View.T_ALSO or View.T_ALSO_OPEN
     details.alsoCount = #details.also

@@ -11,6 +11,8 @@
 -- Every button calls the same function the slash command calls (ns.Commands in Core.lua). The words, the rows, the
 -- counts and the sizes come from View.lua; this file only builds frames, through Compat and Kit. Row frames are built
 -- once and reused; a page is drawn only while it is shown.
+-- This file's main chunk is at LuaJIT's 200-local limit (f6288): new top-level state goes into an existing table (for
+-- example `search`, `SRCH` or `MOD`), never a new top-level local.
 
 local ADDON, ns = ...
 local Compat, View, Kit = ns.Compat, ns.View, ns.Kit
@@ -536,8 +538,17 @@ end
 -- ---------- Modules (R7, d407-d409) ----------
 -- The suite's addons (View.SuiteRows) in one Kit.List under four column headers; the hub's row sits on a Kit.Card.
 -- Plain frames only (nothing protected), so it draws in combat. Row cells hang off the row's right edge, as the
--- Roster's, so recycled rows never need placing again; placeModules sizes the header, column headers and list.
-local MOD = { rowH = 52, headerY = 52, listY = 74, sub = { x = 6, y = 32 }, grey = 0.72 }
+-- Roster's, so recycled rows never need placing again; placeModules sizes the column headers and list.
+-- API 8 (d1042): the page holds three tabs, Addons | Guildmates | What's new, placed as the Bank page places Kit.Tabs
+-- (its 32-tall holder at the page's top, in place of the old header bar), and one holder per tab under them. The
+-- Addons pieces sit in their holder; their y offsets below are inside it (each 28 up from the header-bar page).
+local MOD = { rowH = 52, headerY = 24, listY = 46, sub = { x = 6, y = 4 }, grey = 0.72 }
+-- the plan's View.MODULES_TABS, kept here (View.lua is another task's file): the holders start under the tab row;
+-- w = a plain fallback button's width
+local TABS = { holderY = 32, w = 96, entries = {
+  { key = "addons", text = "Addons" }, { key = "mates", text = "Guildmates" }, { key = "news", text = "What's new" },
+} }
+local modulesTab = "addons" -- the tab chosen: Addons the first time, then the last chosen, for this session (f6214)
 do -- the columns' offsets from the row's right edge (a row is SuiteLayout's listW wide at any page width)
   local Z = View.SuiteLayout(0)
   MOD.versionX, MOD.stateX, MOD.matesX = Z.version.x - Z.listW + 8, Z.state.x - Z.listW + 8, Z.mates.x - Z.listW + 8
@@ -616,12 +627,430 @@ local function modulesInitRow(row, r)
   row.count:SetText(tostring(r.count) .. " of " .. tostring(ui and ui.modules and ui.modules.total or 0))
 end
 
+-- ---------- What's new (API 8, d1040, d1041, d1059; mocks wn-1, wn-2) ----------
+-- The login panel and the Modules page's What's new tab draw View.NewsRows as stacked wrapping text in one scroll
+-- child (d1059): a version is a section header, an addon head the Suite.lua icon (16) and its gold name, a line a
+-- bullet "- <text>" with word wrap and no line cap; each piece 2 px under the one above (8 before a group, 12 before a
+-- release), all flush left. The content's height follows the texts. Pieces come from pools, reused on every draw.
+local NEWS = { w = 460, h = 440, title = "What's new", foot = "Open it again any time: Modules, What's new.",
+  sub = "What changed in each release, newest first.", subH = 24, barRoom = 24, textW = 412, headH = 26, headGap = 6,
+  gap = 2, groupGap = 8, sectionGap = 12, iconSize = 16, nameX = 4 }
+
+-- The scroll area on parent, inset by pad (as buildSections): ScrollFrameTemplate with its bar moved into the room
+-- left of the right edge, else the named UIPanelScrollFrameTemplate (its bar in that room), else a plain frame that
+-- clips its children, with its own wheel.
+local function newsScroll(parent, name, pad)
+  local s, scroll = {}, nil
+  if Kit.HasTemplate("ScrollFrameTemplate") then
+    local made, f = pcall(Compat.CreateFrame, "ScrollFrame", nil, parent, "ScrollFrameTemplate")
+    if made and f then
+      scroll = f
+      if type(scroll.ScrollBar) == "table" then
+        scroll.ScrollBar:ClearAllPoints()
+        scroll.ScrollBar:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 6, 0)
+        scroll.ScrollBar:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 6, 0)
+      end
+    end
+  end
+  if not scroll then scroll = Compat.CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate") end
+  if not scroll then
+    scroll = Compat.CreateFrame("Frame", nil, parent)
+    if not scroll then return nil end
+    s.plain = true
+    if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", safely(function(_, delta)
+      s.offset = math.min(s.range or 0, math.max(0, (s.offset or 0) - delta * ROW_H))
+      s.content:ClearAllPoints()
+      s.content:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, s.offset)
+    end))
+  end
+  scroll:SetPoint("TOPLEFT", pad, -pad)
+  scroll:SetPoint("BOTTOMRIGHT", -NEWS.barRoom, pad)
+  s.scroll = scroll
+  return s
+end
+
+-- Lays rows out in s.content from the top, reusing s.pools; hides what this draw does not use. Texts come escaped
+-- from View.NewsRows.
+local function newsLayout(s, rows)
+  local content, pools = s.content, s.pools
+  local w = s.scroll:GetWidth()
+  w = (type(w) == "number" and w > 0) and w or NEWS.textW
+  content:SetWidth(w)
+  local used = { head = 0, group = 0, line = 0 }
+  local function take(kind, make)
+    used[kind] = used[kind] + 1
+    local p = pools[kind][used[kind]]
+    if not p then
+      p = make()
+      pools[kind][used[kind]] = p
+    end
+    return p
+  end
+  local function place(piece, y, wide)
+    piece:ClearAllPoints()
+    piece:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
+    if wide then piece:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -y) end
+    piece:Show()
+  end
+  local y, prev = 0, nil
+  for _, r in ipairs(rows) do
+    if r.kind == "version" then
+      if prev then y = y + NEWS.sectionGap end
+      local h = take("head", function() -- without the section header, its gold label alone
+        local f = Kit.SectionHeader(content, 300, "")
+        if f then return { frame = f, text = f.label } end
+        local l = label(content, "", "GameFontNormal")
+        return { frame = l, text = l }
+      end)
+      h.text:SetText(r.text)
+      place(h.frame, y, true)
+      y = y + NEWS.headH + NEWS.headGap
+    elseif r.kind == "addon" then
+      if prev == "line" then y = y + NEWS.groupGap end
+      local g = take("group", function()
+        local t = icon(content, NEWS.iconSize)
+        local n = label(content, "", "GameFontNormal")
+        n:SetPoint("LEFT", t, "RIGHT", NEWS.nameX, 0)
+        return { icon = t, name = n }
+      end)
+      if r.icon then g.icon:SetTexture(r.icon) end
+      place(g.icon, y)
+      g.icon:SetShown(r.icon ~= nil)
+      g.name:SetText(r.text)
+      g.name:Show()
+      y = y + NEWS.iconSize + NEWS.gap
+    elseif r.kind == "line" then
+      local f = take("line", function()
+        local l = label(content, "", "GameFontHighlight")
+        l:SetJustifyV("TOP")
+        l:SetWordWrap(true)
+        return l
+      end)
+      f:SetWidth(w)
+      f:SetText("- " .. r.text)
+      place(f, y)
+      y = y + f:GetStringHeight() + NEWS.gap
+    end
+    prev = r.kind
+  end
+  for kind, list in pairs(pools) do
+    for i = used[kind] + 1, #list do
+      local p = list[i]
+      if kind == "group" then
+        p.icon:Hide()
+        p.name:Hide()
+      elseif kind == "head" then
+        p.frame:Hide()
+      else
+        p:Hide()
+      end
+    end
+  end
+  content:SetHeight(math.max(y, 1))
+  if s.plain then
+    s.range = math.max(0, y - (tonumber(s.scroll:GetHeight()) or 0))
+    s.offset = math.min(s.offset or 0, s.range)
+    content:ClearAllPoints()
+    content:SetPoint("TOPLEFT", s.scroll, "TOPLEFT", 0, s.offset)
+  else
+    s.scroll:UpdateScrollChildRect()
+  end
+end
+
+-- The What's new text on parent: { SetRows = function(self, rows) }, as the lists it replaced. A resize lays the
+-- last rows out again at the new width. Throws on a missing piece.
+local function newsStack(parent, name, pad)
+  local s = newsScroll(parent, name, pad)
+  if not s then error("What's new: no scroll area") end
+  local content = Compat.CreateFrame("Frame", nil, s.scroll)
+  if not content then error("What's new: no content frame") end
+  content:SetPoint("TOPLEFT", s.scroll, "TOPLEFT", 0, 0)
+  content:SetSize(NEWS.textW, 1)
+  if not s.plain then s.scroll:SetScrollChild(content) end
+  s.content, s.pools = content, { head = {}, group = {}, line = {} }
+  function s.SetRows(_, rows)
+    s.rows = rows
+    newsLayout(s, rows)
+  end
+  s.scroll:HookScript("OnSizeChanged", safely(function() if s.rows then newsLayout(s, s.rows) end end))
+  return s
+end
+
+-- A list filling parent: Kit.List, else frameType rows stacked on parent from top, at most spec.cap, then one line
+-- in View.MoreText's wording (f6208, d1055).
+local function stackedList(parent, spec, top, frameType, buildRow, initRow)
+  local list = Kit.List(parent, spec.rowH, buildRow, initRow)
+  if list then return list end
+  local pool = {}
+  local more = label(parent, "", "GameFontHighlightSmall")
+  more:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  list = {}
+  function list.SetRows(_, rows)
+    local n = math.min(#rows, spec.cap)
+    for i = 1, n do
+      local row = pool[i]
+      if not row then
+        row = Compat.CreateFrame(frameType, nil, parent)
+        if not row then return end
+        row:SetHeight(spec.rowH)
+        row:SetPoint("TOPLEFT", 0, -top - (i - 1) * spec.rowH)
+        row:SetPoint("TOPRIGHT", 0, -top - (i - 1) * spec.rowH)
+        buildRow(row)
+        pool[i] = row
+      end
+      initRow(row, rows[i])
+      row:Show()
+    end
+    for i = n + 1, #pool do pool[i]:Hide() end
+    more:ClearAllPoints()
+    more:SetPoint("TOPLEFT", 12, -top - n * spec.rowH - 4)
+    more:SetText(View.MoreText(#rows - n))
+    more:SetShown(#rows > n)
+  end
+  return list
+end
+
+-- A list row's group header: row.head (Kit.SectionHeader, f6262: the 26-px header and its 26-px art shrunk to fit a
+-- rowH row, the label centred on it), and row.headText for a client without the section header art.
+local headRow = {} -- one local for both (the main chunk is at LuaJIT's 200-local cap)
+function headRow.build(row, rowH)
+  row.head = Kit.SectionHeader(row, 300, "")
+  if row.head then
+    local h = rowH - 2
+    row.head:SetHeight(h)
+    for _, t in ipairs({ row.head:GetRegions() }) do
+      if t ~= row.head.label and t:GetHeight() == 26 then t:SetHeight(h) end
+    end
+    row.head.label:ClearAllPoints()
+    row.head.label:SetPoint("LEFT", 21, 0)
+    row.head:SetPoint("TOPLEFT", 0, -1)
+    row.head:SetPoint("TOPRIGHT", 0, -1)
+  end
+  row.headText = label(row, "", "GameFontNormal")
+  row.headText:SetPoint("TOPLEFT", 8, -5)
+end
+
+-- Shows text on the header built by headRow.build, or hides it when text is nil (set both ways: frames are recycled).
+function headRow.set(row, text)
+  if row.head then
+    row.head.label:SetText(text or "")
+    row.head:SetShown(text ~= nil)
+  end
+  row.headText:SetText((text and not row.head) and text or "")
+  row.headText:SetShown(text ~= nil and not row.head)
+end
+
+-- ---------- Guildmates (API 8, f6207-f6209, d1047, d1049; mock tr-1) ----------
+-- Rows over View.TrackerRows: a header row is a section header, a member row the class icon, name in class colour,
+-- version (orange when older, "dev" grey), one icon per suite module (lit when advertised) and last heard. The column
+-- offsets are from the row's right edge: Version 80, Modules 152, Last heard 90 wide; Name takes the rest.
+local TRACK = { rowH = 22, cap = 60, headerY = 24, listY = 46, columns = { "Name", "Version", "Modules", "Last heard" },
+  x = { -322, -242, -90 }, w = { 80, 152, 90 }, iconStep = 20, you = " |cffb8b8b8(you)|r" }
+
+local function trackerBuildRow(row)
+  headRow.build(row, TRACK.rowH)
+  row.cls = { icon = icon(row, 16) }
+  row.cls.icon:SetPoint("TOPLEFT", 6, -3)
+  row.name = label(row, "", "GameFontHighlightSmall")
+  row.name:SetPoint("TOPLEFT", 28, -5)
+  row.name:SetPoint("TOPRIGHT", row, "TOPRIGHT", TRACK.x[1] - 4, -5)
+  row.name:SetWordWrap(false)
+  row.version = label(row, "", "GameFontHighlightSmall")
+  row.version:SetPoint("TOPLEFT", row, "TOPRIGHT", TRACK.x[1] + 8, -5)
+  row.mods = {}
+  for _, s in ipairs(type(ns.SUITE) == "table" and ns.SUITE or {}) do
+    if type(s) == "table" and not s.hub then
+      local t = icon(row, 16)
+      t:SetPoint("TOPLEFT", row, "TOPRIGHT", TRACK.x[2] + 8 + #row.mods * TRACK.iconStep, -3)
+      t:SetTexture(s.icon)
+      row.mods[#row.mods + 1] = { id = s.id, tex = t }
+    end
+  end
+  row.heard = label(row, "", "GameFontHighlightSmall")
+  row.heard:SetPoint("TOPLEFT", row, "TOPRIGHT", TRACK.x[3] + 8, -5)
+  Kit.ListHover(row)
+  withTooltip(row, function(self) -- running rows only: none on header or No addon heard rows (Revision 3)
+    local r = self.data
+    local t = type(r) == "table" and r.kind == "member" and View.TrackerTooltip(r.entry, ns.SUITE, Compat.ServerTime())
+    if not t then return nil end
+    local lines = { t.header }
+    for _, l in ipairs(t.lines) do lines[#lines + 1] = l end
+    return lines
+  end)
+end
+
+-- Every piece is set both ways (frames are recycled across header and member rows). Texts come escaped from View.
+local function trackerInitRow(row, r)
+  row.data = r
+  local member = r.kind == "member"
+  headRow.set(row, r.kind == "header" and r.text or nil)
+  row.cls.icon:SetShown(member and r.class ~= nil)
+  if member and r.class then setClassIcon(row.cls, r.class) end
+  row.name:SetText(member and (r.name .. (r.you and TRACK.you or "")) or "")
+  setNameColor(row.name, member and r.class or nil)
+  row.version:SetText(member and r.version or "")
+  local c = r.old and View.TRACKER_OLD or (r.dev and { MOD.grey, MOD.grey, MOD.grey }) or { 1, 1, 1 }
+  row.version:SetTextColor(c[1], c[2], c[3])
+  local lit = {}
+  for _, id in ipairs(member and type(r.mods) == "table" and r.mods or {}) do lit[id] = true end
+  for _, m in ipairs(row.mods) do
+    m.tex:SetShown(member)
+    if m.tex.SetDesaturated then m.tex:SetDesaturated(not lit[m.id]) end
+    m.tex:SetAlpha(lit[m.id] and 1 or 0.25)
+  end
+  row.heard:SetText(member and r.heard or "")
+  local g = r.heardGrey and MOD.grey or 1
+  row.heard:SetTextColor(g, g, g)
+end
+
+-- The Guildmates list; its stacked fallback starts at TRACK.listY and uses Buttons (hover and tooltip).
+local function trackerList(parent)
+  return stackedList(parent, TRACK, TRACK.listY, "Button", trackerBuildRow, trackerInitRow)
+end
+
+-- members, versions, opts, roster for the tab and the Addons tab's counts: in demo the DemoGuild's members and
+-- made-up adverts (nothing real read); else the roster and one merged map, Versions() plus Version.Mine() under the
+-- own key (f6209).
+local function trackerData(now)
+  local C, members = ns.Comm, {}
+  local own = ns.VERSION ~= Compat.DEV_VERSION and ns.VERSION or nil
+  if demoOn() then
+    local guild = source()
+    local key = C.Wire.Key
+    for _, mm in pairs(type(guild) == "table" and type(guild.members) == "table" and guild.members or {}) do
+      local k = key(mm.name)
+      if k then members[#members + 1] = { key = k, name = mm.name, class = mm.class } end
+    end
+    return members, ns.DemoGuild.SuiteVersions(guild, now, key), { own = own }, nil
+  end
+  local rows = C.Roster()
+  for k, r in pairs(rows) do members[#members + 1] = { key = k, name = r.name, class = r.class } end
+  local versions, mine = C.Version.Versions(), C.Version.Mine()
+  local ownKey = C.Wire.Key(mine.name)
+  if ownKey then versions[ownKey] = mine end
+  return members, versions, { own = own, isOfficer = C.IsOfficer, ownKey = ownKey }, rows
+end
+
+local function drawMates(m, members, versions, opts, now)
+  local rows, summary, older = View.TrackerRows(members, versions, now, opts)
+  m.mates.summary:SetText(View.TrackerSummary(summary, older))
+  m.mates.list:SetRows(rows, true)
+end
+
+local newsPanel
+
+-- The login panel (wn-1): a Kit.Dialog with the list in an inset, the foot line and Close. Throws on a missing piece.
+local function buildNewsPanel()
+  local d = Kit.Dialog("GuildSyncWhatsNew", NEWS.w, NEWS.h)
+  if not d then error("What's new: no dialog") end
+  d.title:SetText(NEWS.title)
+  local inset = Kit.Inset(d)
+  if not inset then error("What's new: no inset") end
+  inset:SetPoint("TOPLEFT", 8, -28)
+  inset:SetPoint("BOTTOMRIGHT", -8, 44)
+  d.list = newsStack(inset, "GuildSyncWhatsNewScroll", 8)
+  d.foot = label(d, NEWS.foot, "GameFontHighlightSmall")
+  d.foot:SetPoint("BOTTOMLEFT", 12, 16)
+  d.foot:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  d.close = button(d, "Close", -12, 12, function() d:Hide() end, 96, "BOTTOMRIGHT") -- closing stores nothing
+  if not d.close then error("What's new: no Close button") end
+  return d
+end
+
+-- Shows these sections (View.NewsSections, login form) in the panel. store: write the newest version shown to
+-- GuildSyncDB3.settings.seenVersion, only once the panel reads shown (store-on-show, d1041); a throw stores nothing.
+function Window.ShowNews(sections, store)
+  if not newsPanel then newsPanel = buildNewsPanel() end
+  newsPanel.list:SetRows(View.NewsRows(sections))
+  newsPanel:Show()
+  if store and newsPanel:IsShown() and sections[1] then ns.DB().settings.seenVersion = sections[1].version end
+end
+
+-- The login check, View.NEWS_DELAY s after login and again every NEWS_DELAY s while in combat (720 tries at most,
+-- then not this session). Nothing for this client: the newest eligible version is stored silently. Demo never stores.
+local NEWS_TRIES = 720
+local function newsCheck(tries)
+  if Compat.InCombat() then
+    if tries < NEWS_TRIES then ns.After(View.NEWS_DELAY, function() newsCheck(tries + 1) end, "Window") end
+    return
+  end
+  local seen = ns.DB().settings.seenVersion
+  local loaded = function(f) return (Compat.AddOn(f) or {}).loaded end
+  local sections = View.NewsSections(ns.CHANGELOG, seen, ns.VERSION, loaded, { login = true, max = View.NEWS_MAX })
+  if #sections > 0 then return Window.ShowNews(sections, not demoOn()) end
+  -- the newest eligible section, every group counted as loaded
+  local newest = View.NewsSections(ns.CHANGELOG, seen, ns.VERSION, function() return true end, { login = true, max = 1 })[1]
+  if newest and not demoOn() then ns.DB().settings.seenVersion = newest.version end
+end
+
+-- Shows the chosen tab's holder, hides the others and marks its tab (Kit.Tabs starts with every tab unselected).
+local function showModulesTab(m)
+  for _, e in ipairs(TABS.entries) do m.holders[e.key]:SetShown(e.key == modulesTab) end
+  if m.tabs then
+    m.tabs:Select(modulesTab)
+  else
+    for _, e in ipairs(TABS.entries) do markSelected(m.buttons[e.key], e.key == modulesTab) end
+  end
+end
+
+-- The whole changelog, every release and every addon group (View.NewsSections without login). Never stores.
+local function drawNews(m)
+  m.news:SetRows(View.NewsRows(View.NewsSections(ns.CHANGELOG)), true)
+end
+
+local drawModules
+
+local function chooseModulesTab(key)
+  modulesTab = key
+  if ui and ui.modules then showModulesTab(ui.modules) end
+  drawModules()
+end
+
 -- Throws on a missing piece, so the ns.Safe around it records the failure under Window and build() hides the row.
+-- Kit.Tabs is called bare: a throw fails the page; nil (no tab template) gives three plain buttons in the same row.
 local function buildModulesPage(p, u)
-  local m = { page = p, headers = {} }
-  m.header = Kit.HeaderBar(p, "Modules", 1)
-  if not m.header then error("Modules: no header bar") end
-  m.header:SetPoint("TOPLEFT", 0, 0)
+  local m = { page = p, headers = {}, holders = {} }
+  m.tabs = Kit.Tabs(p, TABS.entries, function(key) ns.Safe("Window", chooseModulesTab, key) end)
+  if not m.tabs then
+    m.buttons = {}
+    for i, e in ipairs(TABS.entries) do
+      local key, b = e.key, flatButton(p, TABS.w, 22)
+      if not b then error("Modules: no tab button") end
+      b:SetPoint("TOPLEFT", 4 + (i - 1) * (TABS.w + 2), -4)
+      b:SetText(e.text)
+      b:SetScript("OnClick", function() ns.Safe("Window", chooseModulesTab, key) end)
+      m.buttons[key] = b
+    end
+  end
+  for _, e in ipairs(TABS.entries) do
+    local holder = Compat.CreateFrame("Frame", nil, p)
+    if not holder then error("Modules: no tab holder") end
+    holder:SetPoint("TOPLEFT", 0, -TABS.holderY)
+    holder:SetPoint("BOTTOMRIGHT", 0, 0)
+    holder:Hide()
+    m.holders[e.key] = holder
+  end
+  local mt = { headers = {} } -- the Guildmates tab: summary line, column headers, the list
+  mt.summary = label(m.holders.mates, "", "GameFontHighlightSmall")
+  mt.summary:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
+  mt.summary:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  for i, text in ipairs(TRACK.columns) do
+    mt.headers[i] = Kit.ColumnHeader(m.holders.mates, text)
+    if not mt.headers[i] then error("Modules: no column header") end
+  end
+  mt.list = trackerList(m.holders.mates)
+  m.mates = mt
+  m.newsSub = label(m.holders.news, NEWS.sub, "GameFontHighlightSmall") -- mock wn-2's grey line under the tabs
+  m.newsSub:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
+  m.newsSub:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  local newsBody = Compat.CreateFrame("Frame", nil, m.holders.news)
+  if not newsBody then error("Modules: no news holder") end
+  newsBody:SetPoint("TOPLEFT", 0, -NEWS.subH)
+  newsBody:SetPoint("BOTTOMRIGHT", 0, 0)
+  m.news = newsStack(newsBody, "GuildSyncNewsTabScroll", 0)
+  p = m.holders.addons -- the Addons pieces below live in their holder
   m.sub = label(p, View.SUITE_SUBLINE, "GameFontHighlightSmall")
   m.sub:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
   m.sub:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
@@ -659,19 +1088,35 @@ local function buildModulesPage(p, u)
       for i = #rows + 1, #pool do pool[i]:Hide() end
     end
   end
+  showModulesTab(m)
   u.modules = m
 end
 
--- Sizes the header, column headers and list for the page box L (View.WindowLayout). Makes no frame.
+-- Sizes the column headers and list for the page box L (View.WindowLayout). Makes no frame.
 local function placeModules(m, L)
   local S = View.SuiteLayout(L.contentW)
-  m.header:SetWidth(L.contentW)
   m.sub:SetWidth(L.contentW - 2 * MOD.sub.x) -- follows the page width (f3403)
   for i, key in ipairs({ "name", "version", "state", "mates" }) do
     local h = m.headers[i]
     h:ClearAllPoints()
     h:SetPoint("TOPLEFT", S[key].x, -MOD.headerY)
     h:SetWidth(S[key].w)
+  end
+  local mt = m.mates -- Guildmates columns: Name takes what the three right columns leave
+  mt.summary:SetWidth(L.contentW - 2 * MOD.sub.x)
+  for i, h in ipairs(mt.headers) do
+    local x = i == 1 and 0 or S.listW + TRACK.x[i - 1]
+    h:ClearAllPoints()
+    h:SetPoint("TOPLEFT", x, -TRACK.headerY)
+    h:SetWidth(i == 1 and S.listW + TRACK.x[1] or TRACK.w[i - 1])
+  end
+  if mt.list.box then
+    mt.list.box:ClearAllPoints()
+    mt.list.box:SetPoint("TOPLEFT", 0, -TRACK.listY)
+    mt.list.box:SetPoint("BOTTOMRIGHT", S.listW - L.contentW, 0)
+    mt.list.bar:ClearAllPoints()
+    mt.list.bar:SetPoint("TOPLEFT", mt.list.box, "TOPRIGHT", S.barX - S.listW, 0)
+    mt.list.bar:SetPoint("BOTTOMLEFT", mt.list.box, "BOTTOMRIGHT", S.barX - S.listW, 0)
   end
   if not m.list.box then return end -- the stacked fallback is anchored once, in buildModulesPage
   m.list.box:ClearAllPoints()
@@ -682,20 +1127,29 @@ local function placeModules(m, L)
   m.list.bar:SetPoint("BOTTOMLEFT", m.list.box, "BOTTOMRIGHT", S.barX - S.listW, 0)
 end
 
--- The rows, from this client's addons; Guildmates from the adverts, or in demo only from DemoGuild.SUITE_HEARD (d408).
-local function drawModules()
+-- The chosen tab; the Addons rows, from this client's addons; Guildmates from the adverts, or in demo only from
+-- DemoGuild.SUITE_HEARD (d408). The What's new list draws under its own Safe: a throw hides only its holder.
+function drawModules()
   local m = ui and ui.modules
   if not m then return end
+  showModulesTab(m)
+  if modulesTab == "news" and not ns.Safe("Window", drawNews, m) then m.holders.news:Hide() end
+  local now = Compat.ServerTime()
+  local members, versions, opts, roster
+  local read = ns.Safe("Window", function() members, versions, opts, roster = trackerData(now) end) -- f6220
+  if modulesTab == "mates" and not (read and ns.Safe("Window", drawMates, m, members, versions, opts, now)) then
+    m.holders.mates:Hide()
+  end
   local heard
-  if demoOn() then
+  if not read then
+    heard = { total = 0 } -- the adverts could not be read: the Addons tab still draws, every count 0
+  elseif demoOn() then
     local guild = source()
     local total = type(guild) == "table" and tonumber(guild.count) or 0
     heard = { total = total }
     for id, n in pairs(ns.DemoGuild and ns.DemoGuild.SUITE_HEARD or {}) do heard[id] = math.min(n, total) end
-  elseif ns.Comm and ns.Comm.Version and ns.Comm.Roster then
-    heard = View.SuiteHeard(ns.Comm.Version.Versions(), (ns.Comm.Roster()), Compat.ServerTime())
   else
-    heard = { total = 0 }
+    heard = View.SuiteHeard(versions, roster, now) -- the merged map, own row included (f6209)
   end
   m.total = heard.total
   m.list:SetRows(View.SuiteRows(ns.SUITE, Compat.AddOn, ns.NeedsNewer, heard), true)
@@ -2049,6 +2503,207 @@ function Window.OpenMember(guid)
   end
 end
 
+-- ---------- the search box and the Search page (API 8 landing 2; mocks se-1..se-4, d1053, d1057, d1061) ----------
+-- The box sits in the title band on every page; typing runs ns.Search.Run 0.3 s after the last key, Enter at once. The
+-- Search page (View.PAGES' band entry, no sidebar row) draws View.SearchList over the cached groups: a HeaderBar, one
+-- grey line (the count, or the short / no-results line), then a Kit.List with 22-px rows. Emptying the box returns to
+-- the page before, only while Search shows. Nothing here is saved (f6284).
+local SRCH = { rowH = 22, cap = 60, lineY = 32, listY = 50, iconX = 8, textX = 30, detailGap = 8, grey = MOD.grey,
+  debounce = 0.3, nameShare = 0.6, nameW = 300 } -- nameW: the name's cap while the row has no width yet
+local search = { expanded = {} } -- before, last (the text last run), query (trimmed, as typed), groups, fresh
+local searchClick -- a list row's click, below
+
+local function searchBuildRow(row)
+  headRow.build(row, SRCH.rowH)
+  row.cls = { icon = icon(row, 16) }
+  row.cls.icon:SetPoint("TOPLEFT", SRCH.iconX, -3)
+  row.text = label(row, "", "GameFontHighlight")
+  row.text:SetPoint("TOPLEFT", SRCH.textX, -4)
+  row.text:SetWordWrap(false)
+  row.detail = label(row, "", "GameFontHighlightSmall")
+  row.detail:SetPoint("LEFT", row.text, "RIGHT", SRCH.detailGap, 0)
+  row.detail:SetPoint("RIGHT", row, "RIGHT", -SRCH.detailGap, 0) -- bounded; the client's ellipsis cuts it (f6300)
+  row.detail:SetWordWrap(false)
+  row.detail:SetTextColor(SRCH.grey, SRCH.grey, SRCH.grey)
+  Kit.ListHover(row)
+  row:SetScript("OnClick", safely(function(self) searchClick(self.data) end))
+end
+
+-- Every piece is set both ways (frames are recycled across group, row and more rows, f6280). Texts come escaped
+-- from View.SearchList; nothing is escaped or formatted again here.
+local function searchInitRow(row, r)
+  row.data = r
+  local hit, more = r.kind == "row", r.kind == "more"
+  headRow.set(row, r.kind == "group" and r.text or nil)
+  local t = row.cls.icon
+  if hit and r.icon then
+    row.cls.iconClass = nil
+    t:SetTexture(r.icon)
+    t:SetTexCoord(0, 1, 0, 1) -- a frame that last drew a class atlas keeps its crop across SetTexture (f6287, f6299)
+  elseif hit and r.class then
+    setClassIcon(row.cls, r.class)
+  end
+  t:SetShown(hit and (r.icon ~= nil or r.class ~= nil))
+  row.text:SetFontObject(more and "GameFontNormal" or "GameFontHighlight")
+  row.text:SetText((hit or more) and r.text or "")
+  row.text:SetShown(hit or more)
+  -- the name's width: its measured width, at most nameShare of the row past the text x (f6300); every init re-measures
+  row.text:SetWidth(0)
+  local rw = tonumber(row:GetWidth()) or 0
+  local cap = rw > SRCH.textX and math.floor((rw - SRCH.textX) * SRCH.nameShare) or SRCH.nameW
+  local fs = row.text
+  local sw = tonumber(fs.GetUnboundedStringWidth and fs:GetUnboundedStringWidth() or fs:GetStringWidth()) or cap
+  row.text:SetWidth(math.max(1, math.min(math.ceil(sw), cap)))
+  row.detail:SetText(hit and r.detail or "")
+  row.detail:SetShown(hit and r.detail ~= nil)
+end
+
+local function buildSearchPage(p, u)
+  local s = { page = p, spec = { rowH = SRCH.rowH, cap = SRCH.cap } }
+  s.header = Kit.HeaderBar(p, "Search", 1)
+  if not s.header then error("Search: no header") end
+  s.header:SetPoint("TOPLEFT", 0, 0)
+  s.header:SetPoint("TOPRIGHT", 0, 0)
+  local function greyLine()
+    local l = label(p, "", "GameFontHighlightSmall")
+    l:SetPoint("TOPLEFT", MOD.sub.x, -SRCH.lineY)
+    l:SetTextColor(SRCH.grey, SRCH.grey, SRCH.grey)
+    return l
+  end
+  s.count = greyLine() -- the count line; the short / no-results line on the state screens
+  s.line = greyLine()
+  s.line:Hide()
+  local holder = Compat.CreateFrame("Frame", nil, p)
+  if not holder then error("Search: no list holder") end
+  holder:SetPoint("TOPLEFT", 0, -SRCH.listY)
+  holder:SetPoint("BOTTOMRIGHT", 0, 0)
+  s.list = stackedList(holder, s.spec, 0, "Button", searchBuildRow, searchInitRow)
+  u.searchPage = s
+end
+
+-- Draws the Search page from the cached groups; never runs the search (f6278). A new query starts at the top.
+local function drawSearch()
+  local s = ui and ui.searchPage
+  if not s then return end
+  local keep = not search.fresh
+  search.fresh = false
+  local rows = View.SearchList(search.groups, search.expanded, search.query)
+  local state = rows[1] ~= nil and rows[1].kind == "line" -- the short and no-results screens: no count line (d1061)
+  s.line:SetText(state and rows[1].text or "")
+  s.line:SetShown(state)
+  local n = 0
+  for _, g in ipairs(type(search.groups) == "table" and search.groups or {}) do n = n + (tonumber(g.total) or 0) end
+  s.count:SetText(state and "" or string.format(View.SEARCH_COUNT, n))
+  s.count:SetShown(not state)
+  s.list:SetRows(state and {} or rows, keep)
+  if s.list.box then
+    s.list.box:SetShown(not state)
+    s.list.bar:SetShown(not state)
+  end
+end
+
+-- Runs the search for the box text and shows the Search page. expanded resets on a new query only.
+local function runSearch(text)
+  if not (ui and ui.searchPage and ui.pages.search) then return end
+  if text ~= search.last then search.expanded = {} end
+  -- the echoed query is cleaned and cut like the search query (f6294)
+  search.last, search.query = text, ns.PlainLine(string.gsub(string.gsub(text, "^%s+", ""), "%s+$", ""), View.SEARCH_MAX)
+  search.groups = (ns.Search.Run(text)) -- through the table (a test wraps it); nil when the query is short
+  search.fresh = true
+  local hold = {} -- Enter with this text runs no new search for SRCH.debounce (f6293)
+  search.hold = hold
+  ns.After(SRCH.debounce, function() if search.hold == hold then search.hold = nil end end, "Window")
+  if currentPage ~= "search" then search.before = currentPage end
+  Window.ShowPage("search")
+end
+
+-- A row's go: acts only on a page that was built (f6279); settings or an unknown page does nothing.
+local function goTo(target)
+  local page = type(target) == "table" and target.page
+  if type(page) ~= "string" or not ui then return end
+  if page == "roster" then
+    if not ui.pages.roster then return end
+    if target.guid then return Window.OpenMember(target.guid) end
+    return Window.ShowPage("roster")
+  elseif page == "overview" or page == "char" or page == "modules" then
+    if ui.pages[page] then Window.ShowPage(page) end
+  elseif string.sub(page, 1, 2) == "m:" then
+    if ui.pages[page] then Window.ShowModulePage(page)
+    elseif ui.pages.modules then Window.ShowPage("modules") end
+  end
+end
+
+-- A list row's click (bound element data): a more row expands its group; a hit row runs its open (already wrapped
+-- under its module, Search.lua) or its go.
+function searchClick(r)
+  if type(r) ~= "table" then return end
+  if r.kind == "more" then
+    search.expanded[r.group] = true
+    return drawSearch()
+  end
+  local row = r.kind == "row" and r.row
+  if type(row) ~= "table" then return end
+  if type(row.open) == "function" then return row.open() end
+  if row.go then return goTo(row.go) end
+end
+
+-- The empty-text path owns the return to the page before (Escape, the clear button, deleting the text, the hide).
+local function searchChanged(self)
+  local text = self:GetText() or ""
+  if text == "" then
+    search.last = nil
+    if currentPage == "search" then Window.ShowPage(search.before or View.DEFAULT_PAGE) end
+    return
+  end
+  ns.After(SRCH.debounce, function()
+    if not (frame and frame:IsShown()) then return end -- f6277: the window closed before the debounce ran out
+    -- the same text is skipped only while Search shows; off it, it runs again (f6290, d1065)
+    if (self:GetText() or "") ~= text or (text == search.last and currentPage == "search") then return end
+    runSearch(text)
+  end, "Window")
+end
+
+-- The box on u.chrome: Kit.SearchBox, else an InputBoxTemplate box; u.search = false when neither could be made.
+local function buildSearchBox(u)
+  local S = View.SHELL.search
+  local box = Kit.SearchBox(u.chrome, S.w, View.SEARCH_HINT_BAND)
+  if box then
+    box:HookScript("OnTextChanged", safely(searchChanged)) -- the template's handler (clear button, hint) stays
+  else
+    box = Compat.CreateFrame("EditBox", "GuildSyncSearch", u.chrome, "InputBoxTemplate")
+    if not box then
+      u.search = false
+      return
+    end
+    box:SetSize(S.w, S.h)
+    box:SetScript("OnTextChanged", safely(searchChanged))
+  end
+  box:SetPoint("TOPRIGHT", S.x, S.y)
+  box:SetAutoFocus(false)
+  box:SetScript("OnEscapePressed", function(self)
+    self:SetText("")
+    self:ClearFocus()
+  end)
+  box:SetScript("OnEnterPressed", safely(function(self) -- runs at once, even for the same query past 0.3 s; keeps focus
+    local text = self:GetText() or ""
+    if text ~= "" and not (text == search.last and search.hold) then runSearch(text) end -- a held Enter (f6293)
+  end))
+  box:RegisterEvent("PLAYER_REGEN_DISABLED") -- combat releases the box's focus (f6292); unfocused, a no-op
+  box:SetScript("OnEvent", function(self) self:ClearFocus() end)
+  u.search = box
+end
+
+-- Lays the stacked fallback out again for the new height (the Kit.List stretches through its anchors).
+local function placeSearch(s, L)
+  -- Kit.List: re-run init on the shown rows so each name re-measures its cap at the new width (review x2)
+  if s.list.box then
+    if currentPage == "search" then s.list:Refresh() end
+    return
+  end
+  s.spec.cap = math.max(1, math.floor((L.contentH - SRCH.listY - 20) / SRCH.rowH))
+  if currentPage == "search" then drawSearch() end
+end
+
 -- ---------- size and place ----------
 
 -- Lays every page out for a window of w x h. Cheap: rows stretch through their anchors, so only the headers, the
@@ -2062,6 +2717,7 @@ local function relayout(w, h)
   if ui.modules then placeModules(ui.modules, L) end
   if ui.overview then placeOverview(ui.overview, L) end
   if ui.roster and ui.roster.detail then placeRoster(ui.roster) end
+  if ui.searchPage then placeSearch(ui.searchPage, L) end
   if Window.OnRelayout then ns.Safe("Window", Window.OnRelayout, L) end
 end
 
@@ -2187,13 +2843,14 @@ function Window.UI() return ui end
 -- The rows' x inside the sidebar inset (centred).
 local ROW_X = (View.SHELL.side.w - View.SIDE.rowW) / 2
 
--- A row in the sidebar inset for each hub page but Settings (the gear in the title bar opens it); a page frame for each.
+-- A row in the sidebar inset for each hub page but Settings (the gear in the title bar opens it) and the band's Search
+-- page (the title band's box opens it); a page frame for each.
 local function buildSidebar(f, u)
   local strip = u.sideStrip
   if not strip then return false end
   local n = 0
   for _, page in ipairs(View.PAGES) do
-    if not page.gear then
+    if not page.gear and not page.band then
       n = n + 1
       local b = Window.SideRow(strip, page.label, page.icon, function() ns.Safe("Window", Window.ShowPage, page.key) end)
       if b then
@@ -2256,6 +2913,7 @@ local function buildTitleBar(f, u)
   u.banner:SetPoint("TOPLEFT", S.banner.x, S.banner.y) -- D7: under the title bar, above the page area
   u.banner:SetTextColor(1, 0.5, 0.1)
   u.banner:Hide()
+  buildSearchBox(u) -- a box that cannot be made leaves u.search = false; the title bar carries on (f6270)
 
   local gear = Compat.CreateFrame("Button", nil, u.chrome)
   if not gear then return false end
@@ -2346,6 +3004,13 @@ local function build()
     P.modules = nil
     if u.side.modules then u.side.modules:Hide() end
   end
+  if P.search and not ns.Safe("Window", buildSearchPage, P.search, u) then
+    -- as the Modules page: recorded under Window; the page and the box are hidden, the rest of the window works (f6270)
+    u.searchPage = nil
+    P.search:Hide()
+    P.search = nil
+    if u.search then u.search:Hide() end
+  end
   buildModulePages(f, u)
   buildGrip(f, u)
 
@@ -2355,6 +3020,8 @@ local function build()
     ns.Fire("windowOpened") -- module addons hear it (M.On); a throwing listener is recorded under its module
   end)
   f:Hide()
+  -- the hide only clears the box; its empty-text path takes the Search page back to the page before (f6274)
+  f:HookScript("OnHide", function() if u.search then u.search:SetText("") end end)
   ui = u
   relayout(w, h)
   f:SetScript("OnSizeChanged", function(_, nw, nh) ns.Safe("Window", relayout, nw, nh) end)
@@ -2387,6 +3054,8 @@ function Window.Refresh()
     drawChar()
   elseif currentPage == "modules" then
     ns.Safe("Window", drawModules)
+  elseif currentPage == "search" then
+    ns.Safe("Window", drawSearch) -- the cached groups only; Search.Run runs from typing and Enter (f6278)
   else
     for _, page in ipairs(modulePages) do
       local p = ui.pages[page.key]
@@ -2522,6 +3191,7 @@ function Window.Login()
     })
   end)
   ns.Safe("Window", Window.RegisterOptions) -- its own Safe: a throw above cannot skip it
+  ns.After(View.NEWS_DELAY, function() newsCheck(0) end, "Window") -- What's new, once the login rush is over
 end
 
 -- A glow on the minimap button, held by modules through M.Glow (Crafting: a request this account can make). Made on

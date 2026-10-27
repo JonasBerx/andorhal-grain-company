@@ -40,6 +40,8 @@ local function integer(s)
   return tonumber(s)
 end
 
+local MAX_VERSION_DIGITS = 10 -- a longer version can't be a real date (D86)
+
 -- Decode(text) --> { version, text, targets } | nil, "format" | "cut"
 function Codec.Decode(text)
   if type(text) ~= "string" then return nil, "format" end
@@ -53,6 +55,7 @@ function Codec.Decode(text)
   local body = parts[5]
   if parts[4]:lower() ~= Codec.Checksum(body) then return nil, "cut" end
 
+  if #parts[2] > MAX_VERSION_DIGITS then return nil, "format" end
   local version, count = integer(parts[2]), integer(parts[3])
   if not version or not count then return nil, "format" end
 
