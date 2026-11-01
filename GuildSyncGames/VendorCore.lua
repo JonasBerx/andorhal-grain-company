@@ -1,5 +1,6 @@
 -- GuildSyncGames VendorCore.lua (S12 Task 2): the pure Vendor price core, ns.VendorCore (the daily pairs, the seeded
--- draw, pay, coins, the share text, the record body).
+-- draw, pay, coins, the share text, the record body; S21: the "!f" Flights block and the share name; S22: the "!w"
+-- Who said it block).
 -- Pure: string, table and math only, no globals, no date or time, no math.random. Its own constants, never ns.Core
 -- (f7262). Every division is by a literal or an UPPER_CASE constant; price ratios are cross-multiplied.
 -- Frozen after #1: the sorted index, VC.Seed, VC.Draw and VC.Daily (any change moves every later day).
@@ -16,7 +17,8 @@ local OFFSET = 4194304 -- 2^22: keeps r non-negative for the preview days
 local TRIES = 64
 local RUN = 10
 local MAX_SAY = 255 -- a chat line, the "/g " prefix included
-local MAX_BODY = 80
+local MAX_BODY = 91 -- three blocks and two tags
+local MAX_BLOCK = 29 -- one block at its widest: 6-digit n, score 10, 10 marks, best 999, streak 9999
 local BEST_MAX = 999
 local STREAK_MAX = 9999
 local FIRST_DAY = -13
@@ -194,28 +196,36 @@ end
 local ICON = { ["1"] = "{rt4}", ["0"] = "{rt5}" }
 local PLAIN = { ["1"] = "G", ["0"] = "." }
 
-local function shareLine(label, marks, map)
-  return "Vendor price " .. label .. " " .. rights(marks) .. "/10 " .. (marks:gsub(".", map))
+local function shareLine(label, marks, map, name)
+  return (name or "Vendor price") .. " " .. label .. " " .. rights(marks) .. "/10 " .. (marks:gsub(".", map))
 end
 
 -- The marks as one chat line; icons fall back to plain when the line with its prefix would pass 255 bytes.
-function VC.ShareText(label, marks, icons, prefixLen)
+-- name: the game's name on the line (nil = "Vendor price"; "Flights" for the Flights pool).
+function VC.ShareText(label, marks, icons, prefixLen, name)
   if icons then
-    local text = shareLine(label, marks, ICON)
+    local text = shareLine(label, marks, ICON, name)
     if #text + (prefixLen or 0) <= MAX_SAY then return text end
   end
-  return shareLine(label, marks, PLAIN)
+  return shareLine(label, marks, PLAIN, name)
 end
 
 -- ---------- the wire ----------
+-- One body: the items block, then "!f" and the Flights block when r.f is set (S21, o2150), then "!w" and the Who said
+-- it block when r.w is set (S22). Items-only bodies are unchanged. Each block is n^score^marks^best^streak, 29 bytes at
+-- most; the score is packed from the marks.
 
-function VC.PackBody(r)
+local function packBlock(r)
   local marks = r.marks or ""
   return r.n .. "^" .. rights(marks) .. "^" .. marks .. "^" .. r.best .. "^" .. r.streak
 end
 
-function VC.ParseBody(body, today)
-  if type(body) ~= "string" or type(today) ~= "number" or #body > MAX_BODY then return nil, "not a body" end
+function VC.PackBody(r)
+  return packBlock(r) .. (r.f and ("!f" .. packBlock(r.f)) or "") .. (r.w and ("!w" .. packBlock(r.w)) or "")
+end
+
+local function block(body, today)
+  if #body > MAX_BLOCK then return nil, "not a body" end
   local n, score, marks, best, streak = body:match("^(%-?%d+)%^(%d+)%^([01]*)%^(%d+)%^(%d+)$")
   if not n or #n > 6 then return nil, "not a body" end
   n, score, best, streak = tonumber(n), tonumber(score), tonumber(best), tonumber(streak)
@@ -227,4 +237,25 @@ function VC.ParseBody(body, today)
     return nil, "streak"
   end
   return { n = n, score = score, marks = marks, best = best, streak = streak }
+end
+
+local TAGS = { "f", "w" } -- the tail's blocks, in this order, each at most once: b.f, then b.w
+
+-- MAX_BODY holds for the whole body; the tail after the head is "!f" one block (b.f), then "!w" one block (b.w),
+-- either absent, nothing else.
+function VC.ParseBody(body, today)
+  if type(body) ~= "string" or type(today) ~= "number" or #body > MAX_BODY then return nil, "not a body" end
+  local head, rest = body:match("^([^!]*)(.*)$")
+  local b, why = block(head, today)
+  if not b then return nil, why end
+  for _, tag in ipairs(TAGS) do
+    local blk, more = rest:match("^!" .. tag .. "([^!]*)(.*)$")
+    if blk then
+      local x, xwhy = block(blk, today)
+      if not x then return nil, xwhy end
+      b[tag], rest = x, more
+    end
+  end
+  if rest ~= "" then return nil, "tag" end
+  return b
 end

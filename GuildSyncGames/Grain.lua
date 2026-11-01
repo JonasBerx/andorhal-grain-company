@@ -19,7 +19,7 @@ local M, GC, CC = ns.M, ns.GrainCore, ns.CompanyCore
 local HOUR = 3600
 local FLOOR = GC.FLOOR -- a tick grows only this long after the last growth by server time (f7159)
 local HIST = 8     -- races kept in hist
-local GAMES = { wowdle = true, harvest = true, races = true, vendor = true }
+local GAMES = { wowdle = true, harvest = true, races = true, vendor = true, who = true }
 
 local function fresh(t)
   return { era = (type(t) == "number" and t >= GC.LAUNCH) and "live" or "preview", purse = GC.START_PURSE, standing = 0,

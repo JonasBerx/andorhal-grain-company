@@ -13,9 +13,10 @@ local PREVIEW_DAYS = 14
 local PM = 2147483647 -- Park-Miller modulus
 local INV_M = 1 / 2147483647
 local MAX_SAY = 255 -- a chat line, the "/g " prefix included
-local MAX_BODY = 80 -- a real body is at most 56 bytes (6 + 1 + 5 + 3 carets + 6 rows of 6 + 5 dots)
+local MAX_BODY = 80 -- a real body is at most 58 bytes (6 + 1 + 5 + 3 carets + 6 rows of 6 + 5 dots + "^1")
 
 Core.SEED = 20261104
+Core.HINT_MARK = "*" -- after the tries in a shared line when the clue was shown
 Core.PREVIEW_DAYS = PREVIEW_DAYS
 
 -- ---------- the game ----------
@@ -73,11 +74,11 @@ function Core.Scored(words, answer)
   return rows
 end
 
--- A finished game as PackBody's input; rows are { word, codes }.
-function Core.Result(n, won, rows, streak)
+-- A finished game as PackBody's input; rows are { word, codes }. hint is kept only when it is true.
+function Core.Result(n, won, rows, streak, hint)
   local codes = {}
   for i, r in ipairs(rows) do codes[i] = r.codes end
-  return { n = n, tries = won and #rows or 0, streak = streak, rows = codes }
+  return { n = n, tries = won and #rows or 0, streak = streak, rows = codes, hint = hint == true or nil }
 end
 
 -- The tries as shown: "X" for a loss (0).
@@ -142,23 +143,45 @@ function Core.Order(count, seed)
   return order
 end
 
-function Core.WordFor(n, answers, order)
-  local at = Core.Mod(n - 1, #answers)
+-- Day n's position in answers (the clue rows run parallel to answers, so it indexes them too).
+function Core.IndexFor(n, order)
+  local at = Core.Mod(n - 1, #order)
   if not at then return nil end
-  return answers[order[at + 1]]
+  return order[at + 1]
+end
+
+function Core.WordFor(n, answers, order)
+  local i = Core.IndexFor(n, order)
+  if not i then return nil end
+  return answers[i]
+end
+
+-- A clue row, "category|clue": both parts non-empty, no third part.
+function Core.ParseClue(row)
+  if type(row) ~= "string" then return nil end
+  return row:match("^([^|]+)|([^|]+)$")
+end
+
+-- A practice row, "WORD|category|clue": three non-empty parts.
+function Core.ParsePractice(row)
+  if type(row) ~= "string" then return nil end
+  return row:match("^([^|]+)|([^|]+)|([^|]+)$")
 end
 
 -- ---------- the wire ----------
 
+-- The brief's "0/1" fifth field became "^1" or nothing: an unhinted body stays byte-identical, and "^0" is refused.
 function Core.PackBody(res)
-  return res.n .. "^" .. res.tries .. "^" .. res.streak .. "^" .. table.concat(res.rows, ".")
+  return res.n .. "^" .. res.tries .. "^" .. res.streak .. "^" .. table.concat(res.rows, ".") .. (res.hint and "^1" or "")
 end
 
 local function allGreen(row) return not row:find("[^g]") end
 
 function Core.ParseBody(body, today)
   if type(body) ~= "string" or type(today) ~= "number" or #body > MAX_BODY then return nil, "not a body" end
-  local n, tries, streak, grid = body:match("^(%-?%d+)%^(%d)%^(%d+)%^([gyx%.]+)$")
+  local n, tries, streak, grid = body:match("^(%-?%d+)%^(%d)%^(%d+)%^([gyx%.]+)%^1$")
+  local hint = n and true or nil
+  if not n then n, tries, streak, grid = body:match("^(%-?%d+)%^(%d)%^(%d+)%^([gyx%.]+)$") end
   if not n or #n > 6 or #streak > 5 then return nil, "not a body" end -- N at most 6 characters, streak 5 digits
   n, tries, streak = tonumber(n), tonumber(tries), tonumber(streak)
   if n < today - 1 or n > today + 1 then return nil, "day" end
@@ -177,7 +200,7 @@ function Core.ParseBody(body, today)
   elseif tries ~= #rows or not allGreen(rows[#rows]) then
     return nil, "tries"
   end
-  return { n = n, tries = tries, streak = streak, rows = rows }
+  return { n = n, tries = tries, streak = streak, rows = rows, hint = hint }
 end
 
 -- ---------- sharing ----------
@@ -186,7 +209,7 @@ local ICON = { g = "{rt4}", y = "{rt1}", x = "{rt5}" }
 local PLAIN = { g = "G", y = "Y", x = "." }
 
 local function shareLine(label, res, map)
-  local parts = { "WoWdle " .. label .. " " .. Core.Tries(res.tries) .. "/6" }
+  local parts = { "WoWdle " .. label .. " " .. Core.Tries(res.tries) .. "/6" .. (res.hint and Core.HINT_MARK or "") }
   for _, row in ipairs(res.rows) do parts[#parts + 1] = (row:gsub(".", map)) end
   return table.concat(parts, " ")
 end

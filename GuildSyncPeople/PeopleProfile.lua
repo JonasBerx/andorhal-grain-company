@@ -65,7 +65,7 @@ function ns.BuildCharacters(parent)
   local fill = card:CreateTexture(nil, "BACKGROUND", nil, 1)
   fill:SetAllPoints(card)
   fill:SetColorTexture(0, 0, 0, 0.42)
-  local cv = { chars = {}, hidden = {}, rows = {} }
+  local cv = { chars = {}, hidden = {}, rows = {}, card = card } -- card: PeoplePage.lua moves it on a smaller page
 
   local bar = K.HeaderBar(card, "Your characters", 188)
   if bar then bar:SetPoint("TOPLEFT", card, "TOPLEFT", 6, -8) end
@@ -201,6 +201,7 @@ function ns.BuildProfile(parent)
 
   local bar = K.HeaderBar(parent, headerText(), 726)
   if bar then bar:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, 0) end
+  view.header = bar -- PeoplePage.lua sets its width on a smaller page
   text(parent, "GameFontHighlightSmall", 6, 32, true):SetText("Your profile is shared by all your characters in this guild.")
 
   text(parent, "GameFontNormalSmall", 6, 57):SetText("Note")

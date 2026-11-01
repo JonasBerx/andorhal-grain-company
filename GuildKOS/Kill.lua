@@ -1,0 +1,3 @@
+-- GuildKOS Kill: a guard-line stub (R6 Task A1); its task fills it.
+local _, ns = ...
+ns.Kill = {}

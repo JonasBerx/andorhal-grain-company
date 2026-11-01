@@ -299,10 +299,17 @@ end
 -- number follows its icon's top-left anchor; the own bet's kodo (U.order[i] == U.mineLane, a lane value) moves its
 -- dark backing and gold frame. Only what moves is set here, on every tick; the sizes, the numbers' text and colour,
 -- the mark's shown state and the finish are set once per draw in drawRace.
+-- f8603: while running, a kodo is drawn at v.secs plus the part of a second since the last server second changed
+-- (GetTime, optional); 0 until a change has been seen or without GetTime. Only the kodos get it: the clock text, the
+-- bar, the sub line, the phase and the finish order keep the whole server second.
 local function drawRunners(v)
   local r, k, icon, gap = U.race, U.k, U.icon, U.gap
+  local frac, now = 0, M.Compat.call("GetTime")
+  if U.boundary and type(now) == "number" and type(U.lastSecAt) == "number" then
+    frac = math.max(0, math.min(now - U.lastSecAt, 0.999))
+  end
   for i, lane in ipairs(U.order) do
-    local p = v.mode == "running" and GC.Pos(r, lane, v.secs) or (1 - (i - 1) * 0.035)
+    local p = v.mode == "running" and GC.Pos(r, lane, v.secs + frac) or (1 - (i - 1) * 0.035)
     local x, y = pathAt(p)
     local cx, cy = x * k + (lane - 3.5) * gap, y * k
     centreAt(U.lanes[i].runner, cx, cy, icon, icon)
@@ -525,8 +532,8 @@ local function drawBetting(v, W, H, small)
   for i, b in ipairs(U.stakes) do place(b, U.betBox, 92 + (i - 1) * 48, -(sy + 19)) end
   local n, name = stake(), U.lane and r.field[U.lane].name
   U.betBtn:SetText(name and (n and ("Bet " .. n .. " on " .. name) or ("Bet on " .. name)) or "Pick a kodo")
-  U.betBtn:SetWidth(small and 200 or 156)
-  -- below 420 tall the field column is 300 wide: the bet button takes its own line under the stake
+  U.betBtn:SetWidth(small and 180 or 156)
+  -- below 420 tall the field column is 300 wide: the bet button takes its own line under the stake, Cancel beside it
   local y = small and sy + 45 or sy + 19
   place(U.betBtn, U.betBox, small and 0 or 244, -y)
   local hint
@@ -539,12 +546,24 @@ local function drawBetting(v, W, H, small)
     hint = "5 to 200 grain, one bet a race."
   end
   U.hint:SetText(hint)
-  place(U.hint, U.betBox, 0, -(y + 29))
   U.msg:SetText(U.text or "")
-  place(U.msg, U.betBox, 0, -(y + 45))
   U.cancel:SetShown(mine ~= nil)
-  place(U.cancel, U.betBox, col - 110, -(y + 64))
-  purseAt(LEFT, -(TOP + y + 67), "")
+  if small then
+    -- f8602 (340 tall): the hint wraps in the column under the bet row, the message under it, the purse at the right
+    -- column's foot (as drawRace puts it at H - 26)
+    U.hint:SetWidth(col)
+    place(U.hint, U.betBox, 0, -(y + 23))
+    U.msg:ClearAllPoints()
+    U.msg:SetPoint("TOPLEFT", U.hint, "BOTTOMLEFT", 0, 0)
+    place(U.cancel, U.betBox, col - 110, -y)
+    purseAt(rx, -(H - 26), "")
+  else
+    U.hint:SetWidth(0) -- its own width again (no set width at build)
+    place(U.hint, U.betBox, 0, -(y + 29))
+    place(U.msg, U.betBox, 0, -(y + 45))
+    place(U.cancel, U.betBox, col - 110, -(y + 64))
+    purseAt(LEFT, -(TOP + y + 67), "")
+  end
 
   -- right: Earlier races, then the biggest wins (left out below 420 tall)
   local L = rowLayout(listW)
@@ -583,11 +602,19 @@ local function drawBetting(v, W, H, small)
   drawBoard(U.big, not small, rx, -by, listW, boardRows(boards.biggest, "big"), fits(by, H))
 end
 
+-- f8603: note when the server second changes and the GetTime it was seen at; the first sight is not a change.
+local function seeSecond(v)
+  if not v or v.t == U.lastSec then return end
+  U.boundary = U.lastSec ~= nil
+  U.lastSec, U.lastSecAt = v.t, M.Compat.call("GetTime")
+end
+
 function U.Draw()
   local W, H, small = size()
   U.S = small and SMALL or BIG
   U.acc = 0
   local v = view()
+  seeSecond(v)
   U.v = v
   local mode = v and v.mode
   U.raceBox:SetShown(mode == "running" or mode == "finished")
@@ -615,6 +642,7 @@ end
 -- The track's tick: a phase or race change redraws the page, otherwise only the kodos and the clock move.
 local function tick()
   local v = view()
+  seeSecond(v)
   if not v or v.mode ~= U.mode or v.hour ~= U.hour or v.replay ~= U.replaying then return U.Draw() end
   if v.mode == "running" then drawRunners(v) end
 end

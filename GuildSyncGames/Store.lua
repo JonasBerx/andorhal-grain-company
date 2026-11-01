@@ -1,6 +1,7 @@
 -- GuildSyncGames Store.lua: the saved state, today's game, stats and practice (plan Task 5, Seams).
--- GuildSyncGamesDB is account-wide: { phase, day = { n, rows = { words }, done, won, by }, stats = { era, played, won,
--- cur, best, last, dist = { 6 } }, flight, guilds = { [guildKey] = { records } } }. It is read at call time.
+-- GuildSyncGamesDB is account-wide: { phase, day = { n, rows = { words }, done, won, by, hint }, stats = { era,
+-- played, won, cur, best, last, dist = { 6 } }, flight, guilds = { [guildKey] = { records } } }.
+-- It is read at call time.
 -- The day comes from GetServerTime and the reset phase only (f7068); the phase is the last good one seen, rounded to
 -- 60 s, and UTC midnight only when none was ever seen (f7066). N never goes backwards (f7067).
 
@@ -78,6 +79,33 @@ ns.Day = current -- the computed N (not the kept day, f7067), its label and seco
 
 local function wordFor(n) return Core.WordFor(n, answers, order) end
 
+-- ---------- the hint (S28b Task 2): ns.CLUES (Clues.lua) runs parallel to the answers, read at call time ----------
+
+ns.HINT_PRICE = 20
+
+-- Usable only with one parsable row per answer; the verdict is kept per table.
+local cluesChecked, cluesGood
+local function cluesOk()
+  local c = ns.CLUES
+  if c ~= cluesChecked then
+    cluesChecked, cluesGood = c, type(c) == "table" and #c == #answers
+    if cluesGood then
+      for i = 1, #c do
+        if not Core.ParseClue(c[i]) then cluesGood = false break end
+      end
+    end
+  end
+  return cluesGood
+end
+
+-- Day n's category and clue; nil when the clue rows are not usable.
+local function clueFor(n)
+  if not cluesOk() then return nil end
+  local i = Core.IndexFor(n, order)
+  if not i then return nil end
+  return Core.ParseClue(ns.CLUES[i])
+end
+
 local function newDay(n) return { n = n, rows = {}, done = false, won = false } end
 
 -- Brings db.day up to the current N (an unfinished old day is simply dropped: not played); a lower N keeps db.day.
@@ -115,9 +143,11 @@ function ns.Today()
   if not label then return nil end -- before the previews: no game
   local word = wordFor(day.n)
   if not word then return nil end -- no word list
-  return { n = day.n, label = label, word = word, len = #word, rows = Core.Scored(day.rows, word), done = day.done,
+  local t = { n = day.n, label = label, word = word, len = #word, rows = Core.Scored(day.rows, word), done = day.done,
     won = day.won, by = day.by, fin = day.fin, secsLeft = left, -- secsLeft stays the computed day's: Sync.lua's cutoff
     nextIn = day.n > n and left + (day.n - n) * 86400 or nil } -- a kept day counts to its own end (f7114)
+  if day.hint then t.hint = true; t.category, t.clue = clueFor(day.n) end -- bought: kept after the finish (f16)
+  return t
 end
 
 function ns.Stats()
@@ -172,17 +202,26 @@ end
 -- ---------- practice: in memory only, never saved, counted or published ----------
 
 local P, mode = nil, "daily"
+local pClue -- the drawn word's { category, clue }, kept off P until the hint (nil: none)
 
--- Accepted words that are not answers, so practice never shows a daily word (q1532); built at the first practice.
+-- The Practice.lua rows { word, category, clue } (o2520), never an answer (q1532); with none usable, the old pool of
+-- accepted words that are not answers, { word } with no clue. Built at the first practice.
 local pool
 local function practicePool()
   if pool then return pool end
   local isAnswer = {}
   for _, w in ipairs(answers) do isAnswer[w] = true end
   pool = {}
+  if type(ns.PRACTICE) == "table" then
+    for _, r in ipairs(ns.PRACTICE) do
+      local w, cat, clue = Core.ParsePractice(r)
+      if w and not isAnswer[w] then pool[#pool + 1] = { w, cat, clue } end
+    end
+  end
+  if #pool > 0 then return pool end
   for _, chunk in ipairs(WORDS.accepted) do
     for w in chunk:gmatch("%S+") do
-      if not isAnswer[w] then pool[#pool + 1] = w end
+      if not isAnswer[w] then pool[#pool + 1] = { w } end
     end
   end
   return pool
@@ -191,7 +230,9 @@ end
 function ns.NewPractice()
   local list = practicePool()
   if #list == 0 then return nil end
-  local w = list[math.random(#list)]
+  local e = list[math.random(#list)]
+  local w = e[1]
+  pClue = e[2] and { e[2], e[3] } or nil
   P = { word = w, len = #w, rows = {}, done = false, won = false }
   mode = "practice"
   return P
@@ -212,6 +253,57 @@ function ns.Mode() return mode end
 
 function ns.SetMode(m)
   if m == "daily" or m == "practice" then mode = m end
+end
+
+-- ---------- the hint: state (read only) and the buy ----------
+
+-- Can the hint be bought now? true[, n] | nil, why; n is the daily day it checked (practice answers true alone). Read
+-- only and silent: no spend, no write to the day (not even the day roll or the record; ns.Purse may make the grain table
+-- and start its tick; Demo.lua's ns.Today reads the same way), nothing said. The practice game on show is
+-- checked first (WoWdle.lua's game()); the daily guards follow ns.Guess.
+function ns.HintState()
+  if mode == "practice" and P then
+    if P.done then return nil, "done" end
+    if P.hint then return nil, "bought" end
+    if not pClue then return nil, "noclue" end
+    return true
+  end
+  if M.Demo() then return nil, "demo" end
+  local t = now()
+  if not t then return nil, "clock" end
+  local saved = type(GuildSyncGamesDB) == "table" and GuildSyncGamesDB or {}
+  local p = Core.Phase(t, M.Compat.call("C_DateAndTime.GetSecondsUntilDailyReset")) or saved.phase
+  local n, label = Core.Puzzle(t, p)
+  local day = type(saved.day) == "table" and type(saved.day.n) == "number" and saved.day or nil
+  if day and n > day.n then return nil, "rolled" end -- the next ns.Today() (or BuyHint) moves it
+  if day and day.n > n then n, label = day.n, Core.Label(day.n) end -- a kept day (f7067)
+  if not label or not wordFor(n) then return nil, "none" end
+  if day and day.done then return nil, "done" end
+  if day and day.hint then return nil, "bought" end
+  if not clueFor(n) then return nil, "noclue" end
+  if ns.Purse() < ns.HINT_PRICE then return nil, "short" end
+  return true, n
+end
+
+-- Buys the hint: true | true, "bought" | nil, why (HintState's). Daily costs HINT_PRICE grain and is saved on the
+-- day; practice is free and in memory only (o2520). Only this says the demo line.
+function ns.BuyHint()
+  local can, why = ns.HintState() -- why is the day n checked when can is true (daily)
+  if why == "bought" then return true, "bought" end
+  if why == "demo" then ns.Inert(); return nil, "demo" end
+  if why == "rolled" then sync() end -- as ns.Guess: the roll is done and told once
+  if not can then return nil, why end
+  if mode == "practice" and P then
+    P.hint, P.category, P.clue = true, pClue[1], pClue[2]
+    return true
+  end
+  local d = sync() -- the day HintState read (made when none was kept yet)
+  if not d then return nil, "clock" end
+  if type(why) == "number" and d.day.n ~= why then return nil, "rolled" end -- the reset fell after HintState (sec f1)
+  local paid, err = ns.Spend(ns.HINT_PRICE)
+  if not paid then return nil, err end
+  d.day.hint = true
+  return true
 end
 
 -- ---------- records per guild (for Sync.lua, T6) ----------

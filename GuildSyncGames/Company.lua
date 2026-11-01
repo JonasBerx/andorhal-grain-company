@@ -14,6 +14,7 @@ local M = ns.M
 
 local LEFT, GAP = 8, 12
 local SMALL_BELOW = 420 -- below this height the small layout (co-4)
+local LINE_H = 14 -- one wrapped line of the lottery column, for the cost line's fit check (f8608)
 local BIG = { rw = 348, rh = 26, top = 40, small = false }
 local SMALL = { rw = 268, rh = 23, top = 0, small = true }
 local ROWS = 10 -- 4 store badges + 6 earned project badges at most
@@ -101,6 +102,39 @@ local function textWidth(fs)
   local sw = fs.GetStringWidth and fs:GetStringWidth()
   if type(sw) == "number" then return sw end
   return nil
+end
+
+-- The predicted bottom of chain(items, _, y0): each shown item's height plus its gap. A FontString with a set width
+-- wraps to ceil(text width / width) lines of LINE_H; LINE_H is a little over the game's small fonts, so in the game
+-- this errs toward hiding a few px early; an item marked { f, x, gap, true } never wraps (SetWordWrap(false)). nil
+-- when a shown item cannot be measured (the caller then changes nothing).
+local function columnBottom(items, y0)
+  local y, first = y0, true
+  for _, it in ipairs(items) do
+    local f, gap = it[1], it[3] or 4
+    if f:IsShown() then
+      -- a FontString by its object type; with no type answered, by whether its text is measured
+      local h, kind = nil, f.GetObjectType and f:GetObjectType()
+      local tw = (kind == nil or kind == "FontString") and textWidth(f) or nil
+      if kind == "FontString" or (kind == nil and tw ~= nil) then
+        local set = f:GetWidth()
+        -- NaN or an infinite width is no measure, so the loop below stays bounded
+        if type(tw) ~= "number" or tw ~= tw or tw == math.huge or tw == -math.huge then return nil end
+        -- ceil(tw / set) lines, at least one, counted without a division (games_static: constant divisors only)
+        local lines, rest = 1, tw
+        if not it[4] and type(set) == "number" and set > 0 then
+          while rest > set do rest, lines = rest - set, lines + 1 end
+        end
+        h = lines * LINE_H
+      else
+        h = f:GetHeight()
+        if type(h) ~= "number" then return nil end
+      end
+      y = y + (first and 0 or gap) + h
+      first = false
+    end
+  end
+  return y
 end
 
 -- Whether fs's text is cut: IsTruncated when the client has it, else the measured width over the set width.
@@ -451,8 +485,9 @@ local function drawLottery(B)
   C.status:SetShown(open or not (type(L.drawAt) == "number" and now >= L.drawAt))
   C.pot:SetText("Pot: " .. fmt(L.pot) .. " grain from " .. fmt(L.total) .. (L.total == 1 and " ticket" or " tickets"))
   local mine = {}
-  for i, n in ipairs(L.mine or {}) do mine[i] = num(n) end
-  C.tickets:SetText("Your tickets (" .. #mine .. " of " .. ns.CompanyCore.TICKETS_MAX .. ")"
+  -- the short form at both sizes (f8608): count/max, the numbers plain (no "#", no leading zeros)
+  for i, n in ipairs(L.mine or {}) do mine[i] = string.format("%d", n or 0) end
+  C.tickets:SetText("Your tickets " .. #mine .. "/" .. ns.CompanyCore.TICKETS_MAX
     .. (#mine > 0 and (": " .. table.concat(mine, " ")) or ""))
   C.buy:SetEnabled(open and true or false)
   showMsg(C.lotMsg, "lottery")
@@ -507,11 +542,15 @@ function C.Draw()
   drawGranary(B)
   drawLottery(B)
   local g = B.small and 4 or 6
-  chain({ { C.granaryHead, 0, 0 }, { C.projText, 22, g }, { C.reward, 0, 2 }, { C.bar, 0, g },
-    { C.gave, 0, g }, { C.built, 0, 4 }, { C.done, 0, g },
+  local items = { { C.granaryHead, 0, 0 }, { C.projText, 22, g }, { C.reward, 0, 2 }, { C.bar, 0, g },
+    { C.gave, 0, g, true }, { C.built, 0, 4 }, { C.done, 0, g },
     { C.give[1], 0, g }, { C.granaryMsg, 0, g }, { C.lotHead, 0, B.small and 4 or 10 }, { C.sched, 0, 6 },
     { C.status, 0, 4 }, { C.pot, 0, 4 }, { C.tickets, 0, 4 }, { C.buy, 0, g }, { C.lotMsg, 0, g }, { C.wait, 0, g },
-    { C.lastHead, 0, g }, { C.last1, 0, 4 }, { C.won, 0, 4 }, { C.last2, 0, 4 }, { C.cost, 0, g } }, x0, B.top)
+    { C.lastHead, 0, g }, { C.last1, 0, 4 }, { C.won, 0, 4 }, { C.last2, 0, 4 }, { C.cost, 0, g } }
+  -- the grey cost line shows only when it ends inside the body (f8608, d1883); it is last, so hiding it moves nothing
+  local b = columnBottom(items, B.top)
+  if b and b > H then C.cost:Hide() end
+  chain(items, x0, B.top)
 end
 
 -- ---------- actions ----------

@@ -224,7 +224,7 @@ local function makeCard(parent)
   card.hit:EnableMouse(true)
   card.hit:SetScript("OnEnter", function(self)
     CraftHost.Safe(function()
-      local text = card.line:GetText()
+      local text = (card.hitText or card.line):GetText()
       local tip = CraftHost.Tooltip()
       if not tip or type(text) ~= "string" or text == "" then return end
       tip:SetOwner(self, "ANCHOR_TOP")
@@ -305,11 +305,18 @@ local function fillCard(card, req, now, ctx)
   if line and live and r.claim ~= "" then by = by .. DOT .. r.claim end
   local code = classCode(ctx.roster, req.by)
   if code then by = code .. r.who .. "|r" .. string.sub(by, #r.who + 1) end
+  -- f8612 (o2456): with three buttons the slot has no room; the claim leads the by-line, after the colour splice
+  local three = #actions == 3 and not line and live and r.claim ~= ""
+  if three then by = r.claim .. DOT .. by end
   card.by:SetText(by)
-  card.line:SetText(line or lines.tail)
-  -- the mark and note the info line displaces go into the slot's tooltip
+  card.line:SetText(three and "" or line or lines.tail)
+  -- the hover follows the text: the by-line in the three-button case, else the slot
+  card.hitText = three and card.by or card.line
+  card.hit:ClearAllPoints()
+  card.hit:SetAllPoints(card.hitText)
+  -- the mark and note the info line (or the three buttons) displace go into the hovered line's tooltip
   card.extra = nil
-  if line then
+  if line or three then
     local rest = {}
     if live and r.mark ~= "" then rest[#rest + 1] = r.mark end
     if r.note ~= "" then rest[#rest + 1] = "\"" .. r.note .. "\"" end

@@ -50,7 +50,7 @@ end
 local function ownBody()
   local d = ns.RealToday()
   if not d or not d.done then return nil end
-  return Core.PackBody(Core.Result(d.n, d.won, d.rows, ns.RealStats().cur)), d.n
+  return Core.PackBody(Core.Result(d.n, d.won, d.rows, ns.RealStats().cur, d.hint)), d.n
 end
 
 -- adler, newer, the codec and the limit live in SyncKit.lua (moved from here unchanged, Task 4 of S11).
@@ -186,7 +186,7 @@ function ns.OnFinished()
   if key and t and isOwn(key) then M.Sync.Changed(DOMAIN, key, t) end
 end
 
--- Today's results in the guild: { { key, name, class, tries (0 = X), rows = { codes }, streak, at, you }, ... },
+-- Today's results in the guild: { { key, name, class, tries (0 = X), rows = { codes }, streak, at, you, hint }, ... },
 -- in Core.ByResult's order. A row over a limit (L1, L2) or of a hidden player is left out.
 function ns.GuildToday()
   local d = ns.Today()
@@ -197,7 +197,7 @@ function ns.GuildToday()
     if res and ns.Limits.WoWdle(res, t) and not (ns.IsHidden and ns.IsHidden(key)) then
       local row = ns.Member(key)
       list[#list + 1] = { key = key, name = row and row.name or key, class = row and row.class, tries = res.tries,
-        rows = res.rows, streak = res.streak, at = r.rev, you = key == me }
+        rows = res.rows, streak = res.streak, at = r.rev, you = key == me, hint = res.hint }
     end
   end
   table.sort(list, Core.ByResult)

@@ -650,6 +650,15 @@ function View.WindowLayout(w, h)
   }
 end
 
+-- The Online now row's columns for a column colW wide (f8611): today's set from colW 326, a narrower name and rank
+-- below it so the zone keeps at least 70 px (at colW 288). The zone runs from zoneX to the row's right edge.
+function View.OnlineColumns(colW)
+  if type(colW) == "number" and colW < 326 then
+    return { nameX = 26, nameW = 100, rankX = 130, rankW = 80, zoneX = 214 }
+  end
+  return { nameX = 26, nameW = 120, rankX = 150, rankW = 98, zoneX = 252 }
+end
+
 -- The Overview's block tops (px below the page top) for a page contentH tall. The guild log shows only when its
 -- last row fits (contentH >= need).
 function View.OverviewLayout(contentH)

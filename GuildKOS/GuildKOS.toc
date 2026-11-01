@@ -7,11 +7,18 @@
 ## SavedVariables: GuildKOSDB
 ## Dependencies: GuildSync
 
-Codec.lua
 Rules.lua
-Wire.lua
-Compat.lua
+RulesRecords.lua
+RulesMarks.lua
+RulesKills.lua
+RulesBoard.lua
+RulesDemo.lua
+Store.lua
+List.lua
+Mark.lua
+Spot.lua
+Kill.lua
+Confirm.lua
 Core.lua
-Sync.lua
 Page.lua
 Hub.lua

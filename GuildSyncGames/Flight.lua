@@ -4,6 +4,10 @@
 -- true, not in combat, not in an instance, demo off, the setting on, this flight not asked yet. A missing or secret
 -- answer means no prompt. PLAYER_CONTROL_GAINED ends the flight and hides the prompt. The prompt never opens the
 -- window by itself: only its Play button does, through M.OpenPage().
+-- S21 (Task 7): on the vendor tab the prompt names the pool last played (ns.VendorPool): Flights gets the wind rider,
+-- its own title and lines, and Play passes "flights" to ns.VendorToday and ns.VendorMode; Vendor price keeps S12's lines.
+-- S22 (Task 8, mock fl-4): a last game of "who" names Who said it (ns.WhoToday's label and lines heard); while its
+-- ns.GAMES entry is not shown (no sound call, switch off) the prompt and Play fall back to WoWdle, as the page does.
 
 local _, ns = ...
 
@@ -11,7 +15,9 @@ if not ns.M then return end
 local M = ns.M
 
 local ICON = "Interface\\Icons\\INV_Misc_Dice_01"
-local ICONS = { harvest = 134058, races = 132245, vendor = 133784 } -- wheat, kodo (f7224), coin (S12); dice: WoWdle
+-- wheat, kodo (f7224), coin (S12), Ability_Warrior_BattleShout (S22); dice: WoWdle
+local ICONS = { harvest = 134058, races = 132245, vendor = 133784, who = 132333 }
+local FLIGHTS_ICON = 132268 -- Ability_Mount_Wyvern_01, the wind rider (S21, fm-7)
 local W, H = 330, 112 -- fl-1
 
 -- ---------- the setting (db.flight, default on) ----------
@@ -34,9 +40,18 @@ local function hide()
   if prompt then prompt:Hide() end
 end
 
--- The game last chosen (ns.LastGame, Grain.lua), WoWdle without it.
+-- The game last chosen (ns.LastGame, Grain.lua), WoWdle without it or while its ns.GAMES entry is not shown.
 local function game()
-  return ns.LastGame and ns.LastGame() or "wowdle"
+  local key = ns.LastGame and ns.LastGame() or "wowdle"
+  for _, e in ipairs(ns.GAMES or {}) do
+    if e.key == key and e.shown and not e.shown() then return "wowdle" end
+  end
+  return key
+end
+
+-- "flights" when the vendor tab last played Flights, else nil (the items readers get no pool, seam-check f1).
+local function pool()
+  return (ns.VendorPool and ns.VendorPool() == "flights") and "flights" or nil
 end
 
 local function play()
@@ -51,8 +66,12 @@ local function play()
   elseif key == "wowdle" and ns.SetMode then
     ns.SetMode("daily")
   elseif key == "vendor" and ns.VendorMode then -- a finished daily run goes endless
-    local v = ns.VendorToday and ns.VendorToday()
-    ns.VendorMode((type(v) == "table" and v.done) and "endless" or "daily")
+    local p = pool()
+    local v = ns.VendorToday and ns.VendorToday(p)
+    ns.VendorMode((type(v) == "table" and v.done) and "endless" or "daily", p)
+  elseif key == "who" and ns.WhoMode then -- a finished daily run goes endless
+    local w = ns.WhoToday and ns.WhoToday()
+    ns.WhoMode((type(w) == "table" and w.done) and "endless" or "daily")
   end
   if M.RefreshPage then M.RefreshPage() end
 end
@@ -119,12 +138,25 @@ local function show()
     prompt.title:SetText("A long flight? Tend your field.")
     prompt.line:SetText(farm.standing .. " of " .. farm.cap .. " grain standing · " .. farm.rate .. " a minute")
   elseif key == "vendor" then
-    local v = ns.VendorToday and ns.VendorToday() -- nil with no clock: the title only (f7189)
-    prompt.title:SetText("A long flight? Price some loot.")
+    local p = pool()
+    local v = ns.VendorToday and ns.VendorToday(p) -- nil with no clock: the title only (f7189)
+    local name = p and "Flights " or "Vendor price "
+    if p then prompt.icon:SetTexture(FLIGHTS_ICON) end
+    prompt.title:SetText(p and "A long flight? Time some flights." or "A long flight? Price some loot.") -- q1771
     if type(v) == "table" and v.done then -- q1575
-      prompt.line:SetText("Vendor price " .. tostring(v.label) .. " done, " .. tostring(v.score) .. "/10. Try Endless.")
+      prompt.line:SetText(name .. tostring(v.label) .. " done, " .. tostring(v.score) .. "/10. Try Endless.")
     elseif type(v) == "table" then
-      prompt.line:SetText("Vendor price " .. tostring(v.label) .. ": " .. #tostring(v.picks or "") .. " of 10 picked")
+      prompt.line:SetText(name .. tostring(v.label) .. ": " .. #tostring(v.picks or "") .. " of 10 picked")
+    else
+      prompt.line:SetText("")
+    end
+  elseif key == "who" then
+    local w = ns.WhoToday and ns.WhoToday() -- nil with no clock: the title only (f7189)
+    prompt.title:SetText("A long flight? Name some voices.") -- fl-4
+    if type(w) == "table" and w.done then
+      prompt.line:SetText("Who said it? " .. tostring(w.label) .. " done, " .. tostring(w.score) .. "/10. Try Endless.")
+    elseif type(w) == "table" then
+      prompt.line:SetText("Who said it? " .. tostring(w.label) .. ": " .. (tonumber(w.heard) or 0) .. " of 10 heard")
     else
       prompt.line:SetText("")
     end

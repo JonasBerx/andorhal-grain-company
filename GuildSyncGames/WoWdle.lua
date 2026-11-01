@@ -14,7 +14,9 @@ local M, Core = ns.M, ns.Core
 local TRIES = 6
 local LEFT, COL_W, BOARD_Y, RX = 8, 330, 46, 352
 local BIG = { s = 40, gap = 5, kw = 26, kh = 32, kgap = 4 }
-local SMALL = { s = 28, gap = 4, kw = 22, kh = 24, kgap = 3 } -- below 420 tall (the 760x480 window, wd-4)
+local SMALL = { s = 26, gap = 4, kw = 22, kh = 24, kgap = 3 } -- below 420 tall (the 760x480 window, wd-4; d1644)
+local SMALL_Y = 40 -- the board's top at SMALL (d1644: room for the hint row)
+local ROW_H = 16 -- the hint row under the board (S28b)
 local SMALL_BELOW = 420
 local KEY_ROWS = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }
 -- The score colours: correct, present, absent; an empty tile, and a typed tile or an unknown key.
@@ -83,10 +85,11 @@ function U.Layout()
   local sig = tostring(small) .. n .. ":" .. width
   if U.laid == sig then return end
   U.laid = sig
-  local bw = n * B.s + (n - 1) * B.gap
+  local bw, by = n * B.s + (n - 1) * B.gap, small and SMALL_Y or BOARD_Y
+  local bh = TRIES * B.s + (TRIES - 1) * B.gap
   U.board:ClearAllPoints()
-  U.board:SetPoint("TOPLEFT", U.body, "TOPLEFT", LEFT + math.floor((COL_W - bw) * 0.5), -BOARD_Y)
-  U.board:SetSize(bw, TRIES * B.s + (TRIES - 1) * B.gap)
+  U.board:SetPoint("TOPLEFT", U.body, "TOPLEFT", LEFT + math.floor((COL_W - bw) * 0.5), -by)
+  U.board:SetSize(bw, bh)
   for r = 1, TRIES do
     for i = 1, 6 do
       local t = U.tiles[r][i]
@@ -96,7 +99,10 @@ function U.Layout()
       t:SetShown(i <= n)
     end
   end
-  local msgY = BOARD_Y + TRIES * (B.s + B.gap) + 2
+  -- The hint row 2 px under the board, the message line 2 px under the row, at both sizes (o2527).
+  U.hintRow:ClearAllPoints()
+  U.hintRow:SetPoint("TOPLEFT", U.body, "TOPLEFT", LEFT, -(by + bh + 2))
+  local msgY = by + bh + 2 + ROW_H + 2
   U.msg:ClearAllPoints()
   U.msg:SetPoint("TOPLEFT", U.body, "TOPLEFT", LEFT, -msgY)
   local kbW = 10 * B.kw + 9 * B.kgap
@@ -123,6 +129,30 @@ function U.Layout()
     v:SetPoint("TOPLEFT", U.daily, "TOPLEFT", 8 + (i - 1) * step, -32)
     U.statLabels[i]:ClearAllPoints()
     U.statLabels[i]:SetPoint("TOPLEFT", U.daily, "TOPLEFT", 8 + (i - 1) * step, -52)
+  end
+  -- f8601: a right panel narrower than Share + Practice (8 + 156 + 8 + 96 + 8) stacks the buttons and chains the
+  -- practice panel's rows, so a wrapped line pushes the rest down; a wide one keeps the build anchors.
+  local panelW = width - RX - 14
+  local narrow = panelW < 276
+  U.listBox:ClearAllPoints()
+  U.listBox:SetPoint("TOPLEFT", U.daily, "TOPLEFT", 0, -196)
+  U.listBox:SetPoint("BOTTOMRIGHT", U.daily, "BOTTOMRIGHT", 0, narrow and 62 or 36)
+  U.practice:ClearAllPoints()
+  U.practice:SetPoint("BOTTOMLEFT", U.daily, "BOTTOMLEFT", narrow and 8 or 172, narrow and 34 or 8)
+  local l1, l2 = U.pracLines[1], U.pracLines[2]
+  for _, f in ipairs({ l1, l2, U.wait, U.new, U.back }) do f:ClearAllPoints() end
+  for _, fs in ipairs({ l1, l2, U.wait }) do fs:SetWidth(panelW - 16) end
+  l1:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -34)
+  if narrow then
+    l2:SetPoint("TOPLEFT", l1, "BOTTOMLEFT", 0, -2)
+    U.new:SetPoint("TOPLEFT", l2, "BOTTOMLEFT", 0, -12)
+    U.back:SetPoint("TOPLEFT", U.new, "BOTTOMLEFT", 0, -4)
+    U.wait:SetPoint("TOPLEFT", U.back, "BOTTOMLEFT", 0, -12)
+  else
+    l2:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -50)
+    U.new:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -76)
+    U.back:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 126, -76)
+    U.wait:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -110)
   end
 end
 
@@ -156,6 +186,49 @@ local function drawStats()
     bar.fill:SetWidth(math.min(BAR_MAX, 14 + n * BAR_STEP))
     bar.count:SetText(tostring(n))
   end
+end
+
+-- HintState's reasons, shown grey in the hint row and the button's tooltip (state names only, never a word).
+local WHY = {
+  demo = "Hints are off in the demo.",
+  clock = "Hint: waiting for the server clock.",
+  rolled = "Hint: a new day has begun.",
+  none = "Hint: nothing to hint today.",
+  done = "Hint: this one is finished.",
+  bought = "Hint already shown.",
+  noclue = "No hint for this one.",
+}
+
+-- The hint row and the Hint button (f16): a held hint shows its clue, done or not; otherwise HintState (read only and
+-- silent) gives the price or the reason. Draw never buys.
+local function drawHint(g, practice)
+  local row, tip, can = U.hintRow, nil, false
+  if g and g.hint and g.clue then
+    local cat = tostring(g.category or "")
+    tip = "|cff999999" .. cat:sub(1, 1):upper() .. cat:sub(2) .. ":|r " .. g.clue
+    row:SetTextColor(1, 1, 1)
+  else
+    local why
+    can, why = ns.HintState()
+    can = can == true
+    local price = "Hint: " .. ns.HINT_PRICE .. " grain"
+    if can then
+      tip = practice and "Hint: free in practice" or price
+      row:SetTextColor(1, 1, 1)
+    else
+      tip = why == "short" and ("Not enough grain: the hint costs " .. ns.HINT_PRICE .. ", you hold " .. ns.Purse() .. ".")
+        or WHY[why] or "No hint now."
+      grey(row)
+    end
+  end
+  row:SetText(tip)
+  U.hintTip = tip
+  U.hint:SetEnabled(can)
+end
+
+local function buyHint()
+  ns.BuyHint()
+  U.Draw()
 end
 
 function U.Draw()
@@ -207,6 +280,7 @@ function U.Draw()
   end
   U.msg:SetText(text or "")
   if red then U.msg:SetTextColor(1, 0.282, 0.282) else U.msg:SetTextColor(1, 1, 1) end
+  drawHint(g, practice)
 
   U.daily:SetShown(not practice)
   U.prac:SetShown(practice)
@@ -264,7 +338,7 @@ local function share()
   if ns.Inert() then return end
   local t = ns.Today()
   if not (t and t.done) then return end
-  local res = Core.Result(t.n, t.won, t.rows, ns.Stats().cur)
+  local res = Core.Result(t.n, t.won, t.rows, ns.Stats().cur, t.hint)
   if ns.OpenChat("/g " .. Core.ShareText(t.label, res, true, 3)) then
     U.text = "In the guild chat box: press Enter to send."
   else
@@ -288,14 +362,17 @@ local function buildRow(f)
   f.streak:SetWidth(54)
   f.res = label(f, "GameFontHighlight")
   f.res:SetPoint("RIGHT", f.streak, "LEFT", -8, 0)
+  f.name:SetPoint("RIGHT", f.res, "LEFT", -8, 0) -- a long name is cut before n/6; the tooltip keeps it whole (f8601)
+  f.name:SetWordWrap(false)
   M.Kit.ListHover(f)
   local function enter(self)
     local e, tip = self.entry, M.Compat.Tooltip()
     if not (e and tip) then return end
     tip:SetOwner(self, "ANCHOR_RIGHT")
-    tip:SetText(ns.Escape(e.name))
+    tip:SetText(ns.Escape(e.name) .. (e.you and " (you)" or ""))
     tip:AddLine("WoWdle " .. (U.label or "") .. " " .. Core.Tries(e.tries) .. "/6 · streak " .. e.streak,
       1, 1, 1)
+    if e.hint then tip:AddLine("Played with the hint (" .. Core.HINT_MARK .. ")", GREY, GREY, GREY) end
     for _, codes in ipairs(e.rows or {}) do
       local line = ""
       for code in codes:gmatch(".") do
@@ -319,7 +396,7 @@ local function initRow(f, e)
   local cc = type(RAID_CLASS_COLORS) == "table" and RAID_CLASS_COLORS[e.class]
   f.name:SetText(ns.Escape(e.name) .. (e.you and " (you)" or ""))
   if cc then f.name:SetTextColor(cc.r, cc.g, cc.b) else f.name:SetTextColor(1, 1, 1) end
-  f.res:SetText(Core.Tries(e.tries) .. "/6")
+  f.res:SetText(Core.Tries(e.tries) .. "/6" .. (e.hint and Core.HINT_MARK or ""))
   f.streak:SetText((e.streak or 0) > 0 and ("streak " .. e.streak) or "-")
 end
 
@@ -373,11 +450,13 @@ local function buildRight(body)
   local box = CreateFrame("Frame", nil, U.daily)
   box:SetPoint("TOPLEFT", U.daily, "TOPLEFT", 0, -196)
   box:SetPoint("BOTTOMRIGHT", U.daily, "BOTTOMRIGHT", 0, 36)
+  U.listBox = box
   U.list = M.Kit.List(box, 22, buildRow, initRow)
   U.share = button(U.daily, "Share to guild chat", 156)
   U.share:SetPoint("BOTTOMLEFT", U.daily, "BOTTOMLEFT", 8, 8)
   U.share:SetScript("OnClick", function() M.Safe(share) end)
   local practice = button(U.daily, "Practice", 96)
+  U.practice = practice
   practice:SetPoint("BOTTOMLEFT", U.daily, "BOTTOMLEFT", 172, 8)
   practice:SetScript("OnClick", function() M.Safe(switch, ns.NewPractice) end)
 
@@ -388,16 +467,20 @@ local function buildRight(body)
   mark:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 0, 0)
   mark:SetPoint("TOPRIGHT", U.prac, "TOPRIGHT", 0, 0)
   local lines = { "Random WoW words, as many as you like.", "Not shared with the guild, not in your stats." }
+  U.pracLines = {}
   for i, text in ipairs(lines) do
     local fs = label(U.prac)
     grey(fs)
     fs:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -(34 + (i - 1) * 16))
     fs:SetText(text)
+    U.pracLines[i] = fs
   end
   local new = button(U.prac, "New word", 110)
+  U.new = new
   new:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 8, -76)
   new:SetScript("OnClick", function() M.Safe(switch, ns.NewPractice) end)
   local back = button(U.prac, "Back to today's word", 160)
+  U.back = back
   back:SetPoint("TOPLEFT", U.prac, "TOPLEFT", 126, -76)
   back:SetScript("OnClick", function() M.Safe(switch, function() ns.SetMode("daily") end) end)
   U.wait = label(U.prac)
@@ -432,6 +515,29 @@ local function build(body)
   U.sub = label(body)
   grey(U.sub)
   U.sub:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -26)
+  -- The Hint button at the title row's right end; its tooltip works while disabled, to show the reason (f12).
+  U.hint = button(body, "Hint", 56)
+  U.hint:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT + COL_W - 56, -2)
+  U.hint:SetMotionScriptsWhileDisabled(true)
+  U.hint:SetScript("OnClick", function() M.Safe(buyHint) end)
+  U.hint:SetScript("OnEnter", function(self)
+    M.Safe(function()
+      local tip = M.Compat.Tooltip()
+      if not tip then return end
+      tip:SetOwner(self, "ANCHOR_RIGHT")
+      tip:SetText("Hint")
+      if U.hintTip then tip:AddLine(U.hintTip, 1, 1, 1, true) end
+      tip:Show()
+    end)
+  end)
+  U.hint:SetScript("OnLeave", function()
+    local tip = M.Compat.Tooltip()
+    if tip then tip:Hide() end
+  end)
+  U.hintRow = label(body)
+  U.hintRow:SetSize(COL_W, ROW_H)
+  U.hintRow:SetJustifyH("CENTER")
+  U.hintRow:SetWordWrap(false)
   U.board = CreateFrame("Frame", nil, body)
   for r = 1, TRIES do
     U.tiles[r] = {}

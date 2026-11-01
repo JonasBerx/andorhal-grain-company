@@ -139,9 +139,12 @@ local function placeDecor(slots, size)
   end
 end
 
--- The caravan block (V5): header, one state line, the Trip and Stake rows with Send at the right.
-local function placeCaravan(y)
+-- The caravan block (V5): header, one state line, the Trip and Stake rows with Send at the right. With no header
+-- (the small size, f8606) the rest moves up 30, so the Stake row ends above the note.
+local function placeCaravan(y, noHead)
   local C = H.car
+  C.head:SetShown(not noHead)
+  if noHead then y = y - 30 end
   local function at(f, x, dy)
     f:ClearAllPoints()
     f:SetPoint("TOPLEFT", H.body, "TOPLEFT", x, -(y + dy))
@@ -193,16 +196,20 @@ function H.Layout()
     at(H.purse, LEFT + 218, 59)
     H.purseLabel:Hide()
     H.lifetime:Hide()
-    placeCaravan(y + 80)
+    placeCaravan(y + 80, true) -- f8606: no Caravan header, the Stake row ends 6 px above the note
   else
     at(H.harvest, LEFT + math.floor((COL_W - 180) * 0.5), 54)
     at(H.purseLabel, LEFT, 94)
     at(H.purseIcon, LEFT, 112)
     at(H.purse, LEFT + 22, 114)
-    at(H.lifetime, LEFT, 136)
+    -- f8606: the lifetime line at the right of the purse label's row, so the caravan sits 24 higher, clear of the note
+    H.lifetime:SetWidth(COL_W - 90)
+    H.lifetime:SetJustifyH("RIGHT")
+    H.lifetime:SetWordWrap(false) -- a huge total is cut, never wrapped onto the purse row
+    at(H.lifetime, LEFT + 90, 94)
     H.purseLabel:Show()
     H.lifetime:Show()
-    placeCaravan(y + 156)
+    placeCaravan(y + 132)
   end
 end
 

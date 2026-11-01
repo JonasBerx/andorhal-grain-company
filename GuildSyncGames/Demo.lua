@@ -1,6 +1,6 @@
 -- GuildSyncGames Demo.lua: what /gsync demo shows, ns.DemoState (plan Task 9, AC10).
 -- ns.DemoState(guild, now) is pure: it reads only the made-up guild and the `now` it is handed and returns the mock's
--- finished day (wd-2: MURLOC solved in 4, streak 5), its stats and six guild rows over the demo guild's keys. The hub
+-- finished day (wd-2: GRANGE solved in 4, streak 5), its record and six guild rows over the demo guild's keys. The hub
 -- calls it once per session through Module.lua's demo field and hands it back as M.Demo().
 -- While demo is on, ns.Today, ns.Stats and ns.GuildToday answer from that state, so the page shows it; the day keeps
 -- the real N, label and countdown (Sync.lua's cutoff and merge read them). Nothing here is saved or sent.
@@ -8,6 +8,10 @@
 -- grain, boards and raceT (318/360 at 6 a minute, purse 1,240, a race 24 s in with a 40-grain bet); ns.Now is not wrapped.
 -- Vendor price (S12 Task 7): ns.VendorToday, VendorStats, VendorGuild and VendorBoard answer from the state's vendor, a
 -- finished made-up run 8/10 on VC.Daily(DEMO_DAY) (never today's pairs, f7252); only the label and countdown are real.
+-- Flights (S21 Task 7): with pool "flights" the same four answer from the state's flights, a finished made-up run 8/10
+-- on RC.Daily(DEMO_DAY) over its own rows (FROWS); nothing is saved, sent or credited.
+-- Who said it (S22 Task 8, AC8): ns.WhoToday, WhoStats, WhoGuild and WhoBoard answer from the state's who, a finished
+-- made-up run 8/10 on WhoCore.Daily(DEMO_DAY) over its own rows (WROWS); nothing is saved, sent, credited or played.
 -- Company (S13 Task 7, V8): ns.CompanyState, CompanyProjects, CompanyDonors, Lottery, Caravan and CompanyLook answer from
 -- the state's company, projects, donors, draw (week 2), caravan (on the road) and looks; nothing is saved.
 -- S14 Task 7 (AC6, mock of-1, of-2): officer = { players, draw }. ns.GamesPlayers answers the demo guild with two
@@ -20,16 +24,16 @@ local _, ns = ...
 if not ns.M then return end
 local M, Core = ns.M, ns.Core
 
-local WORD = "MURLOC"
+local WORD = "GRANGE" -- a stand-in: not an answer and not a practice word (S28b Task 2)
 
 -- { tries (0 = X), streak, minutes ago, guesses }; the first row is you.
 local ROWS = {
-  { 4, 5, 95, { "SHAMAN", "MOLTEN", "TURTLE", "MURLOC" } },
-  { 2, 12, 240, { "MOLTEN", "MURLOC" } },
-  { 3, 7, 30, { "RAPTOR", "SUMMON", "MURLOC" } },
-  { 4, 2, 180, { "SPIDER", "PORTAL", "MOLTEN", "MURLOC" } },
-  { 5, 1, 60, { "SHADOW", "DRAGON", "TURTLE", "MOLTEN", "MURLOC" } },
-  { 0, 0, 15, { "HUNTER", "PRIEST", "TAUREN", "GOBLIN", "SPIDER", "MOLTEN" } },
+  { 4, 5, 95, { "AVALON", "BITING", "BUNDLE", WORD } },
+  { 2, 12, 240, { "BITTER", WORD } },
+  { 3, 7, 30, { "AETHAL", "BUTTON", WORD } },
+  { 4, 2, 180, { "BOLDER", "BURIAL", "BUSTER", WORD } },
+  { 5, 1, 60, { "AWAITS", "TRAGAN", "CERISE", "BUTTER", WORD } },
+  { 0, 0, 15, { "BUNKER", "BRIGHT", "BADGER", "GOZWIN", "BYLTAN", "CHOKER" } },
 }
 
 -- Harvest and Kodo races (mock hv-1, kr-1): harvested in all, grain won, biggest win, a winning stake on the last
@@ -55,14 +59,32 @@ local VROWS = {
   { "1100100100", 3, 0, 15 },
 }
 
--- The VendorToday() shape plus stats, guild and board (pure).
-local function vendorState(ids, guild, now)
+-- Flights (S21 Task 7): its own marks, bests and streaks, so its list, board and stats differ from Vendor price's
+-- (seam-check f5); the first row is you (8/10).
+local FROWS = {
+  { "1101111011", 11, 4, 95 },
+  { "1111011111", 18, 9, 240 },
+  { "1011110110", 7, 5, 30 },
+  { "1110111001", 13, 2, 180 },
+  { "0101101010", 4, 1, 60 },
+  { "1001000110", 2, 0, 15 },
+}
+
+-- Who said it (S22 Task 8): its own marks, endless bests and streaks; the first row is you (8/10).
+local WROWS = {
+  { "1110111011", 12, 3, 95 },
+  { "1111111101", 19, 8, 240 },
+  { "1011011110", 8, 4, 30 },
+  { "1101110011", 15, 2, 180 },
+  { "0110101010", 6, 1, 60 },
+  { "1000110100", 2, 0, 15 },
+}
+
+-- The VendorToday() shape plus stats, guild and board over rows (VROWS or FROWS) and pairs prs (pure).
+local function vendorState(ids, guild, now, rows, prs)
   local VC = ns.VendorCore
-  local run, items = VC.Daily(DEMO_DAY), VC.Items()
-  local prs = {}
-  for k, p in ipairs(run or {}) do prs[k] = { a = items[p.a], b = items[p.b] } end
   local list, board = {}, {}
-  for i, spec in ipairs(VROWS) do
+  for i, spec in ipairs(rows) do
     local m = ids[i] and guild.members[ids[i]]
     local key = m and ns.Key(m.name)
     if key then
@@ -73,9 +95,28 @@ local function vendorState(ids, guild, now)
   end
   table.sort(list, function(a, b) return a.at > b.at end)
   table.sort(board, function(a, b) return a.best > b.best end)
-  local marks = VROWS[1][1]
+  local marks = rows[1][1]
   return { n = DEMO_DAY, pairs = prs, picks = marks, done = true, score = VC.Rights(marks), earned = VC.Pay(marks),
-    stats = { best = VROWS[1][2], cur = VROWS[1][3] }, guild = list, board = board }
+    stats = { best = rows[1][2], cur = rows[1][3] }, guild = list, board = board }
+end
+
+-- The pairs of a demo run: Vendor price on VC.Daily(DEMO_DAY), Flights on RC.Daily(DEMO_DAY) with its questions.
+local function demoPairs(flights)
+  local C = flights and ns.RouteCore or ns.VendorCore
+  local run, rows = C.Daily(DEMO_DAY), flights and C.Routes() or C.Items()
+  local prs = {}
+  for k, p in ipairs(run or {}) do prs[k] = { a = rows[p.a], b = rows[p.b], q = p.q } end
+  return prs
+end
+
+-- The WhoToday() shape over WROWS: the lines of WhoCore.Daily(DEMO_DAY), stats as ns.WhoStats, guild and board rows as
+-- vendorState's (the same fields as VendorSync's WhoGuild and WhoBoard rows).
+local function whoState(ids, guild, now)
+  local v = vendorState(ids, guild, now, WROWS, nil)
+  v.lines = ns.WhoCore.Daily(DEMO_DAY)
+  v.earned = ns.WhoCore.Pay(v.score)
+  v.stats = { played = 11, best = 9, ebest = WROWS[1][2], streak = WROWS[1][3] }
+  return v
 end
 
 -- Company (S13 Task 7, V8): per member in ROWS order a gift to project 1 (6,420 in all) and a worn title, colour and
@@ -170,7 +211,7 @@ function ns.DemoState(guild, now)
       local codes = {}
       for j, r in ipairs(Core.Scored(spec[4], WORD)) do codes[j] = r.codes end
       list[#list + 1] = { key = key, name = m.name, class = m.class, tries = spec[1], rows = codes, streak = spec[2],
-        at = now - spec[3] * 60, you = i == 1 }
+        at = now - spec[3] * 60, you = i == 1, hint = i == 2 or nil } -- one hinted row (S28b Task 2), not yours
       local f = FARMS[i]
       boards.harvest[#boards.harvest + 1] = { key = key, name = m.name, class = m.class, harvested = f[1], you = i == 1 }
       local pay = f[4] > 0 and GC.Payout(f[4], pays, true) or 0
@@ -204,7 +245,9 @@ function ns.DemoState(guild, now)
       hist = { { hour = h - 3, lane = 4, stake = 40, pay = 160 }, { hour = h - 2, lane = 2, stake = 25, pay = 0 } } },
     boards = boards,
     raceT = h * 3600 + 24, -- 24 s into the current hour's race (kr-1)
-    vendor = vendorState(ids, guild, now),
+    vendor = vendorState(ids, guild, now, VROWS, demoPairs(false)),
+    flights = vendorState(ids, guild, now, FROWS, demoPairs(true)),
+    who = whoState(ids, guild, now),
     at = now,
   }
 end
@@ -293,35 +336,72 @@ function ns.RaceClock()
   return s.raceT + (type(t) == "number" and math.max(0, t - s.at) or 0)
 end
 
--- Vendor price: the made-up run, list and board; the day's label and countdown stay real.
+-- Vendor price and Flights: the made-up run, list and board of the pool asked (no pool: items); the day's label and
+-- countdown stay real.
 local realVendorToday, realVendorStats = ns.VendorToday, ns.VendorStats
 local realVendorGuild, realVendorBoard = ns.VendorGuild, ns.VendorBoard
 
-function ns.VendorToday()
+local function demoPool(s, pool)
+  return pool == "flights" and s.flights or s.vendor
+end
+
+function ns.VendorToday(pool)
   local s = state()
-  if not s then return realVendorToday() end
-  local v = s.vendor
+  if not s then return realVendorToday(pool) end
+  local v = demoPool(s, pool)
   local _, label, secsLeft = ns.Day()
   return { n = v.n, label = label, pairs = v.pairs, picks = v.picks, done = v.done, score = v.score,
     earned = v.earned, secsLeft = secsLeft }
 end
 
-function ns.VendorStats()
+function ns.VendorStats(pool)
   local s = state()
-  if not s then return realVendorStats() end
-  return { best = s.vendor.stats.best, cur = s.vendor.stats.cur }
+  if not s then return realVendorStats(pool) end
+  local v = demoPool(s, pool)
+  return { best = v.stats.best, cur = v.stats.cur }
 end
 
-function ns.VendorGuild()
+function ns.VendorGuild(pool)
   local s = state()
-  if not s then return realVendorGuild() end
-  return s.vendor.guild
+  if not s then return realVendorGuild(pool) end
+  return demoPool(s, pool).guild
 end
 
-function ns.VendorBoard()
+function ns.VendorBoard(pool)
   local s = state()
-  if not s then return realVendorBoard() end
-  return s.vendor.board
+  if not s then return realVendorBoard(pool) end
+  return demoPool(s, pool).board
+end
+
+-- Who said it (S22 Task 8): the made-up run, stats, list and board; the day's label and countdown stay real.
+local realWhoToday, realWhoStats, realWhoGuild, realWhoBoard = ns.WhoToday, ns.WhoStats, ns.WhoGuild, ns.WhoBoard
+
+function ns.WhoToday()
+  local s = state()
+  if not s then return realWhoToday() end
+  local v = s.who
+  local _, label, secsLeft = ns.Day()
+  return { n = v.n, label = label, lines = v.lines, picks = v.picks, heard = #v.picks, done = v.done, mode = "daily",
+    score = v.score, earned = v.earned, secsLeft = secsLeft }
+end
+
+function ns.WhoStats()
+  local s = state()
+  if not s then return realWhoStats() end
+  local t = s.who.stats
+  return { played = t.played, best = t.best, ebest = t.ebest, streak = t.streak }
+end
+
+function ns.WhoGuild()
+  local s = state()
+  if not s then return realWhoGuild() end
+  return s.who.guild
+end
+
+function ns.WhoBoard()
+  local s = state()
+  if not s then return realWhoBoard() end
+  return s.who.board
 end
 
 -- Company (S13 Task 7): the store, granary, donors, lottery, caravan and looks answer from the state at call time. The

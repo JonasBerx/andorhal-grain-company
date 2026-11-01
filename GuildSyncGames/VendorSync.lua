@@ -1,7 +1,7 @@
 -- GuildSyncGames VendorSync.lua (S12 Task 5, S14 Task 5): the Vendor price records on the "games_v" record domain on
 -- GSync, the guild list (ns.VendorGuild) and the board (ns.VendorBoard). S14: the put rule, as Boards.lua: each
 -- player's record under their roster key, sent only by that key's own character, never relayed; 4 new revs of one
--- subject key in 600 s; a body is VendorCore.PackBody's text ("n^score^marks^best^streak", 80 bytes at most,
+-- subject key in 600 s; a body is VendorCore.PackBody's text ("n^score^marks^best^streak", 91 bytes at most,
 -- VC.ParseBody against today) and must pass ns.Limits.Vendor (L3-L5, the streak on the row's n) by the receiver's
 -- clock, on merge and at the fold. The first full rosterRead with MyKey known wipes every foreign record once per
 -- guild (ns.WipeForeignOnce: it wipes data). A hidden key (ns.IsHidden) leaves the list and the board. No item id,
@@ -12,6 +12,13 @@
 -- the flag or a stored body that differs from ns.VendorBody() never mints. isOwn is Boards' rule (f7265): MyKey with a
 -- VendorBody, so the first mint's content() is the own body and its hash matches. Once ns.Now() >= GC.LAUNCH, records
 -- with a rev before it are dropped. Rows fold by GuildSync.Comm.Person(key).main: the result is per account.
+-- S21: a body may carry a Flights block after "!f" ("items!fflights", the same five fields; VC.ParseBody puts it in
+-- b.f, ns.Limits.Vendor checks it). VendorGuild(pool) and VendorBoard(pool) read b.f for "flights" (a row with no
+-- Flights block is left out) and b otherwise; the items board leaves out a Flights-only player (items marks "", best 0).
+-- S22: a Who said it block after "!w" ("items!fflights!wwho", either tail block absent; b.w). ns.WhoBody (WhoStore.lua,
+-- read at call time) is own as ns.VendorBody is: a Who-only player sends an empty items head (n^0^^0^0). A b.w over
+-- ns.Limits.Who is stored and left out at the fold; the other blocks stay. ns.WhoGuild and ns.WhoBoard read b.w;
+-- ns.WhoChanged mints at once, ns.WhoBestChanged sets the same session flag as ns.VendorBestChanged.
 
 local _, ns = ...
 
@@ -49,14 +56,21 @@ local function records()
   return recs
 end
 
--- The own body, read at call time; nil until a run was finished or an endless best set.
+local function whoBody()
+  return ns.WhoBody and ns.WhoBody() or nil
+end
+
+-- The own body, read at call time; nil until a run was finished or an endless best set in any game.
 local function ownBody()
-  local b = ns.VendorBody()
-  return b and VC.PackBody(b) or nil
+  local b, w = ns.VendorBody(), whoBody()
+  if not b and not w then return nil end
+  b = b or { n = w.n, marks = "", best = 0, streak = 0 }
+  b.w = w
+  return VC.PackBody(b)
 end
 
 local function isOwn(key)
-  return key ~= nil and key == ns.MyKey() and ns.VendorBody() ~= nil
+  return key ~= nil and key == ns.MyKey() and (ns.VendorBody() ~= nil or whoBody() ~= nil)
 end
 
 -- ---------- the store (CommSync.lua's header) ----------
@@ -93,7 +107,7 @@ function store.build(key)
 end
 -- Refused (false, nothing kept): MyKey's row, a hash that is not the body's, no clock, a preview-era rev after
 -- launch, a body VC.ParseBody refuses against today, or one over the limit table (ns.Limits.Vendor, L3-L5, by the
--- receiver's clock).
+-- receiver's clock). A Who block over ns.Limits.Who is kept here and left out at the fold.
 function store.merge(msg)
   if msg.key == ns.MyKey() or type(msg.body) ~= "string" or msg.hash ~= K.adler(msg.body) then return false end
   local n, cut = today(), cutoff()
@@ -193,6 +207,10 @@ function ns.VendorFinished() mint(ns.Now()) end
 -- VendorStore.lua calls this on a new endless best: the next tick past MINT_EVERY mints.
 function ns.VendorBestChanged() bestDirty = true end
 
+-- WhoStore.lua: a finished Who said it day mints at once; a new endless best sets the one session flag.
+function ns.WhoChanged() mint(ns.Now()) end
+function ns.WhoBestChanged() bestDirty = true end
+
 -- Grain.lua's tick: mints only while the best flag is set, at most once per MINT_EVERY, never in demo.
 function ns.VendorTick(t)
   if not bestDirty or type(t) ~= "number" or M.Demo() then return end
@@ -209,7 +227,8 @@ end
 local function byName(a, b) return a.name < b.name end
 
 -- One row per person (Person(key).main), the newest record's, every body re-parsed with today; the own row is
--- ns.VendorBody(). A stored row over the limit table and a hidden key (ns.IsHidden, an officer's hide) are left out.
+-- ns.VendorBody(). A stored row over the limit table and a hidden key (ns.IsHidden, an officer's hide) are left out;
+-- a Who block over ns.Limits.Who leaves only b.w.
 local function folded()
   local n, me, by, t = today(), ns.MyKey(), {}, ns.Now()
   if not n then return {} end
@@ -224,7 +243,10 @@ local function folded()
   for key, r in pairs(recs) do
     if key ~= me and type(r) == "table" and type(r.rev) == "number" then
       local b = VC.ParseBody(r.body, n)
-      if b and ns.Limits.Vendor(b, t) then add(key, r.rev, r.hash, b) end
+      if b and ns.Limits.Vendor(b, t) then
+        if b.w and not ns.Limits.Who(b.w, t) then b.w = nil end
+        add(key, r.rev, r.hash, b)
+      end
     end
   end
   local own = me and ownBody()
@@ -246,15 +268,24 @@ local function known()
   return k == true
 end
 
+-- A row's block for pool: b.f for "flights", b.w for "who" (nil when the row has none), else the items block b.
+local function blockOf(r, pool)
+  if pool == "flights" then return r.b.f end
+  if pool == "who" then return r.b.w end
+  return r.b
+end
+
 -- Today in the guild: { { key, name, class, score, marks, at, you } } for today's finished runs, newest finish (at)
--- first; the own row at its stored record's rev, first while that is not stored yet (f7277).
-function ns.VendorGuild()
+-- first; the own row at its stored record's rev, first while that is not stored yet (f7277). Pool "flights" reads the
+-- Flights block (rows without one left out); anything else the items block.
+function ns.VendorGuild(pool)
   if not known() then return nil end
   local rows, n = folded()
   local out = {}
   for _, r in ipairs(rows) do
-    if r.b.n == n and #r.b.marks == RUN then
-      out[#out + 1] = { key = r.key, name = r.name, class = r.class, score = r.b.score, marks = r.b.marks, at = r.at,
+    local b = blockOf(r, pool)
+    if b and b.n == n and #b.marks == RUN then
+      out[#out + 1] = { key = r.key, name = r.name, class = r.class, score = b.score, marks = b.marks, at = r.at,
         you = r.you }
     end
   end
@@ -267,14 +298,18 @@ function ns.VendorGuild()
 end
 
 -- The board: { { key, name, class, best, streak, you } }, best endless first; the streak is 0 once the record's n is
--- before yesterday.
-function ns.VendorBoard()
+-- before yesterday. Pool "flights" (or "who") reads that block (rows without one left out); otherwise the items block,
+-- leaving out a Flights-only or Who-only player's empty items head (marks "", best 0; f6).
+function ns.VendorBoard(pool)
   if not known() then return nil end
   local rows, n = folded()
   local out = {}
   for _, r in ipairs(rows) do
-    out[#out + 1] = { key = r.key, name = r.name, class = r.class, best = r.b.best,
-      streak = r.b.n >= n - 1 and r.b.streak or 0, you = r.you }
+    local b = blockOf(r, pool)
+    if b and (b ~= r.b or b.marks ~= "" or b.best ~= 0) then
+      out[#out + 1] = { key = r.key, name = r.name, class = r.class, best = b.best,
+        streak = b.n >= n - 1 and b.streak or 0, you = r.you }
+    end
   end
   table.sort(out, function(a, b)
     if a.best ~= b.best then return a.best > b.best end
@@ -282,3 +317,7 @@ function ns.VendorBoard()
   end)
   return out
 end
+
+-- Who said it (S22): the same lists over the Who block.
+function ns.WhoGuild() return ns.VendorGuild("who") end
+function ns.WhoBoard() return ns.VendorBoard("who") end

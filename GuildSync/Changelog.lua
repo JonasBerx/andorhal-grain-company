@@ -8,6 +8,53 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.16.0", lines = {}, addons = {
+    { folder = "GuildSync", lines = {
+      "Guildmates' module icons no longer run into Last heard.",
+      "The Online now zone column is readable at 760x480.",
+      "The demo Guildmates show the running version.",
+    } },
+    { folder = "GuildSyncPeople", lines = {
+      "My profile scrolls at 760x480, with Your characters under it.",
+    } },
+    { folder = "GuildSyncCrafting", lines = {
+      "Your own claimed request names who is working on it at the start of the line under the item.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "WoWdle, Kodo races, Harvest and the Company lottery fit the 760x480 window.",
+      "Harvest's caravan sits higher: the total harvested shows beside Your purse, and the small window drops the Caravan header.",
+      "Lottery tickets show on one short line, and the grey note about reaching an officer hides when the lottery column is full.",
+      "The kodos run smoothly between clock seconds.",
+      'Who said it? shares "Preview N" before launch.',
+      "WoWdle's daily words are all clearly World of Warcraft words now.",
+      "WoWdle has a Hint button: 20 grain buys today's clue, its category and a short line, shown under the board all day.",
+      "Practice words come with a free hint.",
+      "A day played with the hint carries a * after its tries, on your own result and in Today in the guild.",
+      "The hint line under the board says why the button is greyed: a short purse, a finished word, the demo or a new day.",
+      'An "i" button at the right end of the Games menu row opens a short how-to-play panel for the game on screen.',
+      "At 760x480 the WoWdle board is a little smaller so the hint line and the keys fit.",
+    } },
+  } },
+  { version = "0.15.0", lines = {}, addons = {
+    { folder = "GuildKOS", lines = {
+      "The list is now made in game: target an enemy player and click Mark as bounty (or type /kos mark).",
+      "An officer's mark goes straight on the list; a member's mark waits for an officer to approve or reject it.",
+      "The page has three tabs: List, Waiting (marks waiting for an officer) and Mine (your own marks, with Withdraw while one waits).",
+      "Officers can open a target to edit why it is on the list or remove it.",
+      "The list, marks and sightings travel through GuildSync, so guildmates who log in later catch up.",
+      'When you spot a listed enemy, guildmates see "<you> sees <target> at <place>" with your shard or another shard.',
+      "Only enemy players are spotted, and your client takes at most 5 new sightings a minute from each guildmate.",
+      "Gone: the paste import and /kos reset; the list is now made only in game. 0.5's saved list is dropped on first load.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "Higher or lower (was Vendor price) has a second mode, Flights: two Horde flights, pick the one that takes longer, costs more or has more stops.",
+      "Flights has a daily run, Endless, grain, boards and Share as in Vendor price.",
+      "Flights uses 31 Horde flight masters and 474 routes from the game's own flight data; nothing about a pair shows before you pick.",
+      "New game: Who said it? A voice line from the game plays and you pick who said it from four names.",
+      "Ten lines a day for the whole guild, Endless, grain, Today in the guild, the boards and Share. Only sound ids and names ship, never the words.",
+      "The Games tabs are now one game menu, and the page opens on the game you played last.",
+    } },
+  } },
   { version = "0.14.0", lines = {}, addons = {
     { folder = "GuildSync", lines = {
       "What's new: after an update, one panel lists what changed in the addons you run. Open it again on the Modules page, What's new.",

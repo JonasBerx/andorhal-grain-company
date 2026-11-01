@@ -39,12 +39,17 @@ local M = GuildSync and GuildSync.RegisterModule({
       -- GetGameTime (S11): the realm hour in a race's label; missing, the label says UTC.
       "GetGameTime",
       -- UnitClass, UnitName (d1720, S17): the own-card preview reads them through M.Compat.call; missing, it draws with no name or icon.
-      "UnitClass", "UnitName" } },
-  -- PLAYER_REGEN_DISABLED (S11): the race toast's combat check (Toast.lua).
-  events = { "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED", "PLAYER_REGEN_DISABLED" },
+      "UnitClass", "UnitName",
+      -- Who said it (S22, q1781): WhoSound.lua plays a line and reads the sound settings; missing, the game is hidden.
+      "PlaySound", "C_Sound.PlaySound", "C_Sound.IsPlaying", "C_CVar.GetCVarBool",
+      -- GetTime (f8603, d1881): Races.lua's kodos move between two server seconds; missing, they step once a second.
+      "GetTime" } },
+  -- PLAYER_REGEN_DISABLED (S11): the race toast's combat check (Toast.lua). SOUNDKIT_FINISHED (S22): Who said it's replay.
+  events = { "PLAYER_CONTROL_LOST", "PLAYER_CONTROL_GAINED", "PLAYER_REGEN_DISABLED", "SOUNDKIT_FINISHED" },
   onEvent = function(event, ...)
     if ns.OnEvent then ns.OnEvent(event, ...) end
     if ns.OnToastEvent then ns.OnToastEvent(event, ...) end
+    if ns.OnWhoEvent then ns.OnWhoEvent(event, ...) end
   end,
   -- Grain.lua's ns.OnLogin settles a past bet, arms the toast and starts the tick (idempotent, f7157).
   onLogin = function() if ns.OnLogin then ns.OnLogin() end end,

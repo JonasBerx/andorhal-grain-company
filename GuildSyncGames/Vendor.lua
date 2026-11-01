@@ -1,13 +1,18 @@
--- GuildSyncGames Vendor.lua (S12 Task 6): the Vendor price tab, ns.VendorTab (mock vp-1 to vp-6). Left: the title,
--- the sub line, two item cards (icon, name in its quality colour, the quality word; the prices and right or wrong only
--- after the pick), the marks row, the status line, Next pair, and at the foot Daily / Endless / Share. A finished daily
--- run shows the score, the grain earned and the ten answers instead of the cards. Right: Today in the guild, Best
--- endless streak and Daily streak. All UI state lives in V.
--- The tooltip is our own (M.Compat.Tooltip(): the name and the quality word); the game's item tooltip is never asked,
--- before or after the pick (o1652), so nothing here shows an item the player has not seen in game.
+-- GuildSyncGames Vendor.lua (S12 Task 6, S21 Task 6): the Higher or lower tab, ns.VendorTab (mock vp-1 to vp-6,
+-- fm-1 to fm-9). Left: the pool switch (Vendor price | Flights, a gold rule under the chosen one, as Company's store
+-- groups), the sub line, two cards (an item: icon, name in its quality colour, the quality word; a flight: the wyvern,
+-- from and to place and zone; the prices or the time, cost and stops and right or wrong only after the pick), the marks
+-- row, the status line, Next pair, and at the foot Daily / Endless / Share. A finished daily run shows the score, the
+-- grain earned and the ten answers instead of the cards (a Flights row's hover shows both full routes). Right: Today in
+-- the guild, Best endless streak and Daily streak. All UI state lives in V; V.pool is "items" or "flights".
+-- The tooltip is our own (M.Compat.Tooltip(): the name and the quality word, or a route's places and zones); the
+-- game's item tooltip is never asked, before or after the pick (o1652), so nothing here shows an item the player has
+-- not seen in game, and nothing shows a flight's time, cost or stops before its pick.
 -- ns.VendorToday, ns.VendorPick, ns.VendorMode, ns.VendorEndless, ns.VendorStats, ns.VendorGuild, ns.VendorBoard,
--- ns.Purse, ns.OpenChat and ns.ShownGame are looked up at call time (f7165: Demo.lua wraps them, tests replace them).
--- Endless picks go through ns.VendorPick(k) on ns.VendorEndless().pair (G7); ns.VendorMode("endless") starts a new run.
+-- ns.VendorPool, ns.SetVendorPool, ns.RouteCore, ns.Purse, ns.OpenChat and ns.ShownGame are looked up at call time
+-- (f7165: Demo.lua wraps them, tests replace them). Every store call passes "flights" on Flights and no pool on Vendor
+-- price (seam-check f1). Endless picks go through ns.VendorPick(k) (Flights: (k, nil, nil, "flights")) on
+-- ns.VendorEndless(pool).pair (G7); ns.VendorMode("endless", pool) starts a new run.
 
 local _, ns = ...
 
@@ -16,9 +21,10 @@ local M, VC = ns.M, ns.VendorCore
 
 local LEFT, GAP, OR_W = 8, 12, 30
 local SMALL_BELOW = 420 -- below this height (the 760x480 window) the cards, rows and lists shrink (vp-6)
-local BIG = { rw = 240, ch = 170, icon = 52, rh = 22, today = 8, board = 4 }
-local SMALL = { rw = 200, ch = 146, icon = 44, rh = 19, today = 3, board = 3 } -- rh 19: the ten answers end above the
--- button row with the 16 px games footer under the holder (S14 T7, d1613)
+-- fch, ficon: a Flights card holds five route lines and three value lines, so it is taller (mock fm-2, fm-9a)
+local BIG = { rw = 240, ch = 170, icon = 52, fch = 200, ficon = 52, rh = 22, today = 8, board = 4 }
+local SMALL = { rw = 200, ch = 146, icon = 44, fch = 176, ficon = 40, rh = 19, today = 3, board = 3 } -- rh 19: the
+-- ten answers end above the button row with the 16 px games footer under the holder (S14 T7, d1613)
 local RUN = 10
 local LIST_ROW = 20
 local WHEAT = 134058 -- INV_Misc_Food_Wheat_01
@@ -29,9 +35,24 @@ local COIN = { "Interface\\MoneyFrame\\UI-GoldIcon", "Interface\\MoneyFrame\\UI-
 local GREEN, RED = "|cff1eff00", "|cffff4040"
 local UNKNOWN = "The guild list is not known yet."
 local HINT = "Click an item. 5 grain a right pick, 25 more for all ten." -- before a pick (mock vp-1)
+local FLIGHT_HINT = "Click a flight. 5 grain a right pick, 25 more for all ten." -- mock fm-1a
 local ANS_GAP = 14 -- between the two sides of an answer row (mock vp-3)
+local WYVERN = 132268 -- Interface\Icons\Ability_Mount_Wyvern_01 (NOTES-fm.md Art)
+local CARD_LINE = 14 -- a Flights card line: one FontString each at a fixed step, so nothing hangs on a wrapped height
+local POOLS = { { key = "items", text = "Vendor price", w = 104 }, { key = "flights", text = "Flights", w = 80 } }
+local QUESTION = { time = "Which flight takes longer?", cost = "Which flight costs more?",
+  stops = "Which flight has more stops?" }
+local WORD = { time = "Time", cost = "Cost", stops = "Stops" }
+local FIELD = { time = "yards", cost = "copper", stops = "stops" }
+local MORE = { time = "Takes longer", cost = "Costs more", stops = "More stops" }
+local LESS = { time = "Shorter", cost = "Costs less", stops = "Fewer stops" }
+local VERB = { time = " takes longer.", cost = " costs more.", stops = " has more stops." }
 
-local V = { cards = {}, marks = {}, answers = {}, lists = {} }
+local V = { cards = {}, marks = {}, answers = {}, lists = {}, pools = {}, pool = "items" }
+
+-- The pool a store call carries: "flights", or nil for Vendor price (seam-check f1: the S12 calls stay as they were).
+local function poolArg() return V.pool == "flights" and "flights" or nil end
+local function flying() return V.pool == "flights" end
 
 local grey, label, button, fmt = ns.UI.grey, ns.UI.label, ns.UI.button, ns.UI.fmt -- Page.lua's helpers
 
@@ -69,9 +90,40 @@ local function textWidth(fs, text)
   return 7 * #(text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", ""):gsub("|T.-|t", "  "))
 end
 
+-- The side with the larger answer first: the dearer item, or the route with the larger value for the question.
 local function dearer(pair)
-  if pair.a.price >= pair.b.price then return pair.a, pair.b end
+  local f = pair.q and FIELD[pair.q] or "price"
+  if pair.a[f] >= pair.b[f] then return pair.a, pair.b end
   return pair.b, pair.a
+end
+
+-- ---------- a flight ----------
+
+local function node(id)
+  return ns.RouteCore.Node(id) or { place = "?", zone = "" }
+end
+
+-- "Orgrimmar to Gadgetzan" (the places only).
+local function routeName(r)
+  return node(r.from).place .. " to " .. node(r.to).place
+end
+
+-- "Durotar to Tanaris" (a node with no zone gives its place, f10).
+local function routeZones(r)
+  local a, b = node(r.from), node(r.to)
+  return (a.zone ~= "" and a.zone or a.place) .. " to " .. (b.zone ~= "" and b.zone or b.place)
+end
+
+-- "Direct", "1 stop", "N stops" (q1774).
+local function stopsText(n)
+  if n == 0 then return "Direct" end
+  return n .. (n == 1 and " stop" or " stops")
+end
+
+-- A route's value for a question: m:ss, the cost in coins, or the stops; only ever drawn after the pick.
+local function valueText(r, q)
+  if q == "time" then return ns.RouteCore.Clock(r.yards) elseif q == "cost" then return money(r.copper) end
+  return stopsText(r.stops)
 end
 
 -- ---------- placing ----------
@@ -107,23 +159,48 @@ end
 -- The two cards for pair; picked = { k, right } once a card was picked (then both prices show).
 local function drawCards(pair, picked, B, LW)
   local cw = math.floor((LW - OR_W) * 0.5)
+  local fl = pair.q ~= nil -- a Flights pair (mock fm-1, fm-2)
+  local ch, icon = fl and B.fch or B.ch, fl and B.ficon or B.icon
   for k, c in ipairs(V.cards) do
     local it = k == 1 and pair.a or pair.b
     c.item = it
-    c.f:SetSize(cw, B.ch)
+    c.f:SetSize(cw, ch)
     at(c.f, LEFT + (k - 1) * (cw + OR_W), 46)
     c.f:Show()
-    c.icon:SetSize(B.icon, B.icon)
-    c.icon:SetTexture(it.icon)
+    c.icon:SetSize(icon, icon)
+    c.icon:SetTexture(fl and WYVERN or it.icon)
     c.name:SetWidth(cw - 12)
     c.name:ClearAllPoints()
-    c.name:SetPoint("TOP", c.f, "TOP", 0, -(18 + B.icon))
-    c.name:SetText(coloured(it))
-    c.quality:SetText((VC.QUALITY[it.quality] or VC.QUALITY[1]).word)
+    c.name:SetPoint("TOP", c.f, "TOP", 0, -(18 + icon))
+    c.name:SetText(fl and "" or coloured(it))
+    c.quality:SetText(fl and "" or (VC.QUALITY[it.quality] or VC.QUALITY[1]).word)
     c.verdict:SetWidth(cw - 12)
     c.accent:SetShown(picked ~= nil and picked.k == k) -- the picked card's gold accent (mock vp-2)
-    if picked then
-      local more = it == dearer(pair)
+    local more = picked and it == dearer(pair)
+    -- A Flights card, one line each (mock fm-1, fm-2): from place, from zone, "to", to place, to zone (no line for an
+    -- empty zone, f10), then after the pick the time, the cost and stops, and the verdict.
+    local y, texts = 16 + icon, {}
+    if fl then
+      local a, b = node(it.from), node(it.to)
+      texts = { a.place, a.zone, "to", b.place, b.zone }
+      if picked then
+        texts[6] = ns.RouteCore.Clock(it.yards)
+        texts[7] = money(it.copper) .. " · " .. stopsText(it.stops)
+        texts[8] = (more and (GREEN .. MORE[pair.q] .. "|r") or LESS[pair.q])
+          .. (picked.k == k and " · your pick" or "")
+      end
+    end
+    for i, fs in ipairs(c.fl) do
+      local text = texts[i] or ""
+      if i == 6 then y = y + 6 end
+      fs:SetShown(text ~= "")
+      fs:SetText(text)
+      fs:SetWidth(cw - 12)
+      fs:ClearAllPoints()
+      fs:SetPoint("TOP", c.f, "TOP", 0, -y)
+      if text ~= "" then y = y + CARD_LINE end
+    end
+    if picked and not fl then
       c.price:SetText(money(it.price))
       c.verdict:SetText((more and (GREEN .. "Sells for more|r") or "Sells for less")
         .. (picked.k == k and " · your pick" or ""))
@@ -133,7 +210,7 @@ local function drawCards(pair, picked, B, LW)
     end
   end
   V.orText:ClearAllPoints()
-  V.orText:SetPoint("CENTER", V.body, "TOPLEFT", LEFT + cw + OR_W * 0.5, -(46 + B.ch * 0.5))
+  V.orText:SetPoint("CENTER", V.body, "TOPLEFT", LEFT + cw + OR_W * 0.5, -(46 + ch * 0.5))
   V.orText:Show()
 end
 
@@ -142,26 +219,33 @@ local function hideCards()
   V.orText:Hide()
 end
 
--- One side of an answer row: the name from x, cut with an ellipsis where the price (right-aligned at x + half) starts.
-local function answerSide(name, price, it, x, y, half)
-  local text = money(it.price)
+-- One side of an answer row: the name from x, cut with an ellipsis where the price or value (right-aligned at x +
+-- half) starts. it is an item, or a route of a Flights pair asking q.
+local function answerSide(name, price, it, q, x, y, half)
+  local text = q and valueText(it, q) or money(it.price)
   price:ClearAllPoints()
   price:SetPoint("TOPRIGHT", V.body, "TOPLEFT", x + half, -y)
   price:SetText(text)
   at(name, x, y)
   name:SetWidth(math.max(10, math.floor(half - textWidth(price, text) - 6)))
-  name:SetText(coloured(it))
+  name:SetText(q and routeName(it) or coloured(it))
 end
 
 local function drawAnswers(t, B, LW)
-  local half = math.floor((LW - 40 - ANS_GAP) * 0.5)
+  local fl = t.pairs[1] ~= nil and t.pairs[1].q ~= nil
+  local x0 = fl and 84 or 40 -- a Flights row has its question word after the mark (mock fm-3)
+  local half = math.floor((LW - x0 - ANS_GAP) * 0.5)
   at(V.answersHead, LEFT, 92)
   V.answersHead:SetWidth(LW)
   V.answersHead:Show()
+  V.dear:SetText(fl and "the right answer first" or "the dearer item first")
   for i, r in ipairs(V.answers) do
     local pair, mark = t.pairs[i], t.picks:sub(i, i)
     local shown = pair ~= nil and mark ~= ""
     for _, f in ipairs({ r.num, r.icon, r.nameA, r.priceA, r.nameB, r.priceB }) do f:SetShown(shown) end
+    r.word:SetShown(shown and fl)
+    r.hover:SetShown(shown and fl)
+    r.hover.pair, r.hover.i = shown and fl and pair or nil, i
     if shown then
       local y = 120 + (i - 1) * B.rh
       local hi, lo = dearer(pair)
@@ -169,8 +253,14 @@ local function drawAnswers(t, B, LW)
       r.num:SetText(tostring(i))
       at(r.icon, LEFT + 20, y - 1)
       r.icon:SetTexture(mark == "1" and RIGHT_ICON or WRONG_ICON)
-      answerSide(r.nameA, r.priceA, hi, LEFT + 40, y, half)
-      answerSide(r.nameB, r.priceB, lo, LEFT + 40 + half + ANS_GAP, y, half)
+      if fl then
+        at(r.word, LEFT + 40, y)
+        r.word:SetText(WORD[pair.q])
+        at(r.hover, LEFT, y - 3)
+        r.hover:SetSize(LW, B.rh)
+      end
+      answerSide(r.nameA, r.priceA, hi, pair.q, LEFT + x0, y, half)
+      answerSide(r.nameB, r.priceB, lo, pair.q, LEFT + x0 + half + ANS_GAP, y, half)
     end
   end
 end
@@ -178,7 +268,8 @@ end
 local function hideAnswers()
   V.answersHead:Hide()
   for _, r in ipairs(V.answers) do
-    for _, f in ipairs({ r.num, r.icon, r.nameA, r.priceA, r.nameB, r.priceB }) do f:Hide() end
+    for _, f in ipairs({ r.num, r.icon, r.nameA, r.priceA, r.nameB, r.priceB, r.word, r.hover }) do f:Hide() end
+    r.hover.pair = nil
   end
 end
 
@@ -239,8 +330,8 @@ end
 
 local function drawRight(B, W)
   placeRight(B, W)
-  local guild = ns.VendorGuild and ns.VendorGuild()
-  local board = ns.VendorBoard and ns.VendorBoard()
+  local guild = ns.VendorGuild and ns.VendorGuild(poolArg())
+  local board = ns.VendorBoard and ns.VendorBoard(poolArg())
   local today, best, streak = V.lists[1], V.lists[2], V.lists[3]
   today.extra:SetText(guild and (#guild .. " done") or "")
   drawList(today, guild, B.today, function(e) return (e.score or 0) .. "/10" end, "Nobody has finished today.",
@@ -285,16 +376,22 @@ local function drawStatus(picked, pair, sub, y, LW)
   at(V.status, LEFT, y + 24)
   V.status:SetWidth(LW - 130)
   V.sub:SetWidth(LW - 130)
-  V.sub:ClearAllPoints()
-  V.sub:SetPoint("TOPLEFT", V.status, "BOTTOMLEFT", 0, -4)
   if V.msg then
     V.status:SetText(RED .. V.msg .. "|r")
   elseif picked then
     local hi = dearer(pair)
-    V.status:SetText((picked.right and (GREEN .. "Right.|r ") or (RED .. "Wrong.|r ")) .. hi.name .. " sells for more.")
+    V.status:SetText((picked.right and (GREEN .. "Right.|r ") or (RED .. "Wrong.|r "))
+      .. (pair.q and (routeName(hi) .. VERB[pair.q]) or (hi.name .. " sells for more.")))
   else
-    V.status:SetText("Which sells for more to a vendor?")
+    V.status:SetText(pair and pair.q and QUESTION[pair.q] or "Which sells for more to a vendor?")
   end
+  -- The sub line at a measured y, not on the status line's wrapped bottom: one, two or three lines as the text is
+  -- wider than one or two columns (the unbounded width when it is a number above 0, S15; else textWidth).
+  local text = V.status:GetText() or ""
+  local w = V.status.GetUnboundedStringWidth and V.status:GetUnboundedStringWidth()
+  if not (type(w) == "number" and w > 0) then w = textWidth(V.status, text) end
+  local lines = w > 2 * (LW - 130) and 3 or w > LW - 130 and 2 or 1 -- review f3: at most three
+  at(V.sub, LEFT, y + 24 + lines * 14 + 4)
   V.sub:SetText(sub)
 end
 
@@ -302,16 +399,19 @@ function V.Draw()
   local W, H = size()
   local B = H < SMALL_BELOW and SMALL or BIG
   local LW = W - LEFT - B.rw - GAP - LEFT
-  local e = ns.VendorEndless and ns.VendorEndless()
-  local t = ns.VendorToday and ns.VendorToday()
+  local e = ns.VendorEndless and ns.VendorEndless(poolArg())
+  local t = ns.VendorToday and ns.VendorToday(poolArg())
   local last = V.last
   if last and (last.endless ~= (e ~= nil) or (not last.endless and not (t and t.n == last.n))) then
     V.last, last = nil, nil
   end
   drawPurse(LW)
+  for _, p in ipairs(V.pools) do -- the gold rule 1 px under the chosen pool's button (Company.lua:331-332)
+    if p.key == V.pool then at(V.mark, p.x, 25); V.mark:SetWidth(p.w) end
+  end
   bottomButtons(e, t)
   drawRight(B, W)
-  local y0 = 46 + B.ch + GAP
+  local y0 = 46 + (flying() and B.fch or B.ch) + GAP
   V.next:ClearAllPoints()
   V.next:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -(y0 + 22))
   V.next:Hide()
@@ -332,15 +432,16 @@ function V.Draw()
     at(V.lead, LEFT, y0)
     V.lead:SetText("Streak " .. (e.streak or 0))
     at(V.best, LEFT + 100, y0 + 2)
-    V.best:SetText("Your best: " .. ((ns.VendorStats and ns.VendorStats() or {}).best or 0))
+    V.best:SetText("Your best: " .. ((ns.VendorStats and ns.VendorStats(poolArg()) or {}).best or 0))
     V.best:Show()
     drawStatus(last, pair, e.done and "The run is over: start a new one."
       or "The pairs get closer as the streak grows. A wrong pick ends the run.", y0, LW) -- mock vp-4
+    V.next:SetText("Next pair") -- visual f1: never the daily's "Your results"
     V.next:SetShown(last ~= nil and not e.done)
   elseif not t then -- no pairs today (no clock, or no draw)
     hideCards()
     hideMarks()
-    V.title2:SetText("Vendor price")
+    V.title2:SetText(flying() and "Flights" or "Vendor price") -- the pool on screen
     V.lead:SetText("No pairs today: the day is not known yet.")
     at(V.lead, LEFT, 46)
     V.status:Hide()
@@ -374,8 +475,8 @@ function V.Draw()
     drawMarks(t.picks, LEFT + 100, y0)
     local right = VC.Rights(t.picks)
     drawStatus(last, pair, last and (right .. " of " .. #t.picks .. " right · " .. (t.earned or 0) .. " grain so far")
-      or HINT, y0, LW)
-    if not last then V.shown = { n = t.n, i = i, pair = pair } end -- what a click picks on (f7271)
+      or (flying() and FLIGHT_HINT or HINT), y0, LW)
+    if not last then V.shown = { n = t.n, i = i, pair = pair, pool = poolArg() } end -- what a click picks on (f7271)
     V.next:SetText(t.done and "Your results" or "Next pair")
     V.next:SetShown(last ~= nil)
   end
@@ -386,18 +487,24 @@ end
 
 local function pick(k)
   if V.last then return end -- one pick a pair; Next pair moves on
-  local e = ns.VendorEndless and ns.VendorEndless()
-  local t = not e and ns.VendorToday and ns.VendorToday()
-  local pair, i, n
+  local e = ns.VendorEndless and ns.VendorEndless(poolArg())
+  local t = not e and ns.VendorToday and ns.VendorToday(poolArg())
+  local pair, i, n, pool
   if e then
     if e.done then return end
-    pair = e.pair
+    pair, pool = e.pair, poolArg()
   elseif t and V.shown then -- the day and pair on screen, not a fresh read (f7271: the tab may be open over the reset)
-    pair, i, n = V.shown.pair, V.shown.i, V.shown.n
+    pair, i, n, pool = V.shown.pair, V.shown.i, V.shown.n, V.shown.pool
   end
   if not pair then return end
   local good, right, text
-  if e then good, right, text = ns.VendorPick(k) else good, right, text = ns.VendorPick(k, n, i) end
+  if pool then -- Flights: the pool always goes along (f3)
+    good, right, text = ns.VendorPick(k, n, i, pool)
+  elseif e then
+    good, right, text = ns.VendorPick(k)
+  else
+    good, right, text = ns.VendorPick(k, n, i)
+  end
   V.msg = nil
   if good then
     V.last = { k = k, right = right, pair = pair, i = i, n = n, endless = e ~= nil }
@@ -409,7 +516,7 @@ end
 
 local function mode(m)
   V.last, V.msg = nil, nil
-  ns.VendorMode(m)
+  ns.VendorMode(m, poolArg())
   V.Draw()
 end
 
@@ -418,27 +525,61 @@ local function nextPair()
   V.Draw()
 end
 
+-- The switch: the other pool is remembered (q1776) and drawn with nothing of the last one's pick or message (f4).
+local function setPool(p)
+  if p == V.pool then return end
+  V.pool, V.last, V.msg, V.shown = p, nil, nil, nil
+  if ns.SetVendorPool then ns.SetVendorPool(p) end
+  V.Draw()
+end
+
 local function share()
   if ns.Inert and ns.Inert() then return end
-  local t = ns.VendorToday and ns.VendorToday()
+  local t = ns.VendorToday and ns.VendorToday(poolArg())
   if not (t and t.done) then return end
-  if ns.OpenChat("/g " .. VC.ShareText(t.label, t.picks, true, 3)) then
+  local name = flying() and "Flights" or nil
+  if ns.OpenChat("/g " .. VC.ShareText(t.label, t.picks, true, 3, name)) then
     V.msg = "In the guild chat box: press Enter to send."
   else
-    V.msg = "Type this in guild chat: " .. VC.ShareText(t.label, t.picks, false, 3)
+    V.msg = "Type this in guild chat: " .. VC.ShareText(t.label, t.picks, false, 3, name)
   end
   V.Draw()
 end
 
 -- ---------- build ----------
 
+-- A card's tooltip: an item's name and quality word, or a route's places and zones (never its time, cost or stops).
 local function enter(self)
   local it, tip = self.item, M.Compat.Tooltip()
   if not (it and tip) then return end
-  local q = VC.QUALITY[it.quality] or VC.QUALITY[1]
   tip:SetOwner(self, "ANCHOR_RIGHT")
-  tip:SetText(coloured(it))
-  tip:AddLine(q.word, 0.8, 0.8, 0.8)
+  if it.from then
+    tip:SetText(routeName(it), 1, 1, 1)
+    tip:AddLine(routeZones(it), 0.8, 0.8, 0.8)
+  else
+    tip:SetText(coloured(it))
+    tip:AddLine((VC.QUALITY[it.quality] or VC.QUALITY[1]).word, 0.8, 0.8, 0.8)
+  end
+  tip:Show()
+end
+
+-- A finished Flights answer row's tooltip (A2, mock fm-9c): the question, then both full routes and their values, the
+-- larger first in green.
+local function rowEnter(self)
+  local pair, tip = self.pair, M.Compat.Tooltip()
+  if not (pair and tip) then return end
+  tip:SetOwner(self, "ANCHOR_BOTTOM")
+  tip:SetText(self.i .. ". " .. QUESTION[pair.q])
+  local hi, lo = dearer(pair)
+  for k, r in ipairs({ hi, lo }) do
+    tip:AddLine(routeName(r), 1, 1, 1)
+    tip:AddLine(routeZones(r), 0.6, 0.6, 0.6)
+    if k == 1 then
+      tip:AddLine(valueText(r, pair.q) .. " · " .. MORE[pair.q]:lower(), 0.12, 1, 0)
+    else
+      tip:AddLine(valueText(r, pair.q), 0.8, 0.8, 0.8)
+    end
+  end
   tip:Show()
 end
 
@@ -466,6 +607,16 @@ local function buildCard(body, k)
   c.verdict:SetJustifyH("CENTER")
   grey(c.verdict)
   c.verdict:SetPoint("TOP", c.price, "BOTTOM", 0, -2)
+  -- the Flights lines: places white, zones grey, "to" gold, the time white, the cost and stops grey, the verdict grey
+  c.fl = {}
+  for i, font in ipairs({ "GameFontHighlight", false, "GameFontNormal", "GameFontHighlight", false,
+    "GameFontHighlight", false, false }) do
+    local fs = label(f, font or nil)
+    fs:SetJustifyH("CENTER")
+    fs:SetWordWrap(false)
+    if not font then grey(fs) end
+    c.fl[i] = fs
+  end
   c.accent = f:CreateTexture(nil, "BORDER") -- as Kit.Card's accent: 2 px gold .55
   c.accent:SetColorTexture(1, 0.82, 0, 0.55)
   c.accent:SetWidth(2)
@@ -498,12 +649,21 @@ end
 
 local function build(body)
   V.body = body
-  local title = label(body, "GameFontHighlightLarge")
-  title:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -4)
-  title:SetText("Vendor price")
+  V.pool = ns.VendorPool and ns.VendorPool() == "flights" and "flights" or "items" -- the remembered pool (q1776)
+  local x = LEFT
+  for i, p in ipairs(POOLS) do -- the pool switch, both enabled, in the title row (o2169, q1767)
+    local b = button(body, p.text, p.w)
+    b:SetPoint("TOPLEFT", body, "TOPLEFT", x, -2)
+    b:SetScript("OnClick", function() M.Safe(setPool, p.key) end)
+    V.pools[i] = { key = p.key, x = x, w = p.w }
+    x = x + p.w + 6
+  end
+  V.mark = body:CreateTexture(nil, "ARTWORK") -- the chosen pool's gold rule, as Company.lua's C.mark
+  V.mark:SetColorTexture(1, 0.769, 0.251, 0.9)
+  V.mark:SetHeight(2)
   V.title2 = label(body)
   grey(V.title2)
-  V.title2:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -26)
+  V.title2:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -28)
   V.purseIcon = body:CreateTexture(nil, "ARTWORK")
   V.purseIcon:SetSize(16, 16)
   V.purseIcon:SetTexture(WHEAT)
@@ -532,13 +692,20 @@ local function build(body)
   V.note = label(body)
   grey(V.note)
   V.answersHead = header(body, "Your ten answers")
-  local dear = label(V.answersHead) -- mock vp-3
-  dear:SetPoint("TOPRIGHT", V.answersHead, "TOPRIGHT", -21, -8)
-  dear:SetText("the dearer item first")
-  grey(dear)
+  V.dear = label(V.answersHead) -- mock vp-3
+  V.dear:SetPoint("TOPRIGHT", V.answersHead, "TOPRIGHT", -21, -8)
+  V.dear:SetText("the dearer item first")
+  grey(V.dear)
   for i = 1, RUN do
     local r = { num = label(body), icon = body:CreateTexture(nil, "ARTWORK"), nameA = label(body), nameB = label(body),
-      priceA = label(body, "GameFontHighlight"), priceB = label(body, "GameFontHighlight") }
+      priceA = label(body, "GameFontHighlight"), priceB = label(body, "GameFontHighlight"), word = label(body),
+      hover = CreateFrame("Frame", nil, body) }
+    grey(r.word)
+    r.hover:EnableMouse(true) -- a Flights row's own tooltip (A2)
+    M.Kit.ListHover(r.hover) -- the row lights under the mouse (a11y f1)
+    r.hover:SetScript("OnEnter", function(self) M.Safe(rowEnter, self) end)
+    r.hover:SetScript("OnLeave", function() M.Safe(leave) end)
+    r.hover:Hide()
     grey(r.num)
     r.icon:SetSize(16, 16)
     r.priceA:SetJustifyH("RIGHT")
@@ -565,7 +732,12 @@ end
 ns.VendorTab = {
   Build = build,
   -- Nothing is drawn unless the Vendor price tab is on screen (RefreshPage calls this while hidden too).
+  -- Outside demo the saved pool wins (review f4: a demo switch saves nothing, so after demo off the tab follows it).
   Refresh = function()
+    if V.body and ns.VendorPool and not M.Demo() then
+      local p = ns.VendorPool() == "flights" and "flights" or "items"
+      if p ~= V.pool then V.pool, V.last, V.msg, V.shown = p, nil, nil, nil end
+    end
     if V.body and ns.ShownGame and ns.ShownGame() == "vendor" then V.Draw() end
   end,
 }
