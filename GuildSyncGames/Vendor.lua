@@ -17,7 +17,7 @@
 local _, ns = ...
 
 if not ns.M then return end
-local M, VC = ns.M, ns.VendorCore
+local M, VC, GC = ns.M, ns.VendorCore, ns.GrainCore
 
 local LEFT, GAP, OR_W = 8, 12, 30
 local SMALL_BELOW = 420 -- below this height (the 760x480 window) the cards, rows and lists shrink (vp-6)
@@ -47,6 +47,12 @@ local FIELD = { time = "yards", cost = "copper", stops = "stops" }
 local MORE = { time = "Takes longer", cost = "Costs more", stops = "More stops" }
 local LESS = { time = "Shorter", cost = "Costs less", stops = "Fewer stops" }
 local VERB = { time = " takes longer.", cost = " costs more.", stops = " has more stops." }
+-- The Lucky charm's refusal codes as the page says them (the button is hidden without a day and in demo).
+local CHARM_WHY = {
+  started = "The day's run has started.",
+  owned = "You have a charm on this game today.",
+  short = "Not enough grain in the purse.",
+}
 
 local V = { cards = {}, marks = {}, answers = {}, lists = {}, pools = {}, pool = "items" }
 
@@ -385,6 +391,20 @@ local function drawStatus(picked, pair, sub, y, LW)
   V.sub:SetText(sub)
 end
 
+-- The Lucky charm on the title row at the left column's right edge: the button before the day's first pick, the icon
+-- and its line once bought (o2766, o2769); nothing in endless.
+local function drawCharm(e, t, LW)
+  local on = not e and t ~= nil and t.charm == true
+  V.charm:SetShown(not e and t ~= nil and not on and #(t.picks or "") == 0)
+  V.charm:ClearAllPoints()
+  V.charm:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -2)
+  V.charmLine:ClearAllPoints()
+  V.charmLine:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -6)
+  V.charmLine:SetWidth(math.min(200, LEFT + LW - 222)) -- clear of the pool switch (x 8..198) with the icon
+  V.charmLine:SetShown(on)
+  V.charmIcon:SetShown(on)
+end
+
 function V.Draw()
   local W, H = size()
   local B = H < SMALL_BELOW and SMALL or BIG
@@ -399,6 +419,7 @@ function V.Draw()
     if p.key == V.pool then at(V.mark, p.x, 25); V.mark:SetWidth(p.w) end
   end
   bottomButtons(e, t)
+  drawCharm(e, t, LW)
   drawRight(B, W)
   local y0 = 46 + (flying() and B.fch or B.ch) + GAP
   V.next:ClearAllPoints()
@@ -506,6 +527,12 @@ end
 local function mode(m)
   V.last, V.msg = nil, nil
   ns.VendorMode(m, poolArg())
+  V.Draw()
+end
+
+local function buyCharm()
+  local good, why = ns.VendorBuyCharm(poolArg())
+  V.msg = not good and CHARM_WHY[why] or nil
   V.Draw()
 end
 
@@ -653,6 +680,18 @@ local function build(body)
   V.title2 = label(body)
   grey(V.title2)
   V.title2:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -28)
+  V.charm = button(body, "Lucky charm · " .. GC.CHARM_PRICE, 130)
+  local ci = V.charm:CreateTexture(nil, "ARTWORK")
+  ci:SetSize(16, 16)
+  ci:SetPoint("LEFT", V.charm, "LEFT", 6, 0)
+  ci:SetTexture(GC.CHARM_ICON)
+  V.charm:SetScript("OnClick", function() M.Safe(buyCharm) end)
+  V.charmLine = label(body)
+  V.charmLine:SetText("Lucky charm: double grain today")
+  V.charmIcon = body:CreateTexture(nil, "ARTWORK")
+  V.charmIcon:SetSize(16, 16)
+  V.charmIcon:SetPoint("TOPRIGHT", V.charmLine, "TOPLEFT", -4, 2)
+  V.charmIcon:SetTexture(GC.CHARM_ICON)
   for k = 1, 2 do buildCard(body, k) end
   V.orText = label(body, "GameFontNormal")
   V.orText:SetText("or")

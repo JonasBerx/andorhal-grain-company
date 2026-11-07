@@ -13,13 +13,18 @@
 --   CC.TRIPS, CC.STAKES, CC.GIVES, CC.TICKET_PRICE, CC.TICKETS_MAX, CC.SETTLE_AFTER, CC.FIRST_WEEK
 --   CC.WIRE_BASE = { title, colour, badge }: wire place n of a kind = local id - base; CC.PROJECT_BADGE_BASE (22):
 --     earned project badge k has local id 22 + k and wire badge 4 + k
---   CC.Item(id) -> { id, kind, name, price, icon?, hex?, slot? } | nil
+--   CC.Item(id) -> { id, kind, name, price, icon?, factionIcon?, hex?, slot?, path?, cropX?, cropY?, field? } | nil
+--     (1-22, 29-32)
+--   CC.ItemIcon(item, faction) -> the icon for the viewer's faction ("Horde" | "Alliance" | nil) | nil
+--   CC.FIELD_ITEMS (ids 29-32, field = true: decor slots 7-8, looks with a map path and crop; never in CC.ITEMS)
+--   CC.Catalogue() -> { item, ... } (ids 1-22 then 29-32, a fresh array)
 --   CC.Offset(gh, gm, t) -> -12..11;  CC.Week(t, off) -> week, closeAt, drawAt, settleAt, open
 --   CC.Number(week, key, i) -> 0..99999;  CC.Target(week, total, salt) -> 0..99999
 --   CC.Totals(rows) -> { x6 };  CC.Projects(totals) -> { current = k | nil, done = { x6 }, goals = { x6 } }
 --   CC.Draw(week, rows, salt) -> { key, i, number, target, total, pot, salt } | nil   (rows = { { key, b }, ... })
 --   CC.TicketsFor(b, week) -> the body's ticket count for week (its current or its previous week), 0 for none
---   CC.CaravanSeed(key, start, salt) -> 1..PM-1;  CC.Outcome(hours, stake, seed) -> back, kind | nil
+--   CC.CaravanSeed(key, start, salt) -> 1..PM-1;  CC.Outcome(hours, stake, seed, escort) -> back, kind | nil
+--     (escort == true: a bandit slot pays the fair road);  CC.ESCORT_PCT[hours], CC.EscortPrice(hours, stake) -> n | nil
 --   CC.PackBody(b) -> string;  CC.ParseBody(body, weekNow) -> b | nil, why
 --   CC.PackRow(b, off) -> string;  CC.ParseRow(row, weekNow) -> b, off | nil, why
 --     row = body *( "!" item ); item = "d" week "." salt "." target "." total "." i "." key | "d" week ".0"
@@ -90,15 +95,44 @@ CC.ITEMS = {
     icon = "interface\\icons\\trade_blacksmithing" },
   { id = 21, kind = "decor", name = "Plague cauldron", price = 1200, slot = 5, icon = "interface\\icons\\inv_potion_51" },
   { id = 22, kind = "decor", name = "Company banner", price = 1800, slot = 6,
-    icon = "interface\\icons\\inv_bannerpvp_02" },
+    icon = "interface\\icons\\inv_bannerpvp_01",
+    factionIcon = { Alliance = "interface\\icons\\inv_bannerpvp_02" } },
 }
 
 CC.COLOURS = {}
 for n = 1, 6 do CC.COLOURS[n] = { hex = CC.ITEMS[CC.WIRE_BASE.colour + n].hex } end
 
+-- Field items (run r-20261107 Task 1): stored apart from CC.ITEMS so a 0.16.0 client never meets their ids.
+CC.FIELD_ITEMS = {
+  { id = 29, kind = "decor", name = "Pumpkin patch", price = 700, slot = 7, icon = "interface\\icons\\inv_misc_food_59",
+    field = true },
+  { id = 30, kind = "decor", name = "Bone pile", price = 1000, slot = 8, icon = "interface\\icons\\inv_misc_bone_01",
+    field = true },
+  { id = 31, kind = "look", name = "Tirisfal fields", price = 2500, icon = "interface\\icons\\inv_misc_map_01",
+    path = "Interface\\WorldMap\\Tirisfal\\Tirisfal", cropX = 420, cropY = 200, field = true },
+  { id = 32, kind = "look", name = "Eastern Plaguelands fields", price = 4000, icon = "interface\\icons\\inv_misc_map_01",
+    path = "Interface\\WorldMap\\EasternPlaguelands\\EasternPlaguelands", cropX = 300, cropY = 280, field = true },
+}
+local FIELD_BY_ID = {}
+for _, it in ipairs(CC.FIELD_ITEMS) do FIELD_BY_ID[it.id] = it end
+
 function CC.Item(id)
   if type(id) ~= "number" then return nil end
-  return CC.ITEMS[id]
+  return CC.ITEMS[id] or FIELD_BY_ID[id]
+end
+
+function CC.Catalogue()
+  local list = {}
+  for _, it in ipairs(CC.ITEMS) do list[#list + 1] = it end
+  for _, it in ipairs(CC.FIELD_ITEMS) do list[#list + 1] = it end
+  return list
+end
+
+-- The icon a shop row shows: the viewer's faction art when the item has one (the Company banner), else its icon.
+-- faction is Compat.Faction()'s "Horde", "Alliance" or nil; nil and any other value get the default icon (Horde).
+function CC.ItemIcon(item, faction)
+  if type(item) ~= "table" then return nil end
+  return item.factionIcon and item.factionIcon[faction] or item.icon
 end
 
 -- ---------- the projects ----------
@@ -210,6 +244,7 @@ local PCT = {
 }
 CC.RICH_PCT = {}
 for h, p in pairs(PCT) do CC.RICH_PCT[h] = p.rich end
+CC.ESCORT_PCT = { [1] = 5, [2] = 10, [4] = 15, [8] = 25 } -- o2760: share of the stake, rounded up
 local STAKE_OK = {}
 for _, s in ipairs(CC.STAKES) do STAKE_OK[s] = true end
 
@@ -217,14 +252,21 @@ function CC.CaravanSeed(key, start, salt)
   return hash(tostring(key) .. "^" .. tostring(start) .. "^" .. tostring(salt)) % SEED_MOD + 1
 end
 
--- Slots 1-5 bandits, 6-13 fair road, 14-20 rich road (5 / 8 / 7 of 20).
-function CC.Outcome(hours, stake, seed)
+-- Slots 1-5 bandits, 6-13 fair road, 14-20 rich road (5 / 8 / 7 of 20); an escort turns bandits into the fair road.
+function CC.Outcome(hours, stake, seed, escort)
   local pct = type(hours) == "number" and PCT[hours]
   if not pct or not STAKE_OK[stake] then return nil end
   if type(seed) ~= "number" or seed ~= math.floor(seed) or seed < 1 or seed > SEED_MOD then return nil end
   local slot = seed * PM_MULT % PM % SLOTS + 1
   local kind = slot <= 5 and "bandits" or slot <= 13 and "fair" or "rich"
+  if kind == "bandits" and escort == true then kind = "fair" end
   return math.floor(stake * pct[kind] / 100), kind
+end
+
+function CC.EscortPrice(hours, stake)
+  local pct = type(hours) == "number" and CC.ESCORT_PCT[hours]
+  if not pct or not STAKE_OK[stake] then return nil end
+  return math.ceil(stake * pct / 100)
 end
 
 -- ---------- the body ----------

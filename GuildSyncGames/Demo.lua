@@ -18,6 +18,9 @@
 -- players hidden by a demo officer; ns.Lottery waits for an officer on the clock week - 1 (124 tickets) and shows the
 -- officer draw (salted, by a demo officer) of the week before, so a member sees the officer views in demo. ns.SetHidden
 -- says the demo line through ns.Inert. Nothing is saved, sent or credited (d1588).
+-- More to buy with grain (Task 9, AC6): ns.Bonemeal answers none running, ns.Stable a made-up holding of 12 shares in
+-- GC.ROSTER[1] over the real prices of this hour, the demo company's field owns decor 29 and wears no look, and the
+-- demo VendorToday and WhoToday carry charm = false. Every new action answers the demo line through ns.Inert.
 
 local _, ns = ...
 
@@ -336,6 +339,32 @@ function ns.RaceClock()
   return s.raceT + (type(t) == "number" and math.max(0, t - s.at) or 0)
 end
 
+-- Bonemeal: none running, the price from the demo field's ranks.
+local realBonemeal = ns.Bonemeal
+
+function ns.Bonemeal()
+  local s = state()
+  if not s then return realBonemeal() end
+  return { price = ns.GrainCore.BonePrice(s.grain.ranks), running = false, today = false }
+end
+
+-- Kodo stables: 12 made-up shares in the first kodo of the roster over the real prices of this hour, open to sell.
+local realStable = ns.Stable
+local DEMO_SHARES = 12
+
+function ns.Stable()
+  local s = state()
+  if not s then return realStable() end
+  local real = realStable()
+  if type(real) ~= "table" then return real end
+  local kodo = ns.GrainCore.ROSTER[1]
+  local t = ns.Now()
+  real.holding = { kodo = 1, name = kodo.name, icon = kodo.icon, shares = DEMO_SHARES,
+    value = DEMO_SHARES * real.prices[1], opensAt = t, locked = false, total = 0 }
+  real.total = 0
+  return real
+end
+
 -- Vendor price and Flights: the made-up run, list and board of the pool asked (no pool: items); the day's label and
 -- countdown stay real.
 local realVendorToday, realVendorStats = ns.VendorToday, ns.VendorStats
@@ -359,7 +388,7 @@ function ns.VendorToday(pool)
   local v = demoPool(s, pool)
   local label, secsLeft = realLabel()
   return { n = v.n, label = label, pairs = v.pairs, picks = v.picks, done = v.done, score = v.score,
-    earned = v.earned, secsLeft = secsLeft }
+    earned = v.earned, secsLeft = secsLeft, charm = false }
 end
 
 function ns.VendorStats(pool)
@@ -390,7 +419,7 @@ function ns.WhoToday()
   local v = s.who
   local label, secsLeft = realLabel()
   return { n = v.n, label = label, lines = v.lines, picks = v.picks, heard = #v.picks, done = v.done, mode = "daily",
-    score = v.score, earned = v.earned, secsLeft = secsLeft }
+    score = v.score, earned = v.earned, secsLeft = secsLeft, charm = false }
 end
 
 function ns.WhoStats()
@@ -423,6 +452,7 @@ function ns.CompanyState()
   if not s then return realCompanyState() end
   local v = {}
   for k, x in pairs(s.company) do v[k] = x end
+  v.field = { owned = { [29] = true }, look = 0 }
   return v
 end
 

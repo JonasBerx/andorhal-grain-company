@@ -1,9 +1,10 @@
 -- GuildSyncGames Grain.lua (Task 3): the grain state, account-wide in GuildSyncGamesDB.grain = { era, purse, standing,
 -- harvested, won, big, ranks = { farmhand, scythes, granary }, bet = { hour, lane, stake } | nil, last = { hour, pay }
--- | nil, hist = { { hour, lane, stake, pay } }, caravan = { start, hours, stake, back, kind } | nil, lastCaravan = (the
--- same) | nil, salt }, and GuildSyncGamesDB.lastGame. Read at call time through grain();
--- nothing here touches GuildSyncGamesDB at file execution (f7157). Every rule reads ns.Now() (f7154); RaceClock is for
--- drawing only. Play grain only: no gold, no items.
+-- | nil, hist = { { hour, lane, stake, pay } }, caravan = { start, hours, stake, back, kind, escort? } | nil,
+-- lastCaravan = (the same) | nil, salt, bone = { day, start, ends, carry } | nil }, and GuildSyncGamesDB.lastGame.
+-- escort (true only) and bone are optional and checked alone, outside sound(), so 0.16.0 loads them unchanged (run
+-- r-20261107 Task 3). Read at call time through grain(); nothing here touches GuildSyncGamesDB at file execution
+-- (f7157). Every rule reads ns.Now() (f7154); RaceClock is for drawing only. Play grain only: no gold, no items.
 -- The field grows on one chained M.After(60) tick while the client runs. Without C_Timer M.After does not run and the
 -- field does not grow, by design; settlement still runs on a read and at login. Do not add an OnUpdate (f7164).
 -- Demo: player actions say the inert line through ns.Inert(); internal writes (the tick, the settle, the launch reset)
@@ -87,13 +88,22 @@ local function soundCaravan(v)
     and int(v.back, 0)
 end
 
+-- Bonemeal as bought: a whole day, a whole start in 0..TIME_MAX (finite, so a hand-edited inf never runs for good, s1),
+-- ends = start + GC.BONE_SPAN, a whole carry 0..99. A bad one is dropped alone; sound() never looks at it.
+local TIME_MAX = 2147483647
+local function soundBone(b)
+  return type(b) == "table" and int(b.day, -TIME_MAX, TIME_MAX) and int(b.start, 0, TIME_MAX) and b.ends == b.start + GC.BONE_SPAN
+    and int(b.carry, 0, 99)
+end
+
 -- A due caravan pays its sealed back once: cleared, purse and lastCaravan in the same write (AC2).
 local function settleCaravan(g, t)
   local v = g.caravan
   if not (v and type(t) == "number" and t >= v.start + v.hours * HOUR) then return end
   g.caravan = nil
   g.purse = g.purse + v.back
-  g.lastCaravan = { start = v.start, hours = v.hours, stake = v.stake, back = v.back, kind = v.kind }
+  g.lastCaravan = { start = v.start, hours = v.hours, stake = v.stake, back = v.back, kind = v.kind,
+    escort = v.escort == true or nil }
 end
 
 -- The saved grain, made at call time. Outside demo it also does the launch reset (the whole table replaced, q1550,
@@ -111,6 +121,10 @@ local function grain()
   if not ok then d.grain = fresh(t) end
   if d.grain.bet ~= nil and not soundBet(d.grain.bet) then d.grain.bet = nil end
   if d.grain.caravan ~= nil and not soundCaravan(d.grain.caravan) then d.grain.caravan = nil end
+  if d.grain.caravan and d.grain.caravan.escort ~= nil and d.grain.caravan.escort ~= true then
+    d.grain.caravan.escort = nil
+  end
+  if d.grain.bone ~= nil and not soundBone(d.grain.bone) then d.grain.bone = nil end
   if type(t) == "number" and t >= GC.LAUNCH and d.grain.era ~= "live" then d.grain = fresh(t) end
   if settle(d.grain, t) then
     hook("BoardsDirty")
@@ -129,13 +143,21 @@ local function work()
   local t = ns.Now()
   local g = grain()
   if type(t) == "number" then
-    if grownAt and t - grownAt >= FLOOR then g.standing = GC.Grow(g.standing, g.ranks) end
+    if grownAt and t - grownAt >= FLOOR then
+      local b = g.bone
+      if b and t < b.ends then
+        g.standing, b.carry = GC.BoneGrow(g.standing, g.ranks, b.carry)
+      else
+        g.standing = GC.Grow(g.standing, g.ranks)
+      end
+    end
     if not grownAt or t - grownAt >= FLOOR then grownAt = t end
   end
   if g.bet then hook("ArmToast") end -- a toast missed while demo was on is armed now (f7193); ArmToast is idempotent
   if ns.BoardsTick then M.Safe(ns.BoardsTick, t) end
   if ns.VendorTick then M.Safe(ns.VendorTick, t) end -- VendorSync.lua (S12 T5), read at call time
   if ns.CompanyTick then M.Safe(ns.CompanyTick, t) end -- CompanySync.lua (S13 T4), read at call time
+  if ns.StablesTick then M.Safe(ns.StablesTick, t) end -- StablesStore.lua (run r-20261107 Task 5), read at call time
   local shown = ns.ShownGame and ns.ShownGame()
   if (shown == "harvest" or shown == "races" or shown == "company") and M.Compat.call("InCombatLockdown") == false
     and M.RefreshPage then
@@ -202,11 +224,47 @@ function ns.Credit(n)
   return true
 end
 
+-- The running Bonemeal, or nil; in demo an unchecked bone reads as none.
+local function running(g, t)
+  local b = g.bone
+  if soundBone(b) and type(t) == "number" and t < b.ends then return b end
+  return nil
+end
+
+-- rate stays the unboosted GC.Rate; boost, carry and boostEnds let the page count with GC.BoneGrow (f8).
 function ns.Farm()
   local g = read()
   local r = g.ranks
+  local b = running(g, ns.Now())
   return { standing = g.standing, cap = GC.Cap(r), rate = GC.Rate(r), harvested = g.harvested,
-    ranks = { farmhand = r.farmhand, scythes = r.scythes, granary = r.granary } }
+    ranks = { farmhand = r.farmhand, scythes = r.scythes, granary = r.granary },
+    boost = b ~= nil, carry = b and b.carry or nil, boostEnds = b and b.ends or nil }
+end
+
+-- Bonemeal (o2763): one a games day, 15% faster growth for GC.BONE_SPAN; left in seconds while it runs.
+function ns.Bonemeal()
+  local g = read()
+  local t = ns.Now()
+  local b = running(g, t)
+  local day = type(t) == "number" and (ns.Day()) or nil
+  return { price = GC.BonePrice(g.ranks), running = b ~= nil, ends = b and b.ends or nil,
+    left = b and b.ends - t or nil, today = soundBone(g.bone) and day ~= nil and g.bone.day == day }
+end
+
+function ns.BuyBonemeal()
+  if ns.Inert() then return nil, "demo" end
+  local t = ns.Now()
+  if type(t) ~= "number" then return nil, "clock" end
+  local day = (ns.Day())
+  if type(day) ~= "number" then return nil, "clock" end
+  local g = grain()
+  if running(g, t) then return nil, "running" end
+  if g.bone and g.bone.day == day then return nil, "today" end
+  local price = GC.BonePrice(g.ranks)
+  if price > g.purse then return nil, "short" end
+  g.purse = g.purse - price
+  g.bone = { day = day, start = t, ends = t + GC.BONE_SPAN, carry = 0 }
+  return true
 end
 
 function ns.Harvest()
@@ -284,20 +342,23 @@ end
 -- ---------- the caravan (S13) ----------
 
 -- One trip at a time: the stake leaves the purse once and the return is sealed at the send from (MyKey, start, salt).
--- The salt is made here, once, the first time it is needed (s12).
-function ns.SendCaravan(hours, stake)
+-- The salt is made here, once, the first time it is needed (s12). escort == true adds CC.EscortPrice to the send
+-- and seals the escorted outcome (a bandit slot pays the fair road, o2760).
+function ns.SendCaravan(hours, stake, escort)
   if ns.Inert() then return nil, "demo" end
   if not (among(CC.TRIPS, hours) and among(CC.STAKES, stake)) then return nil, "choice" end
   local t = ns.Now()
   if type(t) ~= "number" then return nil, "clock" end
   local g = grain()
   if g.caravan then return nil, "busy" end
-  if stake > g.purse then return nil, "short" end
+  escort = escort == true
+  local fee = escort and CC.EscortPrice(hours, stake) or 0
+  if stake + fee > g.purse then return nil, "short" end
   if g.salt == nil then g.salt = math.random(2147483646) end
-  local back, kind = CC.Outcome(hours, stake, CC.CaravanSeed(ns.MyKey(), t, g.salt))
+  local back, kind = CC.Outcome(hours, stake, CC.CaravanSeed(ns.MyKey(), t, g.salt), escort)
   if not back then return nil, "choice" end
-  g.purse = g.purse - stake
-  g.caravan = { start = t, hours = hours, stake = stake, back = back, kind = kind }
+  g.purse = g.purse - stake - fee
+  g.caravan = { start = t, hours = hours, stake = stake, back = back, kind = kind, escort = escort or nil }
   return true
 end
 
@@ -307,12 +368,14 @@ function ns.Caravan()
   if not v then return nil end
   local t = ns.Now()
   local home = type(t) == "number" and t >= v.start + v.hours * HOUR
-  return { start = v.start, hours = v.hours, stake = v.stake, back = home and v.back or nil }
+  return { start = v.start, hours = v.hours, stake = v.stake, back = home and v.back or nil,
+    escort = v.escort == true or nil }
 end
 
 function ns.LastCaravan()
   local v = read().lastCaravan
-  return v and { start = v.start, hours = v.hours, stake = v.stake, back = v.back, kind = v.kind } or nil
+  return v and { start = v.start, hours = v.hours, stake = v.stake, back = v.back, kind = v.kind,
+    escort = v.escort == true or nil } or nil
 end
 
 -- Drawing only (the Races page, the toast text); Demo.lua wraps it.

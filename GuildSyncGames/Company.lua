@@ -159,11 +159,14 @@ end
 
 -- ---------- the store (V2) ----------
 
--- The rows of the chosen group: CompanyCore's items of that kind in id order, then (Badges) the earned project badges.
+-- The rows of the chosen group: CompanyCore's items of that kind in id order (Field: decor and looks), then (Badges)
+-- the earned project badges.
 local function storeRows(CC, st)
   local out = {}
-  for _, it in ipairs(CC.ITEMS) do
-    if type(it) == "table" and it.kind == C.group then out[#out + 1] = { id = it.id, item = it } end
+  for _, it in ipairs(CC.Catalogue()) do
+    if type(it) == "table" and (it.kind == C.group or (C.group == "decor" and it.kind == "look")) then
+      out[#out + 1] = { id = it.id, item = it }
+    end
   end
   if C.group == "badge" then
     for k, p in ipairs(CC.PROJECTS) do
@@ -175,20 +178,25 @@ local function storeRows(CC, st)
 end
 
 local function drawRow(r, e, st, B, LW, y)
-  local kind = C.group
-  local owned = st.owned[e.id] and true or false
-  local worn = kind ~= "decor" and owned and st[kind] == e.id
+  local kind = e.item and e.item.kind or C.group -- a look row wears through field.look (run r-20261107 Task 7)
+  local fd = type(st.field) == "table" and st.field or nil
+  local mine = e.item and e.item.field and (fd and fd.owned or {}) or st.owned
+  local owned = mine[e.id] and true or false
+  local worn = kind ~= "decor" and owned and (kind == "look" and (fd and fd.look) or st[kind]) == e.id
+  r.kind = kind
   local btnX = LW - BTN_W
   local wordR = btnX - 6
   local priceR = (B.small and btnX or wordR - WORD_W) - 8
   at(r.btn, LEFT + btnX, y)
   r.icon:Show()
+  local _, faction = M.Compat.call("UnitFactionGroup", "player") -- the English token, "Horde" or "Alliance", in any locale
+  local icon = ns.CompanyCore.ItemIcon(e.item, faction)
   if e.earned then
     r.icon:SetTexture(e.earned.badge)
   elseif e.item.hex then
     r.icon:SetColorTexture(rgb(e.item.hex))
-  elseif e.item.icon then
-    r.icon:SetTexture(e.item.icon)
+  elseif icon then
+    r.icon:SetTexture(icon)
   else
     r.icon:Hide()
   end
@@ -568,8 +576,9 @@ local function rowClick(r)
     end)
   end
   if not r.id then return end
-  local kind = C.group
+  local kind = r.kind or C.group
   if r.btn.act == "buy" then act("store", ns.BuyItem, r.id)
+  elseif kind == "look" then act("store", ns.WearLook, r.btn.act == "wear" and r.id or 0)
   elseif r.btn.act == "wear" then act("store", ns.Wear, kind, r.id)
   else act("store", ns.Wear, kind, 0) end
 end

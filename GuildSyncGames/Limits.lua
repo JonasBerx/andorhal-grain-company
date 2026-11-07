@@ -12,13 +12,15 @@
 --   L.Company(b, t, off, members, mode) -> true | false, why
 --     off = CC.ParseRow's officer part or nil; members = the largest full-read roster count this session or nil;
 --     mode "merge" | "fold". With members nil the lottery term is left out of L11; merge skips L13 and fold refuses
---     any d item ("roster", d1608). L11's inflow pays both Vendor pools a day (L.VENDOR_DAY + L.FLIGHTS_DAY).
+--     any d item ("roster", d1608). L11's inflow pays all three dailies a day (Vendor, Flights, Who said it), doubled
+--     by a lucky charm (L.CHARM_MULT), and the Kodo stables at the cap: a dividend a race (L.STABLES_RACE) and the
+--     price spread a day (L.STABLES_DAY).
 -- Reading: L11's draws counts the drawAt times in (S, t] for the realm offset that gives the most (the signature
 -- carries no offset), so the bound is never tighter than the realm's own count.
 
 local _, ns = ...
 
-local Core, GC, CC = ns.Core, ns.GrainCore, ns.CompanyCore
+local Core, GC, CC, WC, SC = ns.Core, ns.GrainCore, ns.CompanyCore, ns.WhoCore, ns.StablesCore
 local L = {}
 ns.Limits = L
 
@@ -50,6 +52,10 @@ L.BIG = GC.BET_MAX * maxOf(GC.PAYS)       -- 3000, the top bet at the top odds
 L.VENDOR_DAY = 75                         -- 5 x 10 + 25, VendorStore.lua's day pay and streak bonus
 L.FLIGHTS_DAY = 75                        -- the same for the Flights pool (S21, o2167)
 L.CARAVAN_HOUR = caravanHour()            -- 600, the best caravan return an hour
+L.WHO_DAY = WC and WC.Pay(10) or 0        -- 75, a full Who said it run (0 without WhoCore.lua)
+L.CHARM_MULT = GC.CHARM_MULT              -- 2, a lucky charm doubles a daily's pay
+L.STABLES_RACE = SC and SC.SHARES_MAX * SC.DIV or 0 -- 20, a full holding's dividend a race (0 without it)
+L.STABLES_DAY = SC and SC.SHARES_MAX * (SC.PRICE_MAX - SC.PRICE_MIN) or 0 -- 4200, bought low, sold high
 L.BEST_CAP = math.floor(#ns.ITEMS / 2)    -- two unused items a pair
 L.FLIGHTS_BEST_CAP = math.floor(#ns.ROUTES / 2) -- two unused routes a pair
 L.WHO_BEST_CAP = ns.VOICES and #ns.VOICES.lines or 0 -- an endless run never repeats a line (0 without Voices.lua)
@@ -141,8 +147,9 @@ function L.Company(b, t, off, members, mode)
     sum = sum + g
   end
   local S, grows, races, days = terms(t)
-  local inflow = START_PURSE + L.MAX_RATE * grows + L.BIG * races + L.VENDOR_DAY * days + L.FLIGHTS_DAY * days
-    + L.CARAVAN_HOUR * races
+  local inflow = START_PURSE + L.MAX_RATE * grows + L.BIG * races
+    + L.CHARM_MULT * (L.VENDOR_DAY + L.FLIGHTS_DAY + L.WHO_DAY) * days
+    + L.CARAVAN_HOUR * races + L.STABLES_RACE * races + L.STABLES_DAY * days
   if members then
     inflow = inflow + draws(S, t) * (members + L.MEMBER_SLACK) * CC.TICKETS_MAX * CC.TICKET_PRICE
   end

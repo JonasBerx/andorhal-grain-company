@@ -22,6 +22,7 @@ end
 local function watch()
   hide()
   M.OpenPage()
+  if ns.Races and ns.Races.ShowRace then ns.Races.ShowRace() end -- off the Stables view, onto the race
   if ns.SelectGame then ns.SelectGame("races") end
   if M.RefreshPage then M.RefreshPage() end
 end

@@ -72,6 +72,7 @@ local function state()
   if n >= 1 and v.era ~= "live" then v = fresh(n) end
   if n > v.day.n then v.day = newDay(n) end
   if not demo then
+    if v.day.charm ~= nil and v.day.charm ~= true then v.day.charm = nil end -- dropped alone, never in sound()
     if type(GuildSyncGamesDB) ~= "table" then GuildSyncGamesDB = {} end
     GuildSyncGamesDB.who = v
   end
@@ -96,7 +97,21 @@ function ns.WhoToday()
   local lines = ns.WhoCore.Daily(day.n)
   if not lines then return nil end
   return { n = day.n, label = Core.Label(day.n), lines = lines, picks = day.picks, chose = day.chose or {}, heard = day.heard,
-    done = #day.picks >= RUN, mode = mode, score = rights(day.picks), earned = day.got or 0 }
+    done = #day.picks >= RUN, mode = mode, score = rights(day.picks), earned = day.got or 0,
+    charm = day.charm == true }
+end
+
+-- The Lucky charm, as ns.VendorBuyCharm: before the first pick, one a day, doubles the day's pay.
+function ns.WhoBuyCharm()
+  if ns.Inert() then return nil, "demo" end
+  local v = state()
+  if not v then return nil, "clock" end
+  local day = v.day
+  if day.charm == true then return nil, "owned" end
+  if #day.picks >= 1 then return nil, "started" end
+  if not ns.Spend(GC.CHARM_PRICE) then return nil, "short" end
+  day.charm = true
+  return true
 end
 
 function ns.WhoStats()
@@ -215,6 +230,7 @@ function ns.WhoPick(id, n, i)
   local WC = ns.WhoCore
   local c = rights(day.picks)
   local owed = WC.Pay(c) - WC.Pay(day.paid)
+  if day.charm == true then owed = owed * GC.CHARM_MULT end -- day.paid stays the undoubled count
   day.paid, day.bonus = c, day.bonus or c == RUN
   local t = ns.Now()
   if owed >= 1 and (day.n >= 1 or (type(t) == "number" and t < GC.LAUNCH)) and ns.Credit then

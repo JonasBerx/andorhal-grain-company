@@ -4,6 +4,8 @@
 -- the Harvest standing bar, d1965 the small forms, d1966 no "The caravan is back" line).
 -- ns.Home.Build(frame, shownKeys) makes every region; ns.Home.Draw(frame) only sets text, values, places and visibility
 -- (f12). Small is the frame's height under SMALL_BELOW. ns.HomeCard(id, small) answers one card's today data.
+-- Task 9 (d2049): Harvest's pill reads "Bonemeal" (gold) while it runs on a field that is not full; line 3: Kodo races
+-- "Stables: <n> shares in <name>" while held, a daily "<n> grain won today · lucky charm" with the day's charm on.
 -- Seam rule (R3, as Vendor.lua and Races.lua): every ns.* reader is looked up when called, never cached at load, so
 -- Demo.lua's wrappers reach the home. WoWdle shows counts only: never a letter or the word. Who shows no dialogue text.
 -- No division by a variable (games_static).
@@ -96,7 +98,7 @@ local function daily(today, guild, verb, small)
     out.status, out.tone = picks == 0 and "Waiting" or "Started", "gold"
   end
   L[2] = "Today in the guild: " .. count(guild) .. " done"
-  L[3] = tostring(today.earned or 0) .. " grain won today"
+  L[3] = tostring(today.earned or 0) .. " grain won today" .. (today.charm == true and (DOT .. "lucky charm") or "")
   return out
 end
 
@@ -114,6 +116,8 @@ local function harvest(small)
   local rest = type(cur) == "table" and type(now) == "number" and (cur.start or 0) + (cur.hours or 0) * 3600 - now or 0
   out.lines[1] = rest > 0 and ("Caravan back in " .. left(rest)) or "No caravan on the road"
   out.lines[2] = tostring(farm.rate or 0) .. " grain a minute"
+  local bone = ns.Bonemeal and ns.Bonemeal()
+  if out.status == "Growing" and type(bone) == "table" and bone.running then out.status = "Bonemeal" end
   return out
 end
 
@@ -152,6 +156,9 @@ local function races(small)
     for _, p in ipairs(GC.PAYS or {}) do if p > most then most = p end end
     L[2] = "Bet " .. tostring(GC.BET_MIN) .. " to " .. tostring(GC.BET_MAX) .. " grain, win up to x" .. most
   end
+  local st = ns.Stable and ns.Stable()
+  local hold = type(st) == "table" and st.holding or nil
+  if type(hold) == "table" then L[3] = "Stables: " .. tostring(hold.shares) .. " shares in " .. tostring(hold.name) end
   return out
 end
 

@@ -32,7 +32,14 @@ local INSET = 3 -- the tiles sit inside the inset's rim
 local BAR_TEXTURE = "Interface\\TargetingFrame\\UI-StatusBar"
 local GOLD = { 1, 0.769, 0.251 }
 local DIM = 0.45 -- a plot not grown yet
-local DECOR_SLOTS = 6 -- CC decor items carry slot 1..6, slot 6 at the field's bottom-right corner
+local DECOR_SLOTS = 8 -- CC decor items carry slot 1..8, slot 6 at the field's bottom-right corner, 7 and 8 left of 1
+local BONE_REFUSE = {
+  running = "Bonemeal is already on the field.",
+  today = "Bonemeal is used once a games day.",
+  short = "Not enough grain in the purse.",
+  clock = "No server clock yet; try again in a moment.",
+  demo = "Demo: nothing is saved.",
+}
 local TRIPS, STAKES = ns.CompanyCore.TRIPS, ns.CompanyCore.STAKES -- the buttons, from the list SendCaravan checks
 local CARAVAN_REFUSE = {
   short = "Not enough grain in the purse.",
@@ -60,21 +67,24 @@ end
 
 -- ---------- layout (the field's height and plot size follow the body's height) ----------
 
--- The map tiles that cover a w x h cut at CROP_X, CROP_Y, each placed and cut with texcoords; up to 4 are used.
-local function placeTiles(w, h)
+-- The map tiles that cover a w x h cut at CROP_X, CROP_Y (or the worn look's path and crop), each placed and cut
+-- with texcoords; up to 4 are used.
+local function placeTiles(w, h, look)
+  local path, cx, cy = TILE_PATH, CROP_X, CROP_Y
+  if look then path, cx, cy = look.path, look.cropX, look.cropY end
   local used = 0
   for r = 0, TILE_ROWS - 1 do
     for c = 0, TILE_COLS - 1 do
-      local x0, y0 = math.max(CROP_X, c * TILE), math.max(CROP_Y, r * TILE)
-      local x1, y1 = math.min(CROP_X + w, (c + 1) * TILE), math.min(CROP_Y + h, (r + 1) * TILE)
+      local x0, y0 = math.max(cx, c * TILE), math.max(cy, r * TILE)
+      local x1, y1 = math.min(cx + w, (c + 1) * TILE), math.min(cy + h, (r + 1) * TILE)
       if x1 > x0 and y1 > y0 and used < #H.tiles then
         used = used + 1
         local t = H.tiles[used]
-        t:SetTexture(TILE_PATH .. (r * TILE_COLS + c + 1))
+        t:SetTexture(path .. (r * TILE_COLS + c + 1))
         t:SetTexCoord((x0 - c * TILE) / TILE, (x1 - c * TILE) / TILE, (y0 - r * TILE) / TILE, (y1 - r * TILE) / TILE)
         t:SetSize(x1 - x0, y1 - y0)
         t:ClearAllPoints()
-        t:SetPoint("TOPLEFT", H.field, "TOPLEFT", INSET + x0 - CROP_X, -(INSET + y0 - CROP_Y))
+        t:SetPoint("TOPLEFT", H.field, "TOPLEFT", INSET + x0 - cx, -(INSET + y0 - cy))
         t:Show()
       end
     end
@@ -108,30 +118,42 @@ local function placeRight(narrow)
   H.guildBox:SetPoint("BOTTOMRIGHT", H.right, "BOTTOMRIGHT", 0, 0)
 end
 
--- The owned decorations' icons by slot (ns.CompanyState().owned, CC.Item); an owned id with no item (23..28, earned
--- badges) or of another kind is skipped.
+-- The owned decorations' icons by slot (the own ns.CompanyState(): owned for slots 1..6, field.owned for the field
+-- items, CC.Item) and the worn look's item and id, or nil; an owned id with no item (23..28, earned badges) or of
+-- another kind is skipped. Types are guarded: demo hands an unchecked table.
 local function decorBySlot()
   local out, CC = {}, ns.CompanyCore
   local st = ns.CompanyState and ns.CompanyState()
-  if type(CC) ~= "table" or type(st) ~= "table" or type(st.owned) ~= "table" then return out end
-  for id, on in pairs(st.owned) do
-    local it = on and CC.Item(id)
-    if type(it) == "table" and it.kind == "decor" and type(it.slot) == "number" and it.slot >= 1
-      and it.slot <= DECOR_SLOTS then
-      out[it.slot] = it.icon
+  if type(CC) ~= "table" or type(st) ~= "table" then return out end
+  local field = type(st.field) == "table" and st.field or nil
+  local fieldOwned = field and type(field.owned) == "table" and field.owned or nil
+  for _, owned in ipairs({ type(st.owned) == "table" and st.owned or {}, fieldOwned or {} }) do
+    for id, on in pairs(owned) do
+      local it = on and CC.Item(id)
+      if type(it) == "table" and it.kind == "decor" and (it.field == true) == (owned == fieldOwned)
+        and type(it.slot) == "number" and it.slot >= 1 and it.slot <= DECOR_SLOTS then
+        out[it.slot] = it.icon
+      end
     end
+  end
+  local it = fieldOwned and fieldOwned[field.look] and CC.Item(field.look)
+  if type(it) == "table" and it.kind == "look" and type(it.path) == "string" and type(it.cropX) == "number"
+    and type(it.cropY) == "number" then
+    return out, it, field.look
   end
   return out
 end
 
--- Decorations in fixed slots along the field's bottom edge, slot 6 in the bottom-right corner (hv-2).
+-- Decorations in fixed slots along the field's bottom edge, slot 6 in the bottom-right corner (hv-2), 7 and 8 to the
+-- left of slot 1.
 local function placeDecor(slots, size)
   for i, t in ipairs(H.decor) do
     if slots[i] ~= nil then
       t:SetTexture(slots[i])
       t:SetSize(size, size)
       t:ClearAllPoints()
-      t:SetPoint("BOTTOMRIGHT", H.field, "BOTTOMRIGHT", -(INSET + 2 + (DECOR_SLOTS - i) * (size + 2)), INSET + 2)
+      local pos = i <= 6 and 6 - i or i - 1
+      t:SetPoint("BOTTOMRIGHT", H.field, "BOTTOMRIGHT", -(INSET + 2 + pos * (size + 2)), INSET + 2)
       t:Show()
     else
       t:Hide()
@@ -156,6 +178,7 @@ local function placeCaravan(y, noHead)
   at(C.stakeL, LEFT, 78)
   for k, b in ipairs(H.trips) do at(b, LEFT + 48 + (k - 1) * 44, 48) end
   for k, b in ipairs(H.stakes) do at(b, LEFT + 48 + (k - 1) * 44, 74) end
+  at(C.escort, LEFT + COL_W - 90, 48)
   at(C.send, LEFT + COL_W - 90, 74)
 end
 
@@ -163,8 +186,8 @@ function H.Layout()
   local h, w = H.body:GetHeight(), H.body:GetWidth()
   local small = type(h) == "number" and h > 0 and h < SMALL_BELOW
   local narrow = type(w) == "number" and w > 0 and w - RX - 14 < NARROW_BELOW
-  local slots = decorBySlot()
-  local sig = tostring(small) .. ":" .. tostring(narrow)
+  local slots, look, lookId = decorBySlot()
+  local sig = tostring(small) .. ":" .. tostring(narrow) .. ":" .. tostring(lookId)
   for i = 1, DECOR_SLOTS do sig = sig .. ":" .. tostring(slots[i]) end -- the owned set (f12)
   if H.laid == sig then return end
   H.laid = sig
@@ -172,7 +195,7 @@ function H.Layout()
   placeDecor(slots, small and 20 or 24)
   local B = small and SMALL or BIG
   H.field:SetSize(COL_W, B.fieldH)
-  placeTiles(COL_W - 2 * INSET, B.fieldH - 2 * INSET)
+  placeTiles(COL_W - 2 * INSET, B.fieldH - 2 * INSET, look)
   local x0 = math.floor((COL_W - ((PLOT_COLS - 1) * B.dx + B.plot)) * 0.5)
   local y0 = math.floor((B.fieldH - (2 * B.dy + B.plot)) * 0.5)
   for i, p in ipairs(H.plots) do
@@ -192,15 +215,19 @@ function H.Layout()
   at(H.bar, LEFT, small and 12 or 16)
   if small then -- hv-4: no lifetime line, the caravan under Harvest (o2650: the purse lives in the page's top row)
     at(H.harvest, LEFT, 54)
+    H.bone:SetWidth(142)
+    at(H.bone, LEFT + 188, 54) -- on the Harvest row, its bottom 4 px above the caravan line (f11)
     H.lifetime:Hide()
     placeCaravan(y + 80, true) -- f8606: no Caravan header, the Stake row ends 6 px above the note
   else
     at(H.harvest, LEFT + math.floor((COL_W - 180) * 0.5), 54)
     -- f8606: the lifetime line at the right of its own row (o2650: no purse label beside it), the caravan under it
-    H.lifetime:SetWidth(COL_W - 90)
+    H.bone:SetWidth(140)
+    at(H.bone, LEFT, 94) -- Bonemeal at the left of the lifetime row
+    H.lifetime:SetWidth(COL_W - 150)
     H.lifetime:SetJustifyH("RIGHT")
     H.lifetime:SetWordWrap(false) -- a huge total is cut, never wrapped onto the next row
-    at(H.lifetime, LEFT + 90, 94)
+    at(H.lifetime, LEFT + 150, 94)
     H.lifetime:Show()
     placeCaravan(y + 132)
   end
@@ -218,15 +245,25 @@ local function drawField(farm)
     p:SetVertexColor(1, 1, 1, grown and 1 or DIM)
   end
   local full = " · full"
+  local boost = farm.boost == true -- the demo's farm has no boost, carry or boostEnds (gate A correction 4)
   if standing < cap and rate > 0 then
-    local mins, s = 0, standing -- the minutes until full, one growth at a time (GC.Grow's rule)
+    -- the minutes until full, one growth at a time: GC.BoneGrow for the grows before boostEnds, GC.Grow's rule after
+    local mins, s, carry, now = 0, standing, farm.carry or 0, ns.Now()
+    local ends = 0 -- seconds of boost left
+    if boost then
+      ends = (type(farm.boostEnds) == "number" and type(now) == "number") and farm.boostEnds - now or math.huge
+    end
     while s < cap and mins < 100000 do
-      s = s + rate
+      if (mins + 1) * 60 < ends then
+        s, carry = GC.BoneGrow(s, farm.ranks, carry)
+      else
+        s = s + rate
+      end
       mins = mins + 1
     end
     full = " · full in " .. mins .. " min"
   end
-  H.rate:SetText(rate .. " a minute" .. full)
+  H.rate:SetText(rate .. " a minute" .. (boost and " +15%" or "") .. full)
   if H.grow then
     H.grow:SetMinMaxValues(0, cap)
     H.grow:SetValue(standing)
@@ -275,6 +312,29 @@ local function left(secs)
   return hrs > 0 and (hrs .. " h " .. mins .. " min") or (mins .. " min")
 end
 
+-- The Bonemeal button: its price, on with the time left, or used today; a refusal is its tooltip.
+local function drawBone()
+  local b = ns.Bonemeal and ns.Bonemeal()
+  local why = H.boneWhy -- a click's refusal shows on the draw right after it, never past the next redraw (f2)
+  H.boneWhy = nil
+  H.bone:SetShown(type(b) == "table")
+  if type(b) ~= "table" then return end
+  if b.running then
+    H.bone:SetText("Bonemeal on · " .. left(b.left or 0))
+    H.bone.reason = BONE_REFUSE.running
+  elseif b.today then
+    H.bone:SetText("Bonemeal used today")
+    H.bone.reason = BONE_REFUSE.today
+  else
+    H.bone:SetText("Bonemeal · " .. fmt(b.price or 0))
+    local short = type(b.price) == "number" and b.price > (ns.Purse() or 0)
+    H.bone.reason = short and BONE_REFUSE.short or why
+    H.bone:SetEnabled(not short)
+    return
+  end
+  H.bone:SetEnabled(false)
+end
+
 -- The caravan's state as a key: a refusal line shows until the state moves on.
 local function caravanState()
   local cur = ns.Caravan and ns.Caravan()
@@ -301,7 +361,7 @@ local function drawCaravan()
   if cur then
     local back = (cur.start or 0) + (cur.hours or 0) * 3600
     local rest = back - (ns.Now() or back)
-    text = "On the road: " .. fmt(cur.stake or 0) .. " grain, back at " .. clock(back)
+    text = (cur.escort == true and "Escorted: " or "On the road: ") .. fmt(cur.stake or 0) .. " grain, back at " .. clock(back)
       .. (rest > 0 and (" (" .. left(rest) .. ")") or "")
   elseif H.carMsg then
     text = H.carMsg.text
@@ -318,6 +378,10 @@ local function drawCaravan()
   C.tripL:SetShown(idle)
   C.stakeL:SetShown(idle)
   C.send:SetShown(idle)
+  local fee = ns.CompanyCore.EscortPrice(H.trip, H.stake)
+  C.escort:SetText(fee and ("Escort +" .. fee) or "Escort")
+  C.escort:SetShown(idle)
+  if H.escort then C.escort:LockHighlight() else C.escort:UnlockHighlight() end
   choiceRow(H.trips, TRIPS, H.trip, idle)
   choiceRow(H.stakes, STAKES, H.stake, idle)
 end
@@ -326,6 +390,7 @@ function H.Draw()
   H.Layout()
   local farm = ns.Farm()
   drawField(farm)
+  drawBone()
   drawUpgrades(farm)
   drawCaravan()
   local boards = ns.GuildBoards and ns.GuildBoards()
@@ -341,7 +406,8 @@ end
 
 -- Send: what was picked goes to ns.SendCaravan; a refusal shows its line until the caravan's state moves on.
 local function send()
-  local done, why = ns.SendCaravan(H.trip, H.stake)
+  local done, why = ns.SendCaravan(H.trip, H.stake, H.escort == true)
+  if done then H.escort = false end -- the escort is for one trip; a refused send keeps the player's choice (f5)
   local text = not done and CARAVAN_REFUSE[why]
   if text then
     local _, _, key = caravanState()
@@ -349,6 +415,12 @@ local function send()
   else
     H.carMsg = nil
   end
+end
+
+-- Bonemeal: ns.BuyBonemeal; a refusal's sentence shows on the button's tooltip.
+local function buyBone()
+  local done, why = ns.BuyBonemeal()
+  H.boneWhy = not done and (BONE_REFUSE[why] or why) or nil
 end
 
 -- ---------- the guild harvest list's rows ----------
@@ -516,6 +588,8 @@ local function buildCaravan(body)
   end
   C.send = button(body, "Send", 90)
   C.send:SetScript("OnClick", function() M.Safe(act, send) end)
+  C.escort = button(body, "Escort", 90)
+  C.escort:SetScript("OnClick", function() M.Safe(act, function() H.escort = not H.escort end) end)
 end
 
 -- The standing bar: an M.Kit.StatBar with a gold StatusBar in its fill, the text one level above it.
@@ -558,6 +632,9 @@ local function build(body)
   buildBar(body)
   H.harvest = button(body, "", 180)
   H.harvest:SetScript("OnClick", function() M.Safe(act, ns.Harvest) end)
+  H.bone = button(body, "", 140)
+  H.bone:SetScript("OnClick", function() M.Safe(act, buyBone) end)
+  reasonTip(H.bone)
   H.lifetime = label(body)
   grey(H.lifetime)
   buildCaravan(body)

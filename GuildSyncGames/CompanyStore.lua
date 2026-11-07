@@ -90,6 +90,35 @@ local function fresh(t, old)
     title = 0, colour = 0, badge = 0, gifts = gifts, tickets = { week = 0, count = 0, prevWeek = 0, prevCount = 0 } }
 end
 
+-- The field's own part, company.field = { owned = { [id] = true }, look = id | 0 }, never in sound() and never in
+-- owned (a 0.16.0 client would replace the whole table): a non-table field is dropped, bad entries go, the look goes
+-- back to 0, and a field id found in owned moves into field.owned (run r-20261107 Task 7, f10). Never in demo.
+local function fieldOf(v)
+  if type(v.field) ~= "table" then v.field = { owned = {}, look = 0 } end
+  return v.field
+end
+
+local function checkField(v)
+  if v.field ~= nil and type(v.field) ~= "table" then v.field = nil end
+  if v.field and type(v.field.owned) ~= "table" then v.field.owned = {} end -- before the move (review f1)
+  for id in pairs(v.owned) do
+    local it = CC.Item(id)
+    if it and it.field then
+      v.owned[id] = nil
+      fieldOf(v).owned[id] = true
+    end
+  end
+  local f = v.field
+  if not f then return end
+  if type(f.owned) ~= "table" then f.owned = {} end
+  for id, on in pairs(f.owned) do
+    local it = CC.Item(id)
+    if on ~= true or not (it and it.field) then f.owned[id] = nil end
+  end
+  local it = CC.Item(f.look)
+  if f.look ~= 0 and not (it and it.kind == "look" and f.owned[f.look]) then f.look = 0 end
+end
+
 -- The saved company, made at call time. In demo a missing, unsound or pre-launch table is a fresh unsaved one and
 -- nothing is written (d1588).
 local function company()
@@ -111,6 +140,7 @@ local function company()
     local fits = (it and it.kind == k) or (k == "badge" and isProjectBadge(id))
     if id ~= 0 and not (fits and v.owned[id]) then v[k] = 0 end
   end
+  checkField(v)
   return v
 end
 
@@ -153,9 +183,10 @@ function ns.BuyItem(id)
   local it = CC.Item(id)
   if not it then return nil, "unknown" end
   local v = company()
-  if v.owned[it.id] then return nil, "owned" end
+  local owned = it.field and fieldOf(v).owned or v.owned
+  if owned[it.id] then return nil, "owned" end
   if not ns.Spend(it.price) then return nil, "short" end
-  v.owned[it.id] = true
+  owned[it.id] = true
   changed()
   return true
 end
@@ -170,6 +201,19 @@ function ns.Wear(kind, id)
     if not fits or not v.owned[id] then return nil, "unknown" end
   end
   v[kind] = id
+  changed()
+  return true
+end
+
+-- id 0 goes back to today's field; an owned look wears (field.look), anything else is "unknown".
+function ns.WearLook(id)
+  if ns.Inert() then return nil, "demo" end
+  local v = company()
+  if id ~= 0 then
+    local it = CC.Item(id)
+    if not (it and it.kind == "look" and type(v.field) == "table" and v.field.owned[id]) then return nil, "unknown" end
+  end
+  fieldOf(v).look = id
   changed()
   return true
 end

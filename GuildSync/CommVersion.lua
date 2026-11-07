@@ -9,7 +9,9 @@
 -- Module list (R7 Task 5): a second queue entry right after ver.A on hub domain ver-m, payload
 -- ver-m.L:<id>=<version>,... (loaded suite addons from ns.SUITE, never the hub) or ver-m.L:-. A ver.A clears the
 -- sender's list; a 0.12 client counts ver-m.L as "unknown" and goes on.
--- Update available: a newer proto from anyone (NoteNewer), or a higher addon version from an officer only (R8).
+-- Update available: a newer proto from anyone (NoteNewer), or a higher addon version from an officer only (R8), heard
+-- now or saved from an earlier session (checked on each full roster read, flagOfficerVersions). That line reads
+-- "your version is outdated. The latest version is <version>".
 -- One ns.Say per session; after that the Version status line says it.
 
 local _, ns = ...
@@ -91,11 +93,13 @@ function Version.Seen(key, t)
   entry(key).seen = t or now()
 end
 
-local function flagUpdate()
+-- The one "outdated" line of the session; text is the caller's (with the latest version), or the generic one (a newer
+-- protocol, no version known).
+local function flagUpdate(text)
   if update then return end
   update = true
-  ns.Say("update available: a guild member runs a newer GuildSync.")
-  ns.RegisterModule({ name = MODULE, status = function() return "update available" end })
+  ns.Say(text or "your version is outdated.")
+  ns.RegisterModule({ name = MODULE, status = function() return "your version is outdated" end })
 end
 
 -- A sender on a newer protocol (the registry refused its header as "newer"; crafting calls it too).
@@ -114,6 +118,11 @@ end
 -- Chat text with every "|" doubled, so a stored string cannot open a texture, colour or link escape.
 local function plain(v)
   return (tostring(v):gsub("|", "||"))
+end
+
+-- The update line for a higher addon version from an officer: the latest version this client has heard.
+local function officerUpdateText(addon)
+  return "your version is outdated. The latest version is " .. plain(addon)
 end
 
 -- ver.A:<addonVersion>:<proto list> -> { addon, proto }
@@ -155,7 +164,9 @@ Version.HANDLE = {
   A = function(msg, fromKey, t)
     local e = entry(fromKey)
     e.addon, e.proto, e.seen, e.mods = msg.addon, msg.proto, t, nil
-    if Version.Compare(msg.addon, ns.VERSION) > 0 and Comm.IsOfficer(fromKey) then flagUpdate() end
+    if Version.Compare(msg.addon, ns.VERSION) > 0 and Comm.IsOfficer(fromKey) then
+      flagUpdate(officerUpdateText(msg.addon))
+    end
     nudge()
   end,
 }
@@ -332,6 +343,18 @@ local function save()
   db.comm.versions[guildKey] = out
 end
 
+-- A higher addon version from an officer, heard now or saved from an earlier session, flags the update. The advert is
+-- sent once per login, so a member who logs in after the officer would otherwise never hear it. Officers only (R8).
+-- Runs on each full roster read, once per session in effect (flagUpdate keeps the first line).
+local function flagOfficerVersions()
+  for key, e in pairs(versions) do
+    if e.addon and Version.Compare(e.addon, ns.VERSION) > 0 and Comm.IsOfficer(key) then
+      flagUpdate(officerUpdateText(e.addon))
+      return
+    end
+  end
+end
+
 -- At each rosterRead (Roster.lua:80), the guild key as LinksStore derives it (LinksStore.lua:290-302). A new key
 -- saves the old guild's map under the old key and starts the new one; the first key keeps what was heard before it.
 -- A full read prunes the keys off the roster (AC11); a partial one prunes nothing.
@@ -355,6 +378,7 @@ local function onRosterRead(partial)
   local keys = {}
   for k in pairs(rows) do keys[k] = true end
   Version.Prune(keys)
+  flagOfficerVersions()
 end
 ns.On("rosterRead", onRosterRead, MODULE)
 

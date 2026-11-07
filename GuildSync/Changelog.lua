@@ -8,6 +8,20 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.18.0", lines = {}, addons = {
+    { folder = "GuildSync", lines = {
+      "When an officer runs a newer GuildSync, chat says your version is outdated and names the latest version.",
+      "That notice also comes at login, from an officer's version heard in an earlier session.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "A caravan escort keeps the bandits off the trip, for a share of the stake.",
+      "Bonemeal makes your field grow 15% faster for 4 hours, once a day.",
+      "A Lucky charm bought before the first pick doubles a daily game's grain.",
+      "Kodo stables: hold shares in one kodo and earn dividends on its wins; buying and selling cost a 10% fee.",
+      "New field decor and field looks in Company > Store > Field.",
+      "The Company banner in the store shows your own faction's banner.",
+    } },
+  } },
   { version = "0.17.0", lines = {}, addons = {
     { folder = "GuildSync", lines = {
       "Report a bug: /gsync bug or the Report a bug button on This character builds a report to paste in #bug-reports.",

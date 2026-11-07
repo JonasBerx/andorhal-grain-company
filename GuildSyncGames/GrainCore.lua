@@ -1,5 +1,7 @@
 -- GuildSyncGames GrainCore.lua (Task 2): the pure grain core, ns.GrainCore (upgrades, growth, the hourly kodo race,
--- odds, the race clock, lane positions, the board body). Loads after Core.lua.
+-- odds, the race clock, lane positions, the board body; Bonemeal and the Lucky charm). Loads after Core.lua.
+-- API (run r-20261107 Task 1): GC.BONE_PCT, GC.BONE_SPAN, GC.BonePrice(ranks) -> n,
+--   GC.BoneGrow(standing, ranks, carry) -> standing, carry (0..99); GC.CHARM_PRICE, GC.CHARM_MULT, GC.CHARM_ICON.
 -- Pure: string, table and math only, no globals, no date or time (the hour comes in as server seconds).
 -- Every division is by a constant. Draws go through Core.Order only: no copy of its step, no edit to Core.lua.
 
@@ -63,6 +65,30 @@ function GC.Grow(standing, ranks)
   if standing >= cap then return standing end
   return math.min(cap, standing + GC.Rate(ranks))
 end
+
+-- Bonemeal (run r-20261107 Task 1, o2763): 15% faster growth for 4 h of server time, priced at 10 x the rate.
+-- The extra is counted in hundredths of grain: carry (0..99) holds what is not yet a whole grain.
+local BONE_PCT = 15
+GC.BONE_PCT = BONE_PCT
+GC.BONE_SPAN = 14400
+
+function GC.BonePrice(ranks) return 10 * GC.Rate(ranks) end
+
+-- One boosted minute's growth, never past the cap; answers standing, carry.
+function GC.BoneGrow(standing, ranks, carry)
+  carry = carry or 0
+  local cap = GC.Cap(ranks)
+  if standing >= cap then return standing, carry end
+  local rate = GC.Rate(ranks)
+  local hundredths = rate * BONE_PCT + carry
+  local extra = math.floor(hundredths / 100)
+  return math.min(cap, standing + rate + extra), hundredths % 100
+end
+
+-- The Lucky charm (o2766, o2769): bought before the day's first pick, it doubles that day's pay.
+GC.CHARM_PRICE = 40
+GC.CHARM_MULT = 2
+GC.CHARM_ICON = "interface\\icons\\inv_misc_herb_goldclover"
 
 -- The next rank's price, nil at the top rank or for an unknown id.
 function GC.NextPrice(ranks, id)

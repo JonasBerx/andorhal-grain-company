@@ -40,6 +40,8 @@ local M = GuildSync and GuildSync.RegisterModule({
       "GetGameTime",
       -- UnitClass, UnitName (d1720, S17): the own-card preview reads them through M.Compat.call; missing, it draws with no name or icon.
       "UnitClass", "UnitName",
+      -- UnitFactionGroup: the Company banner shows the viewer's faction (CompanyCore ItemIcon); missing, the Horde banner.
+      "UnitFactionGroup",
       -- Who said it (S22, q1781): WhoSound.lua plays a line and reads the sound settings; missing, the game is hidden.
       "PlaySound", "C_Sound.PlaySound", "C_Sound.IsPlaying", "C_CVar.GetCVarBool",
       -- GetTime (f8603, d1881): Races.lua's kodos move between two server seconds; missing, they step once a second.

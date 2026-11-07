@@ -611,6 +611,19 @@ function U.Draw()
   local W, H, small = size()
   U.S = small and SMALL or BIG
   U.acc = 0
+  U.stablesBtn:SetText(U.stables and "Races" or "Stables")
+  if U.stables then -- Task 6: the Stables view in place of the race views, boards and note
+    for _, f in ipairs({ U.raceBox, U.betBox, U.list, U.bar, U.betHead, U.betLine, U.result, U.detail, U.again,
+      U.betOn, U.skip }) do
+      f:SetShown(false)
+    end
+    drawBoard(U.last, false)
+    drawBoard(U.big, false)
+    U.note:SetText("")
+    U.sub:SetText("Hold shares in one kodo; every race it wins pays you.")
+    return ns.StablesView.Draw(U.holder, W, H, small)
+  end
+  if ns.StablesView then ns.StablesView.Hide() end
   local v = view()
   seeSecond(v)
   U.v = v
@@ -679,6 +692,7 @@ end
 
 local function watch(h)
   U.replay = { hour = h, t0 = ns.RaceClock() }
+  U.stables = nil
   U.Draw()
 end
 
@@ -867,6 +881,15 @@ local function build(holder)
   local title = label(holder, "GameFontHighlightLarge") -- white, as Harvest and the mock (v1)
   title:SetPoint("TOPLEFT", holder, "TOPLEFT", LEFT, -4)
   title:SetText("Kodo races")
+  U.stablesBtn = button(holder, "Stables", 80) -- swaps the race views for the Stables view (Task 6) and back
+  U.stablesBtn:SetPoint("TOPRIGHT", holder, "TOPRIGHT", -LEFT, -2)
+  U.stablesBtn:SetScript("OnClick", function()
+    M.Safe(function()
+      U.stables = not U.stables or nil
+      U.Draw()
+    end)
+  end)
+  ns.StablesView.Build(holder)
   U.sub = label(holder)
   grey(U.sub)
   U.sub:SetPoint("TOPLEFT", holder, "TOPLEFT", LEFT, -26)
@@ -880,6 +903,7 @@ local function build(holder)
   grey(U.note)
   holder:HookScript("OnHide", function()
     U.replay = nil
+    U.stables = nil
     U.box:ClearFocus()
   end)
   holder:HookScript("OnSizeChanged", function() M.Safe(U.Draw) end)
@@ -890,6 +914,8 @@ ns.Races = {
   Refresh = function()
     if U.holder then U.Draw() end
   end,
+  -- Task 6: back to the race view from the Stables view (Toast.lua's Watch calls it before ns.SelectGame).
+  ShowRace = function() U.stables = nil end,
   RowLayout = rowLayout,
   PathAt = pathAt,
 }

@@ -12,7 +12,7 @@
 local _, ns = ...
 
 if not ns.M then return end
-local M = ns.M
+local M, GC = ns.M, ns.GrainCore
 
 local LEFT, GAP = 8, 12
 local SMALL_BELOW = 420 -- below this height (the 760x480 window) the card, names, rows and lists shrink (ws-6)
@@ -43,6 +43,9 @@ local WHY = {
   done = "This run is over.",
   demo = "The demo plays no lines.",
   rolled = "A new day: today's lines are out.",
+  started = "The day's run has started.", -- the Lucky charm's
+  owned = "You have a charm on this game today.",
+  short = "Not enough grain in the purse.",
 }
 
 local V = { names = {}, marks = {}, answers = {}, lists = {} }
@@ -329,6 +332,20 @@ local function placeNext(text, shown, y, LW)
   V.next:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -(y + 22))
 end
 
+-- The Lucky charm on the title row at the left column's right edge: the button before the day's first pick, the icon
+-- and its line once bought (o2766, o2769); nothing in endless.
+local function drawCharm(e, t, LW)
+  local on = not e and t ~= nil and t.charm == true
+  V.charm:SetShown(not e and t ~= nil and not on and #(t.picks or "") == 0)
+  V.charm:ClearAllPoints()
+  V.charm:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -2)
+  V.charmLine:ClearAllPoints()
+  V.charmLine:SetPoint("TOPRIGHT", V.body, "TOPLEFT", LEFT + LW, -6)
+  V.charmLine:SetWidth(math.min(200, LEFT + LW - 222))
+  V.charmLine:SetShown(on)
+  V.charmIcon:SetShown(on)
+end
+
 function V.Draw()
   local W, H = size()
   local B = H < SMALL_BELOW and SMALL or BIG
@@ -341,6 +358,7 @@ function V.Draw()
   end
   V.shown = nil
   bottomButtons(e, t)
+  drawCharm(e, t, LW)
   drawRight(B, W)
   V.next:Hide()
   V.best:Hide()
@@ -489,6 +507,12 @@ local function mode(m)
   V.Draw()
 end
 
+local function buyCharm()
+  local good, why = ns.WhoBuyCharm()
+  V.msg = not good and WHY[why] or nil
+  V.Draw()
+end
+
 local function nextLine()
   V.last, V.msg = nil, nil
   V.Draw()
@@ -572,6 +596,18 @@ local function build(body)
   V.title2 = label(body)
   grey(V.title2)
   V.title2:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -28)
+  V.charm = button(body, "Lucky charm · " .. GC.CHARM_PRICE, 130)
+  local ci = V.charm:CreateTexture(nil, "ARTWORK")
+  ci:SetSize(16, 16)
+  ci:SetPoint("LEFT", V.charm, "LEFT", 6, 0)
+  ci:SetTexture(GC.CHARM_ICON)
+  V.charm:SetScript("OnClick", function() M.Safe(buyCharm) end)
+  V.charmLine = label(body)
+  V.charmLine:SetText("Lucky charm: double grain today")
+  V.charmIcon = body:CreateTexture(nil, "ARTWORK")
+  V.charmIcon:SetSize(16, 16)
+  V.charmIcon:SetPoint("TOPRIGHT", V.charmLine, "TOPLEFT", -4, 2)
+  V.charmIcon:SetTexture(GC.CHARM_ICON)
   buildCard(body)
   for k = 1, 4 do buildName(body, k) end
   for i = 1, RUN do

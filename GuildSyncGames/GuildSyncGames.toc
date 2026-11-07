@@ -19,6 +19,7 @@ VendorCore.lua
 WhoCore.lua
 RouteCore.lua
 CompanyCore.lua
+StablesCore.lua
 Limits.lua
 Module.lua
 Store.lua
@@ -32,11 +33,13 @@ WhoSound.lua
 WhoStore.lua
 CompanyStore.lua
 CompanySync.lua
+StablesStore.lua
 Page.lua
 Home.lua
 WoWdle.lua
 Harvest.lua
 Races.lua
+Stables.lua
 Vendor.lua
 Who.lua
 Company.lua
