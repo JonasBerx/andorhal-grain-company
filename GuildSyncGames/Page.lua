@@ -6,7 +6,10 @@
 -- S14 Task 7: the holders end FOOT_H 16 above the page's foot, where one grey line says how a guildmate's row arrives.
 -- S22 Task 6 (o2200): the tab row is a game menu, M.Kit.Dropdown in the same 32-tall row, else plain prev and next
 -- buttons around the chosen name. An entry's optional shown() is read at the build: a hidden entry gets no menu line,
--- no holder and no build. The build opens on ns.LastGame() when that game is shown, else WoWdle.
+-- no holder and no build.
+-- o2650 Task 1: P.chosen nil is the home (P.home on the holder anchors, filled by ns.Home when loaded). The build, every
+-- window open and the page's OnShow go home and record nothing; a pick (menu, plain step, ns.OpenGame) records the game.
+-- The row: All games, the menu, the purse (a throttled OnUpdate redraws it on a change), the "i".
 
 local _, ns = ...
 
@@ -23,6 +26,17 @@ local FOOT = "A guildmate's row shows once you were online together after they l
 local INFO_W, INFO_LINE = 400, 14 -- S28b Task 5 (q1911): the info panel under the menu row's "i", right-aligned
 local INFO_MAX = 6 -- info lines per game, at most
 local INFO_ART = "Interface\\common\\help-i" -- file id 616343
+local ALL_W = 84 -- o2650: the row's All games button
+local ROW_X = 10 + ALL_W + 6 -- the menu (or the plain prev) right of All games
+local WHEAT = 134058 -- INV_Misc_Food_Wheat_01
+local PURSE_W = 130 -- the purse's mouse area (icon and label right-aligned in it)
+local PURSE_EVERY, HOME_EVERY = 0.5, 5 -- o2655: the purse check; the home's redraw while it shows
+local HOME_TEXT = "Choose a game"
+local PURSE_TIP = { "Your grain", "One purse for every game: what you win, harvest and spend.",
+  "Grain is play money: never gold, never traded." }
+local HOME_INFO = { "Your field grows grain; press Harvest to put it in your purse.",
+  "Grain pays for bets, the store and the lottery.", "Daily puzzles: right picks earn grain; Endless pays none.",
+  PURSE_TIP[2], PURSE_TIP[3] }
 
 -- ---------- the widget helpers Harvest.lua and Races.lua share (ns.UI; WoWdle.lua keeps its own) ----------
 
@@ -128,20 +142,45 @@ local function choose(key)
   for k, h in pairs(P.holders) do
     if k ~= key then h:Hide() end
   end
+  if P.home then P.home:Hide() end
   holder:Show()
-  if P.menu then M.Kit.DropdownText(P.menu, e.text) end
+  if P.all then P.all:SetEnabled(true) end
+  if P.menu and M.Kit and M.Kit.DropdownText then M.Kit.DropdownText(P.menu, e.text) end
   if P.name then P.name:SetText(e.text) end
   if e.refresh then M.Safe(e.refresh, holder) end
   if P.info and P.info:IsShown() then P.fillInfo() end
 end
 ns.SelectGame = choose
 
--- A menu pick or a prev / next click: the game is remembered (when Grain.lua is loaded), then shown. The build's own
--- choose is not a click and records nothing.
+-- The home's cards, drawn now (when Home.lua is loaded and the home shows).
+local function drawHome()
+  P.homeDirty, P.homeSince = false, 0
+  local H = ns.Home
+  if P.home and P.chosen == nil and type(H) == "table" and H.Draw then M.Safe(H.Draw, P.home) end
+end
+
+-- The home: every holder hidden, the home frame shown, nothing recorded. Cheap and idempotent (it runs on the window's
+-- open and on the page's OnShow).
+local function goHome()
+  if not P.home then return end
+  P.chosen = nil
+  for _, h in pairs(P.holders) do h:Hide() end
+  P.home:Show()
+  if P.menu and M.Kit and M.Kit.DropdownText then M.Kit.DropdownText(P.menu, HOME_TEXT) end
+  if P.name then P.name:SetText(HOME_TEXT) end
+  if P.all then P.all:SetEnabled(false) end
+  drawHome()
+  if P.info and P.info:IsShown() then M.Safe(P.fillInfo) end
+end
+
+-- A menu pick, a prev / next click or ns.OpenGame: a shown game is remembered (when Grain.lua is loaded), then shown.
+-- The build's own choose is not a click and records nothing; an unknown or hidden key does nothing.
 local function clicked(key)
+  if not P.holders[key] then return end
   if ns.SetLastGame then ns.SetLastGame(key) end
   choose(key)
 end
+ns.OpenGame = clicked
 
 -- The chosen key while its holder and every ancestor are shown, else nil. The walk stops at UIParent or at a parent
 -- that is not a frame (the sim answers a function for a missing one); only an IsShown of false counts as hidden.
@@ -156,9 +195,15 @@ function ns.ShownGame()
   return key
 end
 
--- The plain fallback's step: the shown game by off from the chosen one, round the list.
+-- The plain fallback's step: the shown game by off from the chosen one, round the list; from the home the first (next)
+-- or the last (prev).
 local function step(off)
   local n = #P.games
+  if P.chosen == nil then
+    local e = P.games[off > 0 and 1 or n]
+    if e then clicked(e.key) end
+    return
+  end
   for i, e in ipairs(P.games) do
     if e.key == P.chosen then return clicked(P.games[ns.Core.Mod(i - 1 + off, n) + 1].key) end
   end
@@ -171,22 +216,71 @@ local function stepButton(page, text, x, off)
   return b
 end
 
+-- The row purse: redrawn only when ns.Purse() changed.
+local function drawPurse()
+  local n = ns.Purse and ns.Purse()
+  if P.purseLabel and type(n) == "number" and n ~= P.purseShown then
+    P.purseShown = n
+    P.purseLabel:SetText(UI.fmt(n) .. " grain")
+  end
+end
+
+local function purseTip(self)
+  if type(GameTooltip) ~= "table" then return end
+  GameTooltip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
+  GameTooltip:SetText(PURSE_TIP[1])
+  for i = 2, #PURSE_TIP do GameTooltip:AddLine(PURSE_TIP[i], 1, 1, 1, true) end
+  GameTooltip:Show()
+end
+
+-- The purse right of the menu, 8 left of the "i" (b): wheat 16x16 then "<n> grain".
+local function buildPurse(page, b)
+  local f = CreateFrame("Frame", nil, page)
+  f:SetSize(PURSE_W, 20)
+  f:SetPoint("RIGHT", b, "LEFT", -8, 0)
+  f:EnableMouse(true)
+  P.purse = f
+  P.purseLabel = UI.label(f, "GameFontHighlight")
+  P.purseLabel:SetPoint("RIGHT", f, "RIGHT", 0, 0)
+  P.purseLabel:SetJustifyH("RIGHT")
+  P.purseLabel:SetWordWrap(false)
+  local icon = f:CreateTexture(nil, "ARTWORK")
+  icon:SetSize(16, 16)
+  icon:SetTexture(WHEAT)
+  icon:SetPoint("RIGHT", P.purseLabel, "LEFT", -4, 0)
+  f:SetScript("OnEnter", function(self) M.Safe(purseTip, self) end)
+  f:SetScript("OnLeave", function() if type(GameTooltip) == "table" then GameTooltip:Hide() end end)
+  drawPurse()
+end
+
+-- o2655: every PURSE_EVERY the purse redraws on a change and a dirty home draws; while the home shows it is marked dirty
+-- every HOME_EVERY.
+local function tick(since)
+  P.homeSince = (P.homeSince or 0) + since
+  drawPurse()
+  if P.chosen == nil and P.homeSince >= HOME_EVERY then P.homeDirty = true end
+  if P.homeDirty and P.chosen == nil then drawHome() end
+end
+
 -- The game list and each entry's shown() are read now, at the page's build (an entry added before the window first
 -- opens gets its menu line).
 function ns.BuildPage(page)
   for _, e in ipairs(ns.GAMES) do
     if type(e.shown) ~= "function" or e.shown() then P.games[#P.games + 1] = e end
   end
-  P.menu = M.Kit.Dropdown(page, MENU_W, function(_, root)
+  P.all = UI.button(page, "All games", ALL_W)
+  P.all:SetPoint("TOPLEFT", page, "TOPLEFT", 10, -5)
+  P.all:SetScript("OnClick", function() M.Safe(goHome) end)
+  P.menu = M.Kit and M.Kit.Dropdown and M.Kit.Dropdown(page, MENU_W, function(_, root)
     for _, e in ipairs(P.games) do
       root:CreateRadio(e.text, function(k) return P.chosen == k end, function(k) M.Safe(clicked, k) end, e.key)
     end
   end)
   if P.menu then
-    P.menu:SetPoint("TOPLEFT", page, "TOPLEFT", 10, -3) -- mock mn-1: at x 8 the open list's art left the page
+    P.menu:SetPoint("TOPLEFT", page, "TOPLEFT", ROW_X, -3) -- mock mn-1: at x 8 the open list's art left the page
   else
-    local prev = stepButton(page, "<", 4, -1)
-    local nxt = stepButton(page, ">", 4 + STEP_W + NAME_W, 1)
+    local prev = stepButton(page, "<", ROW_X, -1)
+    local nxt = stepButton(page, ">", ROW_X + STEP_W + NAME_W, 1)
     P.name = UI.label(page, "GameFontNormal")
     P.name:SetPoint("LEFT", prev, "RIGHT", 0, 0)
     P.name:SetPoint("RIGHT", nxt, "LEFT", 0, 0)
@@ -208,10 +302,34 @@ function ns.BuildPage(page)
   foot:SetWordWrap(false)
   foot:SetText(FOOT)
   UI.grey(foot)
+  -- the home, on the holder anchors; Home.lua (looked up now) builds its cards
+  P.home = CreateFrame("Frame", nil, page)
+  P.home:SetPoint("TOPLEFT", page, "TOPLEFT", 0, -TAB_H)
+  P.home:SetPoint("BOTTOMRIGHT", page, "BOTTOMRIGHT", 0, FOOT_H)
+  P.home:Hide()
+  local H = ns.Home
+  if type(H) == "table" and H.Build then
+    local shown = {}
+    for _, e in ipairs(P.games) do shown[e.key] = true end
+    shown.flights = shown.vendor
+    M.Safe(H.Build, P.home, shown)
+  end
   P.buildInfo(page)
-  local last = ns.LastGame and ns.LastGame()
-  if P.holders[last] then choose(last) elseif P.games[1] then choose(P.games[1].key) end
+  buildPurse(page, P.infoButton)
+  page:HookScript("OnShow", function() M.Safe(goHome) end)
+  page:HookScript("OnUpdate", function(_, elapsed) -- the throttle before the pcall (Races.lua:742-747)
+    P.since = (P.since or 0) + (elapsed or 0)
+    if P.since < PURSE_EVERY then return end
+    local since = P.since
+    P.since = 0
+    M.Safe(tick, since)
+  end)
+  goHome()
 end
+
+-- Every window open goes home (the page's OnShow covers a hub page switch); Flight's Play and Toast's Watch choose their
+-- game after the open.
+if M.On then M.On("windowOpened", function() M.Safe(goHome) end) end
 
 -- S28b Task 5: the "i" at the menu row's right end toggles GuildSyncGamesInfo, the chosen game's info lines (one
 -- FontString per line, up to INFO_MAX). The panel is in UISpecialFrames, as Toast.lua's: modules cannot reach the hub's
@@ -220,8 +338,8 @@ local function infoHeight(lines) return 16 + INFO_LINE * lines end
 
 function P.fillInfo()
   local e = P.chosen and entryOf(P.chosen)
-  local info = e and e.info or {}
-  P.infoTitle:SetText(e and e.text or "") -- a11y f5: the panel names its game
+  local info = e and e.info or (P.chosen == nil and HOME_INFO) or {}
+  P.infoTitle:SetText(e and e.text or (P.chosen == nil and "Games") or "") -- a11y f5: the panel names its game
   for i, fs in ipairs(P.infoLines) do fs:SetText(info[i] or ""); fs:SetShown(info[i] ~= nil) end
   P.info:SetHeight(infoHeight(#info + 1))
   if P.infoBody ~= P.info then P.infoBody:SetHeight(infoHeight(#info + 1)) end
@@ -237,6 +355,7 @@ function P.buildInfo(page)
   f:SetSize(INFO_W, infoHeight(INFO_MAX + 1))
   f:SetPoint("TOPRIGHT", b, "BOTTOMRIGHT", 0, 0)
   f:SetFrameStrata("DIALOG") -- over the game area (q1911)
+  f:EnableMouse(true) -- A#f2: a click on the panel stays on it, never reaching a home card under it
   f:Hide()
   if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "GuildSyncGamesInfo") end
   local body = M.Kit.Card(f, INFO_W, infoHeight(INFO_MAX + 1)) or f
@@ -255,7 +374,7 @@ function P.buildInfo(page)
   end
   b:SetScript("OnEnter", function(self) -- a11y f4: the icon says what it opens
     GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-    GameTooltip:SetText("About this game")
+    GameTooltip:SetText(P.chosen == nil and "About the games" or "About this game")
     GameTooltip:Show()
   end)
   b:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -263,10 +382,14 @@ function P.buildInfo(page)
     if f:IsShown() then f:Hide() else M.Safe(P.fillInfo); f:Show() end
   end)
   page:HookScript("OnHide", function() f:Hide() end)
+  P.infoButton = b
 end
 
+-- The purse and the shown game now; on the home only a mark (f12: the next tick draws it once).
 function ns.RefreshPage()
-  local e = P.chosen and entryOf(P.chosen)
+  M.Safe(drawPurse)
+  if P.chosen == nil then P.homeDirty = true return end
+  local e = entryOf(P.chosen)
   if e and e.refresh and P.holders[P.chosen] then M.Safe(e.refresh, P.holders[P.chosen]) end
 end
 

@@ -64,6 +64,8 @@ Compat.APIS = {
   -- kit art (API 6): the game's item button (Kit.SetItem) and the player's faction (Compat.Faction)
   "SetItemButtonTexture", "SetItemButtonQuality", "SetItemButtonCount", "UnitFactionGroup",
   "CreateColor", -- Compat.FadeHorizontal: the colours of the This character card's class art fade (d530)
+  -- the bug report (run r-20261106-s30b); UnitRace is SecretWhenUnitIdentityRestricted, read through str()
+  "GetLocale", "UnitRace", "GetZoneText", "GetSubZoneText", "IsInInstance",
 }
 
 -- Compat.APIS names Compat reads only when the client has them; a missing one loses a detail, nothing breaks.
@@ -95,6 +97,8 @@ Compat.OPTIONAL = {
   -- Kit.SetItem: each missing one is skipped, the others still run; SetItem answers false
   ["SetItemButtonTexture"] = true, ["SetItemButtonQuality"] = true, ["SetItemButtonCount"] = true,
   ["CreateColor"] = true, -- Compat.FadeHorizontal: SetGradientAlpha, else the fading class art hidden
+  -- the bug report (Compat.Locale, Race, Place): a missing one leaves that fact unknown
+  ["GetLocale"] = true, ["UnitRace"] = true, ["GetZoneText"] = true, ["GetSubZoneText"] = true, ["IsInInstance"] = true,
 }
 
 -- Names Compat does not call, recorded by the probe only, because they would be useful fallbacks if present.
@@ -339,6 +343,28 @@ function Compat.Faction()
   local faction = str((call("UnitFactionGroup", "player")))
   if faction == "Horde" or faction == "Alliance" then return faction end
   return nil
+end
+
+-- The client's locale ("enUS"), or nil.
+function Compat.Locale()
+  return str((call("GetLocale")))
+end
+
+-- The player's race file ("Scourge"), UnitRace's second value; nil when missing or secret.
+function Compat.Race()
+  local _, raceFile = call("UnitRace", "player")
+  return str(raceFile)
+end
+
+-- { zone, subzone, inInstance, instanceType }. zone, subzone and instanceType can be nil.
+function Compat.Place()
+  local inInstance, instanceType = call("IsInInstance")
+  return {
+    zone = str((call("GetZoneText"))),
+    subzone = str((call("GetSubZoneText"))),
+    inInstance = plain(inInstance) == true,
+    instanceType = str(instanceType),
+  }
 end
 
 function Compat.IsInGuild()

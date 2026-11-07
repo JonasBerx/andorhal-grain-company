@@ -1,8 +1,9 @@
 -- GuildSyncGames WhoSound.lua (S22 Task 3): the only file that calls the client's sound and CVar functions, every call
 -- through M.Compat (names in Module.lua's apis.optional; q1781).
 -- Play order (o2205): the global PlaySound on the Dialog channel first; C_Sound.PlaySound(kit), the kit only, only when
--- the global is missing or threw (M.Compat.Try answering ok false). A global that ran and answered falsy never falls
--- back. Replay waits (o2208): one handle in memory, held while C_Sound.IsPlaying(handle) or until
+-- the global is missing or threw (M.Compat.Try answering ok false). A call that ran never falls back, and only a plain
+-- false answer counts as not played: Forever's PlaySound plays the line and answers nothing (Jonas's /dump, 2026-11-06).
+-- Replay waits (o2208): one handle in memory, held while C_Sound.IsPlaying(handle) or until
 -- SOUNDKIT_FINISHED(handle); with no handle (a play that returned none) forceNoDuplicates is the only guard.
 -- The sound settings (gate A item 4): Sound_EnableAllSound plus the channel in use, Sound_EnableDialog with the global,
 -- FALLBACK_CVAR with C_Sound; read through C_CVar.GetCVarBool (the global is not in the dump), only out of combat, literal
@@ -63,7 +64,7 @@ function ns.WhoPlay(kit)
     -- R-f2: the fallback asks for no finish event, so without IsPlaying its handle would never clear
     if not has("C_Sound.IsPlaying") then h = nil end
   end
-  if not ran or not success then return success, "no sound" end
+  if not ran or success == false then return success, "no sound" end
   handle = h
   return true
 end

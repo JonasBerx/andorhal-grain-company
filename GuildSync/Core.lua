@@ -12,6 +12,7 @@
 --   /gsync ui              open or close the window (also /gsync window, or left-click the minimap button)
 --   /gsync minimap         show or hide the minimap button
 --   /gsync selftest        one PASS/WAIT/FAIL line per module, then a total
+--   /gsync bug             open Report a bug: a text to paste in #bug-reports (nothing is sent or saved)
 --
 -- Each command is a function in ns.Commands, so the window's buttons run exactly what the slash command runs.
 --
@@ -172,10 +173,12 @@ function ns.RecordError(moduleName, err)
   for _, e in ipairs(errors) do
     if type(e) == "table" and e.module == moduleName and e.message == message then found = e break end
   end
+  local now = time()
   if found then
     found.count = (found.count or 0) + 1
+    found.lastSeen = now
   elseif #errors < MAX_ERRORS then
-    table.insert(errors, { module = moduleName, message = message, firstSeen = time(), count = 1 })
+    table.insert(errors, { module = moduleName, message = message, firstSeen = now, lastSeen = now, count = 1 })
   end
   local key = moduleName .. "\n" .. message
   if not printedErrors[key] then
@@ -558,6 +561,10 @@ function Commands.Minimap()
   if ns.Window and ns.Window.ToggleMinimap then ns.Window.ToggleMinimap() end
 end
 
+function Commands.Bug()
+  if ns.Window and ns.Window.ShowBugReport then ns.Window.ShowBugReport() end
+end
+
 SLASH_GUILDSYNC1 = "/gsync"
 SlashCmdList.GUILDSYNC = function(msg)
   local redraw = true
@@ -581,6 +588,9 @@ SlashCmdList.GUILDSYNC = function(msg)
     elseif cmd == "selftest" then
       Commands.Selftest()
       redraw = false -- Window.Changed arms a timer, and selftest changes nothing
+    elseif cmd == "bug" then
+      Commands.Bug()
+      redraw = false -- the report window refreshes itself, and nothing else changed
     elseif cmd == "demo" then
       local D, word = ns.Demo, string.lower(rest)
       if word == "off" and not D.On() then

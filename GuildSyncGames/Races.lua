@@ -84,7 +84,7 @@ for i, id in ipairs(MAP.base) do
   MAP.tiles[#MAP.tiles + 1] = tileRect(id, ((i - 1) % 4) * TILE, math.floor((i - 1) / 4) * TILE, TILE, TILE, 1)
 end
 for _, o in ipairs(MAP.over) do MAP.tiles[#MAP.tiles + 1] = tileRect(o[1], o[2], o[3], o[4], o[5], 2) end
-local GRAIN_ICON, FLAG_ICON = 134058, 1100022
+local FLAG_ICON = 1100022
 local GOLD = { 1, 0.82, 0 }
 local WHITE = { 1, 1, 1 }
 local YOU = " |cff999999(you)|r" -- the "(you)" suffix grey, not in the class colour (f7223)
@@ -339,12 +339,10 @@ local function size()
   return w, h, h < SMALL_BELOW
 end
 
--- The purse line (the grain icon and "<n> grain") at x, y, and the grey note beside it.
-local function purseAt(x, y, note)
-  place(U.grain, U.holder, x, y)
-  place(U.purse, U.holder, x + 22, y - 2)
-  U.purse:SetText(fmt(ns.Purse()) .. " grain")
-  place(U.note, U.holder, x + 130, y - 2)
+-- The grey note ("Bets for ... open at ...") at x, y - 2, where the purse line was (o2650: the purse lives in the
+-- page's top row).
+local function noteAt(x, y, note)
+  place(U.note, U.holder, x, y - 2)
   U.note:SetText(note or "")
 end
 
@@ -494,7 +492,7 @@ local function drawRace(v, W, H, small)
     note = small and ("Bets for " .. nextRace .. " open at " .. at .. ".")
       or ("Bets for the " .. nextRace .. " race open at " .. at .. ".")
   end
-  purseAt(LEFT, -(H - 26), note)
+  noteAt(LEFT, -(H - 26), note)
 end
 
 local function stake() return tonumber(U.box:GetText()) end
@@ -556,13 +554,13 @@ local function drawBetting(v, W, H, small)
     U.msg:ClearAllPoints()
     U.msg:SetPoint("TOPLEFT", U.hint, "BOTTOMLEFT", 0, 0)
     place(U.cancel, U.betBox, col - 110, -y)
-    purseAt(rx, -(H - 26), "")
+    noteAt(rx, -(H - 26), "")
   else
     U.hint:SetWidth(0) -- its own width again (no set width at build)
     place(U.hint, U.betBox, 0, -(y + 29))
     place(U.msg, U.betBox, 0, -(y + 45))
     place(U.cancel, U.betBox, col - 110, -(y + 64))
-    purseAt(LEFT, -(TOP + y + 67), "")
+    noteAt(LEFT, -(TOP + y + 67), "")
   end
 
   -- right: Earlier races, then the biggest wins (left out below 420 tall)
@@ -627,7 +625,7 @@ function U.Draw()
     U.sub:SetText("The race clock cannot be read on this client.")
     drawBoard(U.last, false)
     drawBoard(U.big, false)
-    purseAt(LEFT, -(H - 26), "")
+    noteAt(LEFT, -(H - 26), "")
     return
   end
   if mode == "betting" then
@@ -878,10 +876,6 @@ local function build(holder)
   U.last.parent = holder
   U.big = buildBoard(holder, "Biggest wins")
   U.big.parent = holder
-  U.grain = holder:CreateTexture(nil, "ARTWORK")
-  U.grain:SetTexture(GRAIN_ICON)
-  U.grain:SetSize(16, 16)
-  U.purse = label(holder, "GameFontHighlight")
   U.note = label(holder)
   grey(U.note)
   holder:HookScript("OnHide", function()

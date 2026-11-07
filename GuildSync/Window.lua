@@ -387,7 +387,7 @@ end
 -- ---------- This character and Settings ----------
 
 -- This character (View.CHAR): two header bars, the class icon, name, level and the money line, one Kit.ModuleRow per
--- module (View.CharRows) and the Errors row last, the three /gsync buttons at the foot. Row frames come from a pool
+-- module (View.CharRows) and the Errors row last, the four /gsync buttons at the foot. Row frames come from a pool
 -- that only grows (drawChar); placeChar re-places them for the page size and makes no frame.
 local function buildCharPage(p, u)
   local C = View.CHAR
@@ -435,6 +435,8 @@ local function buildCharPage(p, u)
   button(p, "Rescan", B.x[1], 0, function() run(ns.Commands.Scan) end, B.w)
   button(p, "Show errors", B.x[2], 0, function() run(ns.Commands.Errors) end, B.w)
   button(p, "Probe", B.x[3], 0, function() run(ns.Commands.Probe) end, B.w)
+  -- not through run(): opening the report redraws nothing (o2602)
+  button(p, "Report a bug", B.x[4], 0, function() ns.Safe("Window", function() ns.Commands.Bug() end) end, B.w)
   return true
 end
 
@@ -966,6 +968,90 @@ function Window.ShowNews(sections, store)
   newsPanel.list:SetRows(View.NewsRows(sections))
   newsPanel:Show()
   if store and newsPanel:IsShown() and sections[1] then ns.DB().settings.seenVersion = sections[1].version end
+end
+
+-- ---------- Report a bug (run r-20261106-s30b): a text to copy; nothing is sent or saved ----------
+-- Built on the first open: the Kit.Dialog GuildSyncBugReport with What happened? (one line), the report as a read-only
+-- multi-line EditBox in a newsScroll area, the foot line and Close. The typed text is kept for this session only
+-- (q1949). Its state sits in this block, not in a new top-level local (f6288).
+do
+  local BUG = { w = 560, h = 470, textW = 512, typed = "" }
+
+  -- Builds the report text from the facts read at this open (rev-f6, sec-f3: typing rebuilds only the text) and sets
+  -- it; in plain mode keeps newsScroll's wheel range on the box.
+  local function bugText(d)
+    d.current = ns.BugReport.Build(d.facts, BUG.typed)
+    d.box:SetText(d.current)
+    local s = d.list
+    if s.plain then s.range = math.max(0, (tonumber(d.box:GetHeight()) or 0) - (tonumber(s.scroll:GetHeight()) or 0)) end
+  end
+
+  -- Throws on a missing piece.
+  local function buildBugReport()
+    local d = Kit.Dialog("GuildSyncBugReport", BUG.w, BUG.h)
+    if not d then error("Report a bug: no dialog") end
+    d.title:SetText("Report a bug")
+    label(d, "What happened?", "GameFontNormalSmall"):SetPoint("TOPLEFT", 16, -32)
+    local typed = Kit.InputBox(d, 516, 510)
+    if not typed then error("Report a bug: no input box") end
+    typed:SetPoint("TOPLEFT", 22, -46)
+    typed:SetAutoFocus(false)
+    typed:SetMaxLetters(ns.BugReport.TYPED_MAX or 300) -- the report keeps 300 bytes of it (sec-f3)
+    typed:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    typed:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
+    typed:SetScript("OnTextChanged", safely(function(self, user)
+      if not user then return end -- SetText by code fires this too
+      BUG.typed = self:GetText() or ""
+      bugText(d)
+    end))
+    label(d, "Report (selected: press Ctrl+C to copy)", "GameFontNormalSmall"):SetPoint("TOPLEFT", 16, -74)
+    local inset = Kit.Inset(d)
+    if not inset then error("Report a bug: no inset") end
+    inset:SetPoint("TOPLEFT", 8, -90)
+    inset:SetPoint("BOTTOMRIGHT", -8, 44)
+    local s = newsScroll(inset, "GuildSyncBugReportScroll", 8)
+    if not s then error("Report a bug: no scroll area") end
+    local box = Compat.CreateFrame("EditBox", nil, s.scroll)
+    if not box then error("Report a bug: no report box") end
+    box:SetMultiLine(true)
+    box:SetMaxLetters(0)
+    box:SetAutoFocus(false)
+    box:SetFontObject("ChatFontNormal")
+    local w = s.scroll:GetWidth()
+    box:SetWidth((type(w) == "number" and w > 0) and w or BUG.textW)
+    if s.plain then
+      s.content = box -- newsScroll's own wheel moves it
+      box:SetPoint("TOPLEFT", s.scroll, "TOPLEFT", 0, 0)
+    else
+      s.scroll:SetScrollChild(box)
+    end
+    -- HookScript: ScrollFrameTemplate may carry its own OnSizeChanged, which SetScript would replace
+    s.scroll:HookScript("OnSizeChanged", function(_, sw) if type(sw) == "number" and sw > 0 then box:SetWidth(sw) end end)
+    box:SetScript("OnEditFocusGained", function(self) self:HighlightText() end)
+    box:SetScript("OnMouseUp", function(self) self:HighlightText() end)
+    box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    box:SetScript("OnTextChanged", function(self, user) if user then self:SetText(d.current) end end) -- read only
+    d.box, d.list = box, s
+    d.foot = label(d, "Paste it in #bug-reports on Discord and add a screenshot.", "GameFontHighlightSmall")
+    d.foot:SetPoint("BOTTOMLEFT", 12, 16)
+    d.close = button(d, "Close", -12, 12, function() d:Hide() end, 96, "BOTTOMRIGHT")
+    if not d.close then error("Report a bug: no Close button") end
+    return d
+  end
+
+  -- /gsync bug and the Report a bug button (ns.Commands.Bug): builds once, refreshes the text, shows and selects it.
+  function Window.ShowBugReport()
+    local shown = ns.Safe("Window", function()
+      if not BUG.d then BUG.d = buildBugReport() end
+      local d = BUG.d
+      d.facts = ns.BugReport.Facts() -- once per open
+      bugText(d)
+      d:Show()
+      d.box:SetFocus()
+      d.box:HighlightText()
+    end)
+    if not shown then ns.Say("could not open the bug report window on this client.") end
+  end
 end
 
 -- The login check, View.NEWS_DELAY s after login and again every NEWS_DELAY s while in combat (720 tries at most,

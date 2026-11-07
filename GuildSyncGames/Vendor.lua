@@ -54,7 +54,7 @@ local V = { cards = {}, marks = {}, answers = {}, lists = {}, pools = {}, pool =
 local function poolArg() return V.pool == "flights" and "flights" or nil end
 local function flying() return V.pool == "flights" end
 
-local grey, label, button, fmt = ns.UI.grey, ns.UI.label, ns.UI.button, ns.UI.fmt -- Page.lua's helpers
+local grey, label, button = ns.UI.grey, ns.UI.label, ns.UI.button -- Page.lua's helpers
 
 local function header(parent, text)
   local h = M.Kit.SectionHeader(parent, 240, text)
@@ -353,16 +353,6 @@ end
 
 -- ---------- drawing ----------
 
-local function drawPurse(LW)
-  local p = ns.Purse and ns.Purse()
-  V.purseIcon:SetShown(p ~= nil)
-  V.purse:SetShown(p ~= nil)
-  if p == nil then return end
-  at(V.purseIcon, LEFT + LW - 110, 4)
-  at(V.purse, LEFT + LW - 90, 6)
-  V.purse:SetText(fmt(p) .. " grain")
-end
-
 local function bottomButtons(e, t)
   local endless = e ~= nil
   V.daily:SetText(endless and "Back to daily" or ("Daily " .. (t and t.label or "")))
@@ -405,7 +395,6 @@ function V.Draw()
   if last and (last.endless ~= (e ~= nil) or (not last.endless and not (t and t.n == last.n))) then
     V.last, last = nil, nil
   end
-  drawPurse(LW)
   for _, p in ipairs(V.pools) do -- the gold rule 1 px under the chosen pool's button (Company.lua:331-332)
     if p.key == V.pool then at(V.mark, p.x, 25); V.mark:SetWidth(p.w) end
   end
@@ -664,10 +653,6 @@ local function build(body)
   V.title2 = label(body)
   grey(V.title2)
   V.title2:SetPoint("TOPLEFT", body, "TOPLEFT", LEFT, -28)
-  V.purseIcon = body:CreateTexture(nil, "ARTWORK")
-  V.purseIcon:SetSize(16, 16)
-  V.purseIcon:SetTexture(WHEAT)
-  V.purse = label(body, "GameFontHighlight")
   for k = 1, 2 do buildCard(body, k) end
   V.orText = label(body, "GameFontNormal")
   V.orText:SetText("or")
@@ -740,4 +725,6 @@ ns.VendorTab = {
     end
     if V.body and ns.ShownGame and ns.ShownGame() == "vendor" then V.Draw() end
   end,
+  -- o2650 R2: the tab's own pool switch ("items" | "flights"), for the home's Flights card.
+  SetPool = setPool,
 }

@@ -33,6 +33,7 @@ WhoStore.lua
 CompanyStore.lua
 CompanySync.lua
 Page.lua
+Home.lua
 WoWdle.lua
 Harvest.lua
 Races.lua

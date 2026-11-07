@@ -1,5 +1,5 @@
 -- GuildSyncGames Company.lua (S13 Task 5): the Company tab, ns.CompanyTab (plan V2-V4, mock co-1 to co-4). Left: the
--- store (Titles, Colours, Badges, Field), the preview "How guildmates see you:" and the purse at the foot. Right: the
+-- store (Titles, Colours, Badges, Field), the preview "How guildmates see you:". Right: the
 -- granary goal (project, bar, own gift, donors, Give buttons) and the weekly lottery (schedule, close countdown, pot,
 -- own numbers, Buy a ticket, the waiting line or the officer's last draw). Below 420 tall (the 760x480 window) the
 -- Owned / Worn word and the schedule line go and the last draw takes two short lines (d1594). All UI state lives in C.
@@ -19,7 +19,6 @@ local BIG = { rw = 348, rh = 26, top = 40, small = false }
 local SMALL = { rw = 268, rh = 23, top = 0, small = true }
 local ROWS = 10 -- 4 store badges + 6 earned project badges at most
 local BTN_W, WORD_W = 64, 35
-local WHEAT = 134058 -- INV_Misc_Food_Wheat_01
 local BAR_TEXTURE = "Interface\\TargetingFrame\\UI-StatusBar"
 local GOLD = { 1, 0.769, 0.251 }
 local RED = "|cffff4040"
@@ -380,13 +379,6 @@ local function drawStore(B, LW, H, off)
     end
     drawPreview(CC, st, LW, rows0 + #list * B.rh + 6)
   end
-  local p = ns.Purse and ns.Purse()
-  local purse = p ~= nil and not (officers and B.small)
-  C.purseIcon:SetShown(purse)
-  C.purse:SetShown(purse)
-  at(C.purseIcon, LEFT, H - 26)
-  at(C.purse, LEFT + 22, H - 24)
-  C.purse:SetText(fmt(p or 0) .. " grain")
 end
 
 -- ---------- the granary (V3) ----------
@@ -652,10 +644,6 @@ local function build(body)
     b:SetScript("OnEnter", function(self) M.Safe(showTip, self, text) end)
     b:SetScript("OnLeave", function() M.Safe(hideTip) end)
   end
-  C.purseIcon = body:CreateTexture(nil, "ARTWORK")
-  C.purseIcon:SetSize(16, 16)
-  C.purseIcon:SetTexture(WHEAT)
-  C.purse = label(body, "GameFontHighlight")
   -- the granary
   C.granaryHead = header(body, "Granary goal")
   C.projText = label(body, "GameFontNormal")

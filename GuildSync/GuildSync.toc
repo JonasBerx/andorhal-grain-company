@@ -26,4 +26,5 @@ CommVersion.lua
 Links.lua
 LinksStore.lua
 Search.lua
+BugReport.lua
 Api.lua

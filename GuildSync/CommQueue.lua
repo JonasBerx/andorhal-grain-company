@@ -66,6 +66,8 @@ end
 
 -- ---------- public ----------
 
+Queue.StatusLine = statusLine -- the bug report's Comms line (BugReport.lua)
+
 function Queue.NextMid()
   mid = mid % Wire().MAX_MID + 1
   return mid

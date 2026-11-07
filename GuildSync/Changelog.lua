@@ -8,6 +8,23 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.17.0", lines = {}, addons = {
+    { folder = "GuildSync", lines = {
+      "Report a bug: /gsync bug or the Report a bug button on This character builds a report to paste in #bug-reports.",
+      "The report holds the versions, client, place and your newest GuildSync errors. It is not sent or saved anywhere.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "The Games page opens on a home: a card per game, Flights on its own card, each showing where you stand today.",
+      "One row on every game: All games, the game menu, your grain purse and the info button.",
+      "The purse shows only in that row now; its tooltip says grain is play money, never gold, never traded.",
+      "Who said it?: a line that plays now counts as heard, so you can pick who said it, without the cannot play message.",
+    } },
+    { folder = "GuildKOS", lines = {
+      "Add an enemy by first name and surname: the new Name box on Mark as bounty, or /kos add First Surname [why].",
+      "A name an officer adds goes on the list at once; a member's waits for an officer, as a marked target does.",
+      "A name entry alerts out of combat and becomes a normal one once an officer sees or marks the player, or approves a member's mark.",
+    } },
+  } },
   { version = "0.16.0", lines = {}, addons = {
     { folder = "GuildSync", lines = {
       "Guildmates' module icons no longer run into Last heard.",

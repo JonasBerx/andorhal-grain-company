@@ -1,8 +1,9 @@
 -- GuildKOS Page: the Kill on Sight page inside the GuildSync window (Hub.lua calls Build and Refresh).
 -- What ships (ns.Probe.kills false, 0.6, d1821): a tab strip (M.Kit.Tabs: List, Waiting, Mine) over one scroll frame
 -- whose scroll child is swapped per tab, and no kill count anywhere. List: the header (count, alerts line), the fixed
--- Mark as bounty card, then one card per open target on M.Kit.Card (start-zone painting, portrait, name, level line,
--- last seen, why). Clicking a card opens it in its row's place, 252 tall (Last seen, Why, Marked; Edit why and Remove
+-- Mark as bounty card (Name and Why boxes: a typed name goes to ns.Mark.FromName, else ns.Mark.FromTarget), then
+-- one card per open target on M.Kit.Card (start-zone painting, portrait, name, level line or "Added by name", last
+-- seen, why). Clicking a card opens it in its row's place, 252 tall (Last seen, Why, Marked; Edit why and Remove
 -- for officers, Close for all; Edit why opens an input box with Save and Cancel, d791). Waiting: ns.Mark.Waiting()'s
 -- marks, Approve and Reject for officers (kos-3), read-only for a member (kos-3b). Mine: "Your marks", each with
 -- ns.RulesMarks.State as its pill and Withdraw while it waits (kos-6).
@@ -36,7 +37,9 @@ local BOX_RIGHT = 16    -- the scroll box ends 16 px inside the page; its bar si
 local CLASSIC_RIGHT = 24 -- UIPanelScrollFrameTemplate's wider classic bar, kept inside the page (R-n2)
 local TOP = 40          -- the 32-tall tab row and 8 px (o859)
 local MARK_Y, MARK_H = 66, 66            -- the fixed Mark as bounty card (o851)
-local MARK_BOX_W, MARK_BOX_LESS = 420, 14 + 16 + 120 + 8  -- the Why box: 420, or less so it ends 8 px before the button (f8600)
+local NAME_BOX_W = 150                   -- the Name box, left of the Why box with 8 px between (add by name)
+-- the Why box: 420, or less so it ends 8 px before the button (f8600), right of the Name box
+local MARK_BOX_W, MARK_BOX_LESS = 420, 14 + 16 + 120 + 8 + NAME_BOX_W + 8
 local LIST_TOP = MARK_Y + MARK_H + 8     -- the List tab's scroll frame
 local ROW_H, ROW_STEP, ROWS_Y = 34, 38, 50  -- the Hunters board rows
 local COLS = { { "", 42 }, { "Hunter", 180 }, { "Confirmed kills", 252 }, { "Streak", 80 }, { "Best", 70 },
@@ -49,8 +52,8 @@ local DOT = " \194\183 "
 local DASH = "\226\128\147"
 local ALERTS_ON = "Alerts on \194\183 /kos off turns them off"
 local ALERTS_OFF = "Alerts off \194\183 /kos on turns them on"
-local MARK_HINT = "Target an enemy player, then mark them. An officer approves the mark; an officer's own mark goes "
-  .. "straight on."
+local MARK_HINT = "Type a name (first and surname) in the first box, or target an enemy. An officer approves a "
+  .. "member's mark."
 local HUNTERS_INTRO = "Top 10 by confirmed kills. A kill counts once an officer confirms it. Streak: weeks in a row "
   .. "with a confirmed kill."
 local MARK_H2, STRIP_Y = 116, 89       -- a mark card with buttons: the 84 block, a divider at 84, the strip at y 89
@@ -567,8 +570,15 @@ local function seenText(src, seen, now)
   return line
 end
 
--- "Level 60 Human Rogue" (the class in its class colour), or "" when the record holds none of them.
-local function whoText(src, rec)
+-- True for a name entry's synthetic key (RulesMarks.IsNameKey); false with no RulesMarks.
+local function isNameKey(guid)
+  local marks = ns.RulesMarks
+  return type(marks) == "table" and type(marks.IsNameKey) == "function" and marks.IsNameKey(guid) == true
+end
+
+-- "Level 60 Human Rogue" (the class in its class colour). When the record holds none of them: RulesMarks.NAME_WHO
+-- under a name key guid, else "".
+local function whoText(src, rec, guid)
   local parts = {}
   if type(rec.level) == "number" and rec.level > 0 then parts[#parts + 1] = "Level " .. math.floor(rec.level) end
   if nonEmpty(rec.race) then parts[#parts + 1] = shown(src, rec.race) end
@@ -577,7 +587,9 @@ local function whoText(src, rec)
     local code = classCode(rec.class)
     parts[#parts + 1] = code and (code .. class .. "|r") or class
   end
-  return table.concat(parts, " ")
+  local who = table.concat(parts, " ")
+  if who == "" and isNameKey(guid) then return ns.RulesMarks.NAME_WHO end
+  return who
 end
 
 -- " at <subzone>, <zone>" (or " at <zone>") from a record's zone fields, "" with none.
@@ -593,7 +605,7 @@ local function drawCard(page, cd, rec, seen, roster, now)
   cd.shownName = name
   cd.name:SetText(name)
   cd.bigName:SetText(name)
-  local who = whoText(src, rec)
+  local who = whoText(src, rec, cd.guid)
   cd.who:SetText(who)
   cd.bigWho:SetText(who)
   cd.hasWho = who ~= ""
@@ -682,8 +694,11 @@ local function buildMark(page, frame)
   title:SetText("Mark as bounty")
   local hint = textLine(f, "GameFontHighlightSmall", 12, -24)
   hint:SetText(MARK_HINT)
-  local box = kitCall(kit, "InputBox", f, math.min(MARK_BOX_W, w - MARK_BOX_LESS), math.min(400, w - MARK_BOX_LESS))
-  if box then box:SetPoint("TOPLEFT", 14, -40) end
+  local nameBox = kitCall(kit, "InputBox", f, NAME_BOX_W, NAME_BOX_W)
+  if nameBox then nameBox:SetPoint("TOPLEFT", 14, -40) end
+  local whyW = math.min(MARK_BOX_W, w - MARK_BOX_LESS)
+  local box = kitCall(kit, "InputBox", f, whyW, math.min(400, whyW))
+  if box then box:SetPoint("TOPLEFT", 14 + NAME_BOX_W + 8, -40) end
   page.markBox = box
   local b = button(f, "Mark as bounty", 120)
   b:SetPoint("TOPRIGHT", -16, -39)
@@ -691,8 +706,14 @@ local function buildMark(page, frame)
     safe(page.src, function()
       if demoRefused() then return end
       local mark = ns.Mark
-      if type(mark) == "table" and type(mark.FromTarget) == "function" then
-        mark.FromTarget(box and box:GetText() or "")
+      local name = nameBox and nameBox:GetText() or ""
+      local why = box and box:GetText() or ""
+      if type(mark) ~= "table" then return end
+      if type(name) == "string" and name:find("%S") then
+        -- a marked name clears the Name box, so the next click marks the target again (review f7)
+        if type(mark.FromName) == "function" and mark.FromName(name, why) == true then nameBox:SetText("") end
+      elseif type(mark.FromTarget) == "function" then
+        mark.FromTarget(why)
       end
     end)
   end)
@@ -902,7 +923,7 @@ local function drawMark(page, set, cd, m, line, state, strip, y)
     kitCall(kit, "SetPill", cd.pill, state or "", TONES[state] or "grey")
     cd.pill:SetShown(state ~= nil)
   end
-  cd.who:SetText(whoText(src, m))
+  cd.who:SetText(whoText(src, m, m.guid))
   cd.line:SetText(line)
   local why = shown(src, m.why)
   cd.why:SetText(GOLD .. "Why:|r " .. why)
@@ -1031,7 +1052,7 @@ local function mineEntries(demo)
   local rec = type(me) == "string" and ns.Store.Member(me) or nil
   for _, m in ipairs(type(rec) == "table" and type(rec.marks) == "table" and rec.marks or {}) do
     if type(m) == "table" and type(m.guid) == "string" then
-      out[#out + 1] = { mark = m, target = ns.Store.Target(m.guid) }
+      out[#out + 1] = { mark = m, target = ns.Mark.TargetFor(m) }
     end
   end
   return out

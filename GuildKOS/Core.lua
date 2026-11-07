@@ -1,5 +1,6 @@
 -- GuildKOS Core: saved data (GuildKOSDB schema 6, guild-scoped), the client-event dispatcher behind the Plain seam,
--- /kos and the alerts setting. R6 Task A1 retired 0.5's import, paste window, wire and spotting.
+-- /kos (list, ui, mark, add by name, alerts on and off, demo) and the alerts setting. R6 Task A1 retired 0.5's
+-- import, paste window, wire and spotting.
 local ADDON, ns = ...
 local Core = {}
 ns.Core = Core
@@ -125,8 +126,11 @@ local function trim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 local function printList()
   if not ns.Hub then print("KOS: The Kill on Sight page needs GuildSync (API 4 or later).") return end
   local esc = ns.Hub.Escape
-  local function row(r)
-    local line = "  " .. esc(r.name or "?") .. " (" .. esc(r.race or "") .. " " .. esc(r.class or "") .. ")"
+  local Marks = ns.RulesMarks
+  local function row(r, guid)
+    local line = "  " .. esc(r.name or "?")
+    if Marks.IsNameKey(guid) then line = line .. " (" .. Marks.NAME_WHO .. ")" -- added by name, never seen
+    else line = line .. " (" .. esc(r.race or "") .. " " .. esc(r.class or "") .. ")" end
     if type(r.zone) == "string" and r.zone ~= "" then line = line .. ", " .. esc(r.zone) end
     if type(r.why) == "string" and r.why ~= "" then line = line .. ": " .. esc(r.why) end
     print(line)
@@ -135,13 +139,13 @@ local function printList()
   if #open == 0 then print("KOS: No open targets. /kos ui opens the Kill on Sight page.")
   else
     print("KOS: " .. ns.Page.Targets(#open) .. " on the list:")
-    for _, t in ipairs(open) do row(t.rec) end
+    for _, t in ipairs(open) do row(t.rec, t.guid) end
   end
   -- the waiting marks this client may see: an officer all, a member its own (AC20, ns.Mark.Waiting)
   local waiting = ns.Mark and ns.Mark.Waiting and ns.Mark.Waiting() or {}
   if #waiting > 0 then
     print("KOS: Waiting for an officer:")
-    for _, w in ipairs(waiting) do row(w.mark) end
+    for _, w in ipairs(waiting) do row(w.mark, w.mark.guid) end
   end
 end
 
@@ -162,6 +166,10 @@ local function slash(msg)
     if ns.Hub and ns.Hub.InDemo() then print("KOS: " .. ns.List.RefusalLine("demo"))
     elseif rest == "" then route("Mark", "FromTarget")
     else route("Mark", "FromTarget", rest) end
+  elseif cmd == "add" then
+    -- Mark a player by the typed First Surname (ns.Mark.FromName); inert under /gsync demo, as /kos mark
+    if ns.Hub and ns.Hub.InDemo() then print("KOS: " .. ns.List.RefusalLine("demo"))
+    else route("Mark", "FromName", ns.RulesMarks.SplitAdd(rest)) end
   elseif cmd == "import" then
     print(IMPORT_LINE)
   elseif cmd == "demo" then
@@ -175,7 +183,7 @@ local function slash(msg)
       else print("KOS: /gsync demo is not available.") end
     end
   else
-    print("KOS: /kos prints the list, /kos ui opens the Kill on Sight page, /kos mark [why] marks your target as a bounty, /kos on and /kos off turn alerts on and off, /kos demo shows a demo (as /gsync demo).")
+    print("KOS: /kos prints the list, /kos ui opens the Kill on Sight page, /kos mark [why] marks your target as a bounty, /kos add First Surname [why] marks a player by name, /kos on and /kos off turn alerts on and off, /kos demo shows a demo (as /gsync demo).")
   end
 end
 

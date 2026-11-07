@@ -20,7 +20,7 @@ local MAX_NEEDS = 99 -- a needs above this is a mistake, not a future API (math.
 local MAX_ID, MAX_TITLE, MAX_NAMES = 12, 32, 5
 -- /gsync words a module id may not take (Core.lua's slash command)
 local WORDS = { scan = true, probe = true, errors = true, ui = true, window = true, minimap = true, selftest = true,
-  versions = true, demo = true }
+  versions = true, demo = true, bug = true }
 local FUNCTION_FIELDS = { "slash", "selftest", "status", "scan", "onEvent", "onLogin" }
 
 local function say(text) ns.Say(text) end

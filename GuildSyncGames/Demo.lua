@@ -341,6 +341,14 @@ end
 local realVendorToday, realVendorStats = ns.VendorToday, ns.VendorStats
 local realVendorGuild, realVendorBoard = ns.VendorGuild, ns.VendorBoard
 
+-- The real day's label and countdown from the clock and the saved phase, read only (d1588), as ns.Today's.
+local function realLabel()
+  local t, saved = ns.Now(), type(GuildSyncGamesDB) == "table" and GuildSyncGamesDB.phase or nil
+  if type(t) ~= "number" then return nil, nil end
+  local _, label, secsLeft = Core.Puzzle(t, saved)
+  return label, secsLeft
+end
+
 local function demoPool(s, pool)
   return pool == "flights" and s.flights or s.vendor
 end
@@ -349,7 +357,7 @@ function ns.VendorToday(pool)
   local s = state()
   if not s then return realVendorToday(pool) end
   local v = demoPool(s, pool)
-  local _, label, secsLeft = ns.Day()
+  local label, secsLeft = realLabel()
   return { n = v.n, label = label, pairs = v.pairs, picks = v.picks, done = v.done, score = v.score,
     earned = v.earned, secsLeft = secsLeft }
 end
@@ -380,7 +388,7 @@ function ns.WhoToday()
   local s = state()
   if not s then return realWhoToday() end
   local v = s.who
-  local _, label, secsLeft = ns.Day()
+  local label, secsLeft = realLabel()
   return { n = v.n, label = label, lines = v.lines, picks = v.picks, heard = #v.picks, done = v.done, mode = "daily",
     score = v.score, earned = v.earned, secsLeft = secsLeft }
 end

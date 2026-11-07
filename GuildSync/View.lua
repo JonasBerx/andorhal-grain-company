@@ -204,7 +204,7 @@ View.CHAR = {
   card = { x = 0, y = 30, h = 84 },
   icon = { x = 12, y = 52, size = 40 }, name = { x = 62, y = 47 }, level = { x = 62, y = 67 }, gold = { x = 62, y = 81 },
   rowY = 150, rowH = 22, mark = { x = 6, y = 3, w = 16 }, nameX = 28, statusX = 132, statusRight = 8,
-  buttons = { x = { 0, 128, 256 }, w = 120, h = 22 },
+  buttons = { x = { 0, 128, 256, 384 }, w = 120, h = 22 },
   -- the class art on the card's left (d530), card-relative: rows top..bottom of the artH-tall UI-Character-Info-<Class>-BG,
   -- the first solidW of its w px solid, the rest fading out to the right
   classBg = { x = 0, y = 0, w = 233, solidW = 133, h = 84, top = 165, bottom = 241, artH = 383 },
