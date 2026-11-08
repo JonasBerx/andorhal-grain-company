@@ -15,7 +15,7 @@ local SEED_MOD = 2147483646 -- seeds land in 1..2147483646, valid for Park-Mille
 local RESIDUE = 8388608     -- 2^23: (r * 8 + 4)^2 stays below 2^53, exact in doubles
 local MAX_BOARD = 80        -- a real board body is at most 49 bytes (five 9-digit fields and 4 carets)
 local MAX_DIGITS = 9
-local BASE_RATE = 2
+local BASE_RATE = 1
 local BASE_CAP = 120
 local HOUR = 3600
 
@@ -32,7 +32,7 @@ GC.BET_MAX = 200
 
 GC.UPGRADES = {
   { id = "farmhand", name = "Ghoul farmhand", icon = 136187, rate = 1, cap = 0, prices = { 100, 250, 500 } },
-  { id = "scythes", name = "Sharper scythes", icon = 1060569, rate = 2, cap = 0, prices = { 300, 750, 1500 } },
+  { id = "scythes", name = "Sharper scythes", icon = 1060569, rate = 1, cap = 0, prices = { 300, 750, 1500 } },
   { id = "granary", name = "Plague-proof granary", icon = 132762, rate = 0, cap = 240, prices = { 200, 500, 1000 } },
 }
 
@@ -45,7 +45,7 @@ end
 
 local function rank(ranks, id) return (type(ranks) == "table" and tonumber(ranks[id])) or 0 end
 
--- Grain a minute: 2, plus each rank's rate.
+-- Grain a minute: 1, plus each rank's rate.
 function GC.Rate(ranks)
   local n = BASE_RATE
   for _, u in ipairs(GC.UPGRADES) do n = n + u.rate * rank(ranks, u.id) end

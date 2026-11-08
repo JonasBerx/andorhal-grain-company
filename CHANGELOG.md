@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.18.1
+
+### Games
+
+- The Harvest field grows slower: 1 grain a minute at the start, 7 at full ranks. Ghoul farmhand and Sharper scythes each add 1 a rank.
+- Bonemeal follows the rate: 10 grain on a new field, 70 at full ranks.
+- The six granary projects need more grain: 100,000 up to 990,000. A project finished under the old goals opens again until it reaches its new goal.
+
 ## 0.18.0
 
 ### GuildSync

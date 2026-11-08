@@ -5,7 +5,7 @@
 -- While demo is on, ns.Today, ns.Stats and ns.GuildToday answer from that state, so the page shows it; the day keeps
 -- the real N, label and countdown (Sync.lua's cutoff and merge read them). Nothing here is saved or sent.
 -- Harvest and Kodo races (S11 Task 8): ns.Farm, Purse, MyBet, RaceHist, GuildBoards and RaceClock answer from the state's
--- grain, boards and raceT (318/360 at 6 a minute, purse 1,240, a race 24 s in with a 40-grain bet); ns.Now is not wrapped.
+-- grain, boards and raceT (318/360 at 4 a minute, purse 1,240, a race 24 s in with a 40-grain bet); ns.Now is not wrapped.
 -- Vendor price (S12 Task 7): ns.VendorToday, VendorStats, VendorGuild and VendorBoard answer from the state's vendor, a
 -- finished made-up run 8/10 on VC.Daily(DEMO_DAY) (never today's pairs, f7252); only the label and countdown are real.
 -- Flights (S21 Task 7): with pool "flights" the same four answer from the state's flights, a finished made-up run 8/10

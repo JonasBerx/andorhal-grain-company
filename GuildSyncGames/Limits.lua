@@ -1,7 +1,7 @@
 -- GuildSyncGames Limits.lua (S14 Task 1): the pure limit table, ns.Limits (L1-L15: how far a guildmate's row can
 -- honestly have got by the receiver's clock). Loads after CompanyCore.lua.
 -- Pure: string, table and math only, no globals, no clock: t (the receiver's ns.Now()) comes in, and every check
--- answers false, "clock" without it. Every bound is a formula over the cores' constants.
+-- answers false, "clock" without it. Every bound is a formula over the cores' constants, except L.MAX_RATE (frozen).
 --
 -- API:
 --   L.Start(t) -> S (GC.LAUNCH from launch on, PREVIEW_START before it) | nil
@@ -36,18 +36,12 @@ local function maxOf(list)
   return m
 end
 
-local function topRate()
-  local ranks = {}
-  for _, u in ipairs(GC.UPGRADES) do ranks[u.id] = #u.prices end
-  return GC.Rate(ranks)
-end
-
 -- The 1 h rich road at the top stake; the longer trips return less an hour (700 / 2, 1150 / 4, 1150 / 8 at 500).
 local function caravanHour()
   return math.floor(maxOf(CC.STAKES) * CC.RICH_PCT[1] / 100)
 end
 
-L.MAX_RATE = topRate()                    -- 11 grain a grow at max ranks
+L.MAX_RATE = 11                           -- frozen, not GC.Rate: players farmed at the old top rate since launch (games_balance_test pins it)
 L.BIG = GC.BET_MAX * maxOf(GC.PAYS)       -- 3000, the top bet at the top odds
 L.VENDOR_DAY = 75                         -- 5 x 10 + 25, VendorStore.lua's day pay and streak bonus
 L.FLIGHTS_DAY = 75                        -- the same for the Flights pool (S21, o2167)

@@ -138,12 +138,12 @@ end
 -- ---------- the projects ----------
 
 CC.PROJECTS = {
-  { name = "Rebuild Andorhal's mill", goal = 10000, badge = "interface\\icons\\inv_misc_food_wheat_01", badgeName = "Mill" },
-  { name = "Mend the granary roof", goal = 25000, badge = "interface\\icons\\inv_misc_stonetablet_05", badgeName = "Roof" },
-  { name = "Restock the seed store", goal = 50000, badge = "interface\\icons\\inv_misc_bag_07", badgeName = "Seed sack" },
-  { name = "Raise the watchtower", goal = 75000, badge = "interface\\icons\\inv_misc_spyglass_03", badgeName = "Watchtower" },
-  { name = "Dig the irrigation ditch", goal = 100000, badge = "interface\\icons\\inv_misc_shovel_01", badgeName = "Spade" },
-  { name = "Raise the Company hall", goal = 150000, badge = "interface\\icons\\inv_bannerpvp_01", badgeName = "Company hall" },
+  { name = "Rebuild Andorhal's mill", goal = 100000, badge = "interface\\icons\\inv_misc_food_wheat_01", badgeName = "Mill" },
+  { name = "Mend the granary roof", goal = 250000, badge = "interface\\icons\\inv_misc_stonetablet_05", badgeName = "Roof" },
+  { name = "Restock the seed store", goal = 450000, badge = "interface\\icons\\inv_misc_bag_07", badgeName = "Seed sack" },
+  { name = "Raise the watchtower", goal = 650000, badge = "interface\\icons\\inv_misc_spyglass_03", badgeName = "Watchtower" },
+  { name = "Dig the irrigation ditch", goal = 850000, badge = "interface\\icons\\inv_misc_shovel_01", badgeName = "Spade" },
+  { name = "Raise the Company hall", goal = 990000, badge = "interface\\icons\\inv_bannerpvp_01", badgeName = "Company hall" },
 }
 
 function CC.Totals(rows)
