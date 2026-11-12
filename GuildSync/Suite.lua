@@ -35,4 +35,7 @@ ns.SUITE = {
   { folder = "GuildSyncGames", id = "games", name = "Games",
     icon = "Interface\\Icons\\INV_Misc_Dice_01",
     line = "WoWdle, a WoW word a day, and a game on flights." },
+  { folder = "GuildSyncExpeditions", id = "expeditions", name = "Expeditions",
+    icon = "Interface\\Icons\\INV_Misc_Map_01",
+    line = "Followers, expeditions and gear, paid in grain." },
 }

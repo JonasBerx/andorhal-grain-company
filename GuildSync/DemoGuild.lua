@@ -101,7 +101,7 @@ function DemoGuild.Build(now)
 end
 
 -- The Modules page's Guildmates counts in demo (d408; the approved mock's), each capped at the demo guild's count.
-DemoGuild.SUITE_HEARD = { guildsync = 24, people = 12, annals = 15, kos = 9, raids = 5, bank = 3, board = 0, crafting = 7, games = 6 }
+DemoGuild.SUITE_HEARD = { guildsync = 24, people = 12, annals = 15, kos = 9, raids = 5, bank = 3, board = 0, crafting = 7, games = 6, expeditions = 4 }
 
 -- The Guildmates tab's made-up adverts, keyed by key(name): members in GUID order, the first SUITE_HEARD.guildsync
 -- (capped) heard this week, each module on the first SUITE_HEARD[id] of them, so View.SuiteHeard over it gives

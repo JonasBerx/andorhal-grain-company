@@ -4,6 +4,7 @@
 -- view = { key, name, classToken, className, race, level, rank, rankIndex, online, colour = { r, g, b }, rec }
 -- clock = { weekday, hour, minute }, read once by the redraw's owner and passed in (Card never reads the calendar).
 -- standing = { title, points } (Annals' facts, raw) or nil, passed in like clock (Card never asks the hub).
+-- expedition = { best, flair } (Expeditions' facts, raw) or nil, passed in the same way.
 
 local _, ns = ...
 local C = {}
@@ -85,6 +86,15 @@ function C.StandingText(standing)
   points = math.floor(points)
   if points < 1 then return nil end
   return ns.Escape(title) .. " \194\183 " .. points .. (points == 1 and " point" or " points")
+end
+
+-- "<best> \194\183 <flair>", each part escaped; one part alone when the other is not a non-empty string; else nil.
+function C.ExpeditionText(expedition)
+  if type(expedition) ~= "table" then return nil end
+  local function part(s) return type(s) == "string" and s ~= "" and ns.Escape(s) or nil end
+  local best, flair = part(expedition.best), part(expedition.flair)
+  local line = best and flair and (best .. " \194\183 " .. flair) or best or flair
+  return line and ("Expeditions: " .. line)
 end
 
 -- The tooltip lines: the title line, the main/alt line, note (60 letters, cut before Escape, f4),
@@ -171,6 +181,7 @@ C.CLASS_COLOUR = {
 }
 C.LETTER_PX = 4.5  -- the line count model: greedy word wrap at this many px per letter (the sim cannot wrap)
 C.NOTE_LINES = 4   -- the note in the section, then cut
+C.EXPEDITION_LINES = 3 -- the expedition line in the section, then cut
 C.VALUE_LINES = 4  -- at least this many lines for "Usually online" and "Likes", so the client's real wrap is not cut
 C.LINE = 12        -- px per text line
 local LABEL_GAP, ROW_GAP, BLOCK_GAP, WRAP_GAP = 15, 14, 20, 9
@@ -220,7 +231,8 @@ end
 function C.NextTop(y, h) return y + (h > C.LINE and h + WRAP_GAP or BLOCK_GAP) end
 
 -- The section's lines: { text, font, x, y, lines, colour, wrap } top to bottom, y from the frame's top, then its height.
--- view = { key, rec, standing } (rec the profile shown; standing as C.StandingText takes it, drawn first, d1130);
+-- view = { key, rec, standing, expedition } (rec the profile shown; standing as C.StandingText takes it, drawn first,
+-- d1130; expedition as C.ExpeditionText takes it, drawn next);
 -- person = GuildSync.Comm.Person's shape or nil. Names come from person.
 function C.Section(view, person, clock, width)
   local items, y = {}, 0
@@ -234,6 +246,13 @@ function C.Section(view, person, clock, width)
   if title and C.STANDING_AT == "top" then
     add(title, LABEL)
     after(1)
+  end
+
+  local expedition = C.ExpeditionText(view and view.expedition)
+  if expedition then
+    local n = math.min(lineCount(expedition, width), C.EXPEDITION_LINES)
+    add(expedition, LABEL, n, nil, C.EXPEDITION_LINES)
+    after(n)
   end
 
   if type(person) == "table" then

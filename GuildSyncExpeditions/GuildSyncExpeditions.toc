@@ -1,0 +1,90 @@
+## Interface: 11507, 11600, 11700, 16001
+## Title: GuildSyncExpeditions
+## Notes: Expeditions: followers, expeditions and gear, paid in grain. A GuildSync module.
+## Author: Andorhal Grain Company
+## Version: @project-version@
+## IconTexture: Interface\Icons\INV_Misc_Map_01
+## Dependencies: GuildSync
+## SavedVariables: GuildSyncExpeditionsDB
+
+# B1
+Module.lua
+Store.lua
+Demo.lua
+Probe.lua
+Page.lua
+
+# W
+Words.lua
+
+# B2
+Data.lua
+FollowerCore.lua
+Followers.lua
+
+# E0
+GearData.lua
+
+# C
+Regions.lua
+RiskCore.lua
+BoardCore.lua
+Expeditions.lua
+
+# C2
+MapTab.lua
+
+# D
+LootCore.lua
+LootData.lua
+Rewards.lua
+Traits.lua
+
+# E
+GearCore.lua
+Gear.lua
+ShopTab.lua
+
+# P
+CharacterTab.lua
+BagGrid.lua
+
+# R
+Reserve.lua
+RecruitWindow.lua
+
+# F
+Maps.lua
+Supplies.lua
+
+# G
+BookData.lua
+Book.lua
+BookTab.lua
+
+# H
+QuestData.lua
+Quests.lua
+QuestWatch.lua
+QuestTab.lua
+
+# S
+StoryData.lua
+Story.lua
+
+# I
+Record.lua
+Sync.lua
+Facts.lua
+GuildTab.lua
+
+# V1
+Camp.lua
+
+# V2
+CampSoon.lua
+# V3
+GranaryDoor.lua
+
+# Y
+History.lua

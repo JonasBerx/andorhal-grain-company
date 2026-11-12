@@ -37,6 +37,22 @@ function ns.Standing(key)
   return s or nil
 end
 
+-- Expeditions' best follower and flair for a key (hub facts, API 8), raw and unescaped: { best, flair }, each only if
+-- a non-empty string, or nil when neither is. Asked once per key; "facts" from Expeditions and "demo" drop the cache.
+local expeditions = {} -- key -> { best, flair } | false
+local function nonEmpty(s) return type(s) == "string" and s ~= "" and s or nil end
+function ns.Expedition(key)
+  if type(key) ~= "string" then return nil end
+  local e = expeditions[key]
+  if e == nil then
+    local best = nonEmpty(ns.M.Fact("expeditions", "best", key))
+    local flair = nonEmpty(ns.M.Fact("expeditions", "flair", key))
+    e = (best or flair) and { best = best, flair = flair } or false
+    expeditions[key] = e
+  end
+  return e or nil
+end
+
 function ns.RefreshSection(frame, key)
   local pool = pools[frame] or {}
   pools[frame] = pool
@@ -48,7 +64,8 @@ function ns.RefreshSection(frame, key)
   if person then rec = ns.Card.ProfileOf(person, recOf) elseif type(key) == "string" then rec = recOf(key) end
   local width = tonumber(frame:GetWidth()) or 0
   if width <= 0 then width = 166 end
-  local items, height = ns.Card.Section({ key = key, rec = rec, standing = ns.Standing(key) }, person, ns.Now(), width)
+  local view = { key = key, rec = rec, standing = ns.Standing(key), expedition = ns.Expedition(key) }
+  local items, height = ns.Card.Section(view, person, ns.Now(), width)
   -- shift: how far the client's real wrapping (measured) has pushed the blocks below past the letter model's place
   local used, shift, bottom = {}, 0, height
   for _, it in ipairs(items) do
@@ -83,10 +100,18 @@ end
 
 -- A person may have changed (a record merged or pruned, a setting, a roster read): redraw the selected member.
 ns.M.On("links", function() ns.M.RefreshMember() end)
--- Annals' facts changed, or demo turned on or off: ask again and redraw.
-local function restand()
-  standings = {}
+-- Annals' or Expeditions' facts changed, or demo turned on or off: ask again and redraw.
+ns.M.On("facts", function(id)
+  if id == "annals" then
+    standings = {}
+  elseif id == "expeditions" then
+    expeditions = {}
+  else
+    return
+  end
   ns.M.RefreshMember()
-end
-ns.M.On("facts", function(id) if id == "annals" then restand() end end)
-ns.M.On("demo", restand)
+end)
+ns.M.On("demo", function()
+  standings, expeditions = {}, {}
+  ns.M.RefreshMember()
+end)

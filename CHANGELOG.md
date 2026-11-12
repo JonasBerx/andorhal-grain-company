@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.19.0
+
+### Expeditions
+
+- Build a Company at the camp in Brill: hire followers, send them out from the Map Table and bring back what they find.
+- Followers reach level 10 and wear gear from the Quartermaster, Storage and the road; gear can be tempered and repaired.
+- Writs, relics in the Book, six story chapters and a Guild board of your guildmates' best followers.
+- Gear shows Armor or Damage and green stats, and the Stats panel adds up what a follower wears.
+- The Map Table has a History list of your last 50 story quests, writs and expeditions.
+- The Map Table keeps its zone, quest page and follower when you leave it and come back.
+- A chat line says when a follower is back, and the camp shows who came back until you open History.
+- Barracks buttons on the Map Table, Quartermaster and Storage, and Send on Expedition takes the follower with it.
+- A sound plays when followers come back: one for a Rare find, one for a good run and one for a bad one.
+- A toast names each follower who comes back, at login and while you play with the window closed.
+- Gear tooltips in Storage, the Barracks and the Quartermaster compare the piece with what your picked follower wears.
+- With both ring or trinket slots full, a new one replaces the weaker of the two.
+- Storage has Sell All Poor and Repair All buttons.
+- Each zone's board has five expeditions a day instead of three, and the two new ones are short and open to new followers.
+
+### Games
+
+- Your grain now pays for Expeditions too.
+
+### GuildSync
+
+- The module list on a guildmate now holds up to 12 modules.
+
+### People
+
+- The Roster member section shows a member's best follower and title from Expeditions.
+
+### Annals
+
+- Four new achievements under Odd Jobs for Expeditions, shown only to you.
+
 ## 0.18.1
 
 ### Games

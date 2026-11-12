@@ -27,4 +27,5 @@ Links.lua
 LinksStore.lua
 Search.lua
 BugReport.lua
+Toast.lua
 Api.lua

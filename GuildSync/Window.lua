@@ -849,7 +849,7 @@ end
 -- version (orange when older, "dev" grey), one icon per suite module (lit when advertised) and last heard. The column
 -- offsets are from the row's right edge: Version 80, Modules 152, Last heard 90 wide; Name takes the rest.
 local TRACK = { rowH = 22, cap = 60, headerY = 24, listY = 46, columns = { "Name", "Version", "Modules", "Last heard" },
-  x = { -322, -242, -90 }, w = { 80, 152, 90 }, iconStep = 18, you = " |cffb8b8b8(you)|r" }
+  x = { -322, -242, -90 }, w = { 80, 152, 90 }, iconStep = 16, you = " |cffb8b8b8(you)|r" }
 
 local function trackerBuildRow(row)
   headRow.build(row, TRACK.rowH)
@@ -2937,6 +2937,7 @@ end
 
 function Window.CurrentPage() return currentPage end
 function Window.UI() return ui end
+function Window.Building() return windowBuild == "building" end
 
 -- The rows' x inside the sidebar inset (centred).
 local ROW_X = (View.SHELL.side.w - View.SIDE.rowW) / 2

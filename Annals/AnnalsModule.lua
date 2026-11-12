@@ -428,6 +428,13 @@ A.Kit = setmetatable({}, { __index = M.Kit })
 A.M = setmetatable({ Kit = A.Kit }, { __index = M })
 
 M.On("demo", function() Host.Refresh() end)
+-- Expeditions' counts moved: an own pass now. Only that id, so the "annals" a pass fires cannot come back here.
+M.On("facts", function(id)
+  if id ~= "expeditions" then return end
+  local x = Host.Expeditions()
+  local Core = core()
+  if x and type(Core) == "table" and type(Core.OwnPass) == "function" then Core.OwnPass({ expeditions = x }) end
+end)
 -- Each window show ends the Achievements tab's visit (D10, f3103); the tab's windowOpened is read when it runs.
 M.On("windowOpened", function()
   A.M.Safe(function()

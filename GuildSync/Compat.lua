@@ -66,6 +66,7 @@ Compat.APIS = {
   "CreateColor", -- Compat.FadeHorizontal: the colours of the This character card's class art fade (d530)
   -- the bug report (run r-20261106-s30b); UnitRace is SecretWhenUnitIdentityRestricted, read through str()
   "GetLocale", "UnitRace", "GetZoneText", "GetSubZoneText", "IsInInstance",
+  "C_Sound.PlaySound", -- Compat.PlaySound (the hub toast, API 9)
 }
 
 -- Compat.APIS names Compat reads only when the client has them; a missing one loses a detail, nothing breaks.
@@ -99,6 +100,7 @@ Compat.OPTIONAL = {
   ["CreateColor"] = true, -- Compat.FadeHorizontal: SetGradientAlpha, else the fading class art hidden
   -- the bug report (Compat.Locale, Race, Place): a missing one leaves that fact unknown
   ["GetLocale"] = true, ["UnitRace"] = true, ["GetZoneText"] = true, ["GetSubZoneText"] = true, ["IsInInstance"] = true,
+  ["C_Sound.PlaySound"] = true, -- Compat.PlaySound: the toast still shows, silently
 }
 
 -- Names Compat does not call, recorded by the probe only, because they would be useful fallbacks if present.
@@ -732,6 +734,17 @@ end
 
 function Compat.InCombat()
   return plain(call("InCombatLockdown")) == true
+end
+
+-- True unless InCombatLockdown answers plain false: a secret, nil or missing answer holds (Compat.InCombat reads those
+-- as not in combat). The hub toast waits on this.
+function Compat.HoldForCombat()
+  return plain(call("InCombatLockdown")) ~= false
+end
+
+-- Plays a sound kit id. The answer is ignored: Forever's C_Sound.PlaySound may return nothing (dump: MayReturnNothing).
+function Compat.PlaySound(id)
+  call("C_Sound.PlaySound", id)
 end
 
 -- ---------- addon messages (the comm core, CommQueue.lua) ----------

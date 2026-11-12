@@ -240,6 +240,23 @@ function Host.IsOfficer()
   return comm.IsOfficer(key) == true
 end
 
+-- The own Expeditions counts from its facts under the hub's own key: { quests, deadly }, or nil with no hub handle, in
+-- the demo (Expeditions then answers from demo state), with no key, or when either answer is not a number.
+-- ns.AnnalsModule is looked up here because this file loads first.
+function Host.Expeditions()
+  local A = ns.AnnalsModule
+  local M = type(A) == "table" and A.M or nil
+  if type(M) ~= "table" or type(M.Fact) ~= "function" or type(M.Demo) ~= "function" then return nil end
+  if M.Demo() == true then return nil end
+  local comm = resolve("GuildSync.Comm")
+  if type(comm) ~= "table" or type(comm.MyKey) ~= "function" then return nil end
+  local key = comm.MyKey()
+  if key == nil then return nil end
+  local quests, deadly = num(M.Fact("expeditions", "quests", key)), num(M.Fact("expeditions", "deadly", key))
+  if not quests or not deadly then return nil end
+  return { quests = quests, deadly = deadly }
+end
+
 function Host.MaxLevels()
   return num((call("GetMaxPlayerLevel"))), num((call("GetMaxLevelForPlayerExpansion")))
 end

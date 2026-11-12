@@ -140,6 +140,19 @@ local function own(G, now, obs)
   return res, nil, moved
 end
 
+-- An own pass outside a read or an own event (the "facts" listener). No read follows it, so a new earn signals here;
+-- the error is raised last, so the caller's work is done first.
+function Core.OwnPass(obs)
+  local G = Core.G()
+  if not G then return end
+  local earned, err = own(G, Host.Now(), obs)
+  if earned and #earned > 0 then
+    ns.AnnalsModule.FactsDirty(G)
+    Host.Refresh()
+  end
+  if err then error(err, 0) end
+end
+
 read = function()
   local now = Host.Now()
   if lastRead and now - lastRead < Rules.READ_GAP then
@@ -170,7 +183,7 @@ read = function()
   end
   Store.Prune(G, now)
   local err = check(G, now, true, members)
-  local _, ownErr = own(G, now, { money = Host.Money(), zone = Host.Zone() })
+  local _, ownErr = own(G, now, { money = Host.Money(), zone = Host.Zone(), expeditions = Host.Expeditions() })
   err = err or ownErr -- the first error wins (f6656)
   ns.AnnalsModule.FactsDirty(G)
   sayHits(G)
@@ -222,6 +235,7 @@ local function onEvent(event, ...)
     end
     local G = Core.G()
     if not G then return end
+    obs.expeditions = Host.Expeditions()
     local earned, err, moved = own(G, Host.Now(), obs)
     if moved or (earned and #earned > 0) then Host.Refresh() end
     if err then error(err, 0) end

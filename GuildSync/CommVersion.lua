@@ -24,7 +24,7 @@ local MODULE = "Version"
 local PREFIX = "GSync"
 local POLL, POLL_MAX = 1, 60 -- looks for "roster known": after 1 s, then doubling up to once a minute (f1177)
 local MAX_VERSION = 16 -- bytes in an addon version (f1194)
-local MAX_MODS = 8 -- id=version pairs in one ver-m.L, counted before the suite filter (f3114)
+local MAX_MODS = 12 -- id=version pairs in one ver-m.L, counted before the suite filter (f3114)
 
 local versions = {} -- key -> { name, addon, proto, seen, mods = { [suite id] = version } }
 local update = false

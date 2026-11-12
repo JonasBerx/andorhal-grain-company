@@ -30,7 +30,7 @@ local M = GuildSync and GuildSync.RegisterModule({
   id = "games",
   title = "Games",
   version = "0.1",
-  needs = 8,
+  needs = 9,
   -- The flight checks and the chat box are optional (f7075): a missing one means no prompt, or the plain share line.
   apis = { "GetServerTime",
     -- GetGuildInfo (f7100, Store.lua): optional because it is absent from the API dataset, as in NoticeBoard.
@@ -74,7 +74,38 @@ local M = GuildSync and GuildSync.RegisterModule({
   facts = {
     streak = function(key) if ns.FactStreak then return ns.FactStreak(key) end return nil end,
     wins = function(key) if ns.FactWins then return ns.FactWins(key) end return nil end,
+    -- The open Granary project, the read Home.lua's card makes: never ns.CompanyState, which writes (latchBadges).
+    granarygoal = function()
+      local cp = ns.CompanyProjects and ns.CompanyProjects()
+      if type(cp) ~= "table" then return nil end
+      if not cp.current then return "done" end
+      local p = ns.CompanyCore and ns.CompanyCore.PROJECTS[cp.current]
+      return p and p.name or nil
+    end,
+    granarypct = function()
+      local cp = ns.CompanyProjects and ns.CompanyProjects()
+      if type(cp) ~= "table" then return nil end
+      if not cp.current then return 100 end
+      local goal = tonumber(cp.goals and cp.goals[cp.current]) or 0
+      local total = tonumber(cp.totals and cp.totals[cp.current]) or 0
+      if goal <= 0 then return nil end
+      -- The floor of 100 * total / goal, cross-multiplied: games_static.test.js allows only a constant divisor here.
+      for pct = 100, 1, -1 do
+        if pct * goal <= 100 * math.min(total, goal) then return pct end
+      end
+      return 0
+    end,
   },
+  -- API 9: the grain purse other suite modules use. Missing, these answer nothing and the hub says "failed".
+  purse = {
+    read = function() if ns.Purse then return ns.Purse() end end,
+    spend = function(n) if ns.Spend then return ns.Spend(n) end end,
+    credit = function(n) if ns.Credit then return ns.Credit(n) end end,
+  },
+  -- API 9: picks a game after the hub has shown the page. An unknown key leaves the page as it is (Page.lua).
+  openTo = function(key)
+    if type(key) == "string" and ns.SelectGame then ns.SelectGame(key) end
+  end,
   -- The hub checks the apis and events first; this adds the day, or why there is none.
   selftest = function()
     if type(ns.WORDS) ~= "table" then return "pass", "no words" end

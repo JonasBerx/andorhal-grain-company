@@ -8,6 +8,36 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.19.0", lines = {}, addons = {
+    { folder = "GuildSyncExpeditions", lines = {
+      "Build a Company at the camp in Brill: hire followers, send them out from the Map Table and bring back what they find.",
+      "Followers reach level 10 and wear gear from the Quartermaster, Storage and the road; gear can be tempered and repaired.",
+      "Writs, relics in the Book, six story chapters and a Guild board of your guildmates' best followers.",
+      "Gear shows Armor or Damage and green stats, and the Stats panel adds up what a follower wears.",
+      "The Map Table has a History list of your last 50 story quests, writs and expeditions.",
+      "The Map Table keeps its zone, quest page and follower when you leave it and come back.",
+      "A chat line says when a follower is back, and the camp shows who came back until you open History.",
+      "Barracks buttons on the Map Table, Quartermaster and Storage, and Send on Expedition takes the follower with it.",
+      "A sound plays when followers come back: one for a Rare find, one for a good run and one for a bad one.",
+      "A toast names each follower who comes back, at login and while you play with the window closed.",
+      "Gear tooltips in Storage, the Barracks and the Quartermaster compare the piece with what your picked follower wears.",
+      "With both ring or trinket slots full, a new one replaces the weaker of the two.",
+      "Storage has Sell All Poor and Repair All buttons.",
+      "Each zone's board has five expeditions a day instead of three, and the two new ones are short and open to new followers.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "Your grain now pays for Expeditions too.",
+    } },
+    { folder = "GuildSync", lines = {
+      "The module list on a guildmate now holds up to 12 modules.",
+    } },
+    { folder = "GuildSyncPeople", lines = {
+      "The Roster member section shows a member's best follower and title from Expeditions.",
+    } },
+    { folder = "Annals", lines = {
+      "Four new achievements under Odd Jobs for Expeditions, shown only to you.",
+    } },
+  } },
   { version = "0.18.1", lines = {}, addons = {
     { folder = "GuildSyncGames", lines = {
       "The Harvest field grows slower: 1 grain a minute at the start, 7 at full ranks. Ghoul farmhand and Sharper scythes each add 1 a rank.",

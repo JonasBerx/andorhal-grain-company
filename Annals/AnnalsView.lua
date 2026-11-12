@@ -82,6 +82,7 @@ do
   local onlineOpen = "Your Annals counts who's online at each read on your own client."
   local zoneOpen = "The roster has to show the zone. Inside some instances it shows none."
   local goldOpen = "Your Annals checks your gold at login and whenever it changes."
+  local writsOpen = "Annals reads the writs done from Expeditions at each roster read and when they change."
   View.T_DETAILS = {
     sl = { counts = "In the Company. Dated by your join in the guild log, or by the first roster read that listed you.",
       sure = "Dated %day, from the guild log or your Annals' first read of you.",
@@ -188,6 +189,15 @@ do
         .. "first ran on this character.",
       sure = "Your Annals counted 30 quiet days, ending %day.",
       open = "A line written while the game locks chat for addons (some boss fights and PvP) is not seen." },
+    xq = { counts = "Finish 1 writ in Expeditions.",
+      sure = "Annals saw it on this character on %day.", open = writsOpen },
+    xw = { counts = "Finish 5 writs in Expeditions.",
+      sure = "Annals saw the count reach five on %day.", open = writsOpen },
+    xh = { counts = "Finish 12 writs in Expeditions.",
+      sure = "Annals saw the count reach twelve on %day.", open = writsOpen },
+    xd = { counts = "Win an expedition at Deadly.",
+      sure = "Annals saw the Deadly win on %day.",
+      open = "Annals reads the Deadly wins from Expeditions at each roster read and when they change." },
   }
 end
 

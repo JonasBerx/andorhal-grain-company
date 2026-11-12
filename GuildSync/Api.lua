@@ -1,8 +1,8 @@
--- GuildSync's public API (API 8 adds the search and facts fields, M.Fact, M.FactsChanged and the "facts" hub event;
--- API 7 the member field, M.RefreshMember, Comm.Person, M.MyCharacters and M.SetLinks; API 6 the kit art; API 5 the
--- pull store, bulk, limit and the menu and book-row kit pieces; API 4 the officers audience; API 3
--- M.Kit; API 2 the demo field, M.Demo and the "demo" hub event): the one global,
--- GuildSync, for module addons in their own folders (`## Dependencies: GuildSync`). Last in the TOC: the global is assigned as this file's last statement, so it exists
+-- GuildSync's public API (API 9 adds the purse field, M.Purse, M.Spend, M.Credit and M.Toast; API 8 the search and facts
+-- fields, M.Fact, M.FactsChanged and the "facts" hub event; API 7 the member field, M.RefreshMember, Comm.Person,
+-- M.MyCharacters and M.SetLinks; API 6 the kit art; API 5 the pull store, bulk, limit and the menu and book-row kit
+-- pieces; API 4 the officers audience; API 3 M.Kit; API 2 the demo field, M.Demo and the "demo" hub event): the one
+-- global, GuildSync, for module addons in their own folders (`## Dependencies: GuildSync`). Last in the TOC: the global is assigned as this file's last statement, so it exists
 -- only after every hub file has run. Internal code keeps using ns; the global is a chosen subset, never ns itself.
 --
 --   local M = GuildSync and GuildSync.RegisterModule{ id = "hello", title = "Hello", version = "1", needs = 1 }
@@ -15,7 +15,8 @@
 
 local ADDON, ns = ...
 
-local API, MIN_API = 8, 1
+-- Named expectation edit (run r-20261107-a1-hub-purse-guildsync-api-9): API 9 (the purse)
+local API, MIN_API = 9, 1
 local MAX_NEEDS = 99 -- a needs above this is a mistake, not a future API (math.huge passes the whole-number check)
 local MAX_ID, MAX_TITLE, MAX_NAMES = 12, 32, 5
 -- /gsync words a module id may not take (Core.lua's slash command)
@@ -25,6 +26,23 @@ local FUNCTION_FIELDS = { "slash", "selftest", "status", "scan", "onEvent", "onL
 
 local function say(text) ns.Say(text) end
 local function refuse(why) say("a module was refused: " .. why .. ".") end
+
+-- API 9 (the purse): the credit cap, a provider's why limit, and the one provider slot
+-- { title, read, spend, credit, busy }, nil until a suite module registers a purse. Declared here, above newHandle,
+-- so the handle's calls see them as upvalues.
+local MAX_CREDIT, MAX_WHY = 1000, 24
+local purseSlot = nil
+-- API 9: true while M.OpenModule is showing a page or running an openTo. One flag for the hub: the window has one
+-- current page, so an openTo that opens a third module is refused and the first selection stands.
+local opening = false
+
+-- true for a non-hub ns.SUITE entry's id (Suite.lua loads before this file; shownVersion walks the same list).
+local function isSuite(id)
+  for _, e in ipairs(ns.SUITE or {}) do
+    if not e.hub and e.id == id then return true end
+  end
+  return false
+end
 
 -- A list of strings copied from t (nil when t is not a table or holds anything else).
 local function stringList(t)
@@ -467,6 +485,24 @@ end
 -- ---------- API 8: module facts ----------
 
 local MAX_FACTS, MAX_FACT_NAME, MAX_FACT_TEXT, MAX_FACT_KEY = 8, 16, 64, 64
+local MAX_TOAST_TITLE, MAX_TOAST_TEXT = 64, 120
+
+local function finite(v) return type(v) == "number" and v == v and v ~= math.huge and v ~= -math.huge end
+
+-- A checked copy of an M.Toast spec, read raw (no __index): title and text by the text rule, a bad icon or sound dropped.
+-- nil when title or text is not a string, or nothing is left of it.
+local function toastEntry(spec)
+  if type(spec) ~= "table" then return nil end
+  local Plain = ns.Compat.Plain
+  local title, text = Plain(rawget(spec, "title")), Plain(rawget(spec, "text"))
+  if type(title) ~= "string" or type(text) ~= "string" then return nil end
+  title, text = ns.PlainLine(title, MAX_TOAST_TITLE), ns.PlainLine(text, MAX_TOAST_TEXT)
+  if title == "" or text == "" then return nil end
+  local icon, sound = Plain(rawget(spec, "icon")), Plain(rawget(spec, "sound"))
+  if type(icon) ~= "string" and not finite(icon) then icon = nil end
+  if not finite(sound) then sound = nil end
+  return { title = title, text = text, icon = icon, sound = sound }
+end
 
 -- A fact's answer as the reader gets it: a string (the text rule, ns.PlainLine), a finite number or a boolean;
 -- anything else nil.
@@ -638,6 +674,99 @@ local function newHandle(rec, calls, needs)
     function M.Fact(factId, name, key) return readFact(factId, name, key) end
     function M.FactsChanged() factsChanged(rec) end
   end
+  -- API 9: the hub toast. true | nil, why ("bad spec", "full").
+  if needs >= 9 then
+    function M.Toast(spec)
+      local entry = toastEntry(spec)
+      if not entry then return nil, "bad spec" end
+      return ns.Toast.Push(entry)
+    end
+  end
+  -- API 9: the hub purse. Checks in order: suite, no purse, amount, busy, the provider under its title, the answer.
+  if needs >= 9 then
+    local suite = isSuite(id)
+    local function gate()
+      if not suite then return "suite" end
+      if not purseSlot then return "no purse" end
+      return nil
+    end
+    -- a finite whole number (NaN fails n == math.floor(n))
+    local function whole(n)
+      return type(n) == "number" and n ~= math.huge and n ~= -math.huge and n == math.floor(n)
+    end
+    -- ran (false after a throw, recorded by ns.Safe), and both results of call() (ns.Safe passes on only the first).
+    local function run(call)
+      local slot, a, b = purseSlot, nil, nil
+      slot.busy = true
+      local good = ns.Safe(slot.title, function() a, b = call(slot) end)
+      slot.busy = false
+      return good, a, b
+    end
+    local function goodWhy(why)
+      return type(why) == "string" and #why >= 1 and #why <= MAX_WHY and string.find(why, "^[a-z][a-z ]*$") ~= nil
+    end
+    local function change(name, n)
+      local why = gate()
+      if why then return nil, why end
+      if not whole(n) or n < 1 or (name == "credit" and n > MAX_CREDIT) then return nil, "amount" end
+      if purseSlot.busy then return nil, "busy" end
+      local good, a, b = run(function(slot) return slot[name](n) end)
+      if not good then return nil, "failed" end
+      if a == true then return true end
+      if (a == nil or a == false) and goodWhy(b) then return nil, b end
+      return nil, "failed"
+    end
+    -- -> n | nil, "suite" | "no purse" | "busy" | "failed"
+    function M.Purse()
+      local why = gate()
+      if why then return nil, why end
+      if purseSlot.busy then return nil, "busy" end
+      local good, v = run(function(slot) return slot.read() end)
+      if not good then return nil, "failed" end
+      if not whole(v) or v < 0 then return nil, "failed" end
+      return v
+    end
+    -- -> true | nil, "suite" | "no purse" | "amount" | "busy" | "failed" | the provider's why
+    function M.Spend(n) return change("spend", n) end
+    -- the same, with n at most MAX_CREDIT
+    function M.Credit(n) return change("credit", n) end
+    -- Shows the target's page, then runs its openTo; the caller holds the opening flag. W.UI() was nil before the show
+    -- or the page was built (M.OpenModule checked), so a page still missing after it means this call opened the window.
+    local function showTarget(target, W, key)
+      if not ns.Safe("Window", W.ShowModulePage, target.page) then return nil, "failed" end
+      local ui = W.UI()
+      if not (ui and ui.pages[target.page]) then
+        -- no ui: no frame to close, and Toggle would retry the build and print its line again
+        if ui then ns.Safe("Window", W.Toggle) end
+        return nil, "no page"
+      end
+      if target.openTo and not ns.Safe(target.name, target.openTo, key) then return nil, "failed" end
+      return true
+    end
+    -- Opens a suite module's page and runs its openTo(key) after the show (its refresh would undo a selection made
+    -- earlier). Checks in order: suite, no page (none of them touches the flag), busy.
+    -- -> true | nil, "suite" | "no page" | "busy" | "failed"
+    function M.OpenModule(targetId, key)
+      if not suite or not isSuite(targetId) then return nil, "suite" end
+      local target
+      for _, m in ipairs(ns.modules) do
+        if m.id == targetId then target = m break end
+      end
+      if not (target and target.page) then return nil, "no page" end
+      local W = ns.Window
+      if not W or type(W.ShowModulePage) ~= "function" or type(W.UI) ~= "function" then return nil, "no page" end
+      -- a built window with no frame for this page: its build threw (ShowModulePage would open the window regardless)
+      local ui = W.UI()
+      if ui and not ui.pages[target.page] then return nil, "no page" end
+      if opening or (type(W.Building) == "function" and W.Building()) then return nil, "busy" end
+      opening = true
+      local a, why
+      local good = ns.Safe("Window", function() a, why = showTarget(target, W, key) end)
+      opening = false -- on every path: ns.Safe never throws
+      if not good then return nil, "failed" end
+      return a, why
+    end
+  end
   return M
 end
 
@@ -747,6 +876,26 @@ function api.RegisterModule(mod)
     search = rawget(search, "find")
     if type(search) ~= "function" then refuse(title .. ": search.find is not a function") return nil end
   end
+  -- API 9: purse = { read, spend, credit }, read once, its three fields raw, copied here (needs 1-8 ignore it). Only a
+  -- suite module provides it, and only one; a non-suite purse is ignored with one line after registration.
+  local purse = needs >= 9 and mod.purse or nil
+  local purseIgnored = false
+  if purse ~= nil then
+    if not isSuite(id) then
+      purse, purseIgnored = nil, true
+    else
+      if type(purse) ~= "table" then refuse(title .. ": purse is not a table") return nil end
+      local read, spend, credit = rawget(purse, "read"), rawget(purse, "spend"), rawget(purse, "credit")
+      if type(read) ~= "function" then refuse(title .. ": purse.read is not a function") return nil end
+      if type(spend) ~= "function" then refuse(title .. ": purse.spend is not a function") return nil end
+      if type(credit) ~= "function" then refuse(title .. ": purse.credit is not a function") return nil end
+      if purseSlot then refuse(title .. ": purse is already provided by " .. purseSlot.title) return nil end
+      purse = { title = title, read = read, spend = spend, credit = credit, busy = false }
+    end
+  end
+  -- API 9: openTo(key), read once; M.OpenModule runs it after the page is shown (needs 1-8 ignore it).
+  local openTo = needs >= 9 and mod.openTo or nil
+  if openTo ~= nil and type(openTo) ~= "function" then refuse(title .. ": openTo is not a function") return nil end
 
   local events = stringList(mod.events)
   if not events then refuse(title .. ": events is not a list of event names") return nil end
@@ -768,7 +917,7 @@ function api.RegisterModule(mod)
 
   local rec = { name = title, id = id, status = escapedStatus(mod.status), scan = mod.scan, slash = mod.slash, events = events,
     onEvent = mod.onEvent, onLogin = mod.onLogin, demo = demo, missingEvents = {},
-    facts = facts, factsEarly = facts ~= nil and not ns.LoggedIn(), search = search }
+    facts = facts, factsEarly = facts ~= nil and not ns.LoggedIn(), search = search, openTo = openTo }
   if mod.selftest or apis or #events > 0 then
     rec.selftest = wrapSelftest(rec, mod.selftest, required, optional)
   end
@@ -777,7 +926,9 @@ function api.RegisterModule(mod)
   for _, name in ipairs(optional) do all[#all + 1] = name end
   local calls = type(ns.Compat.CallList) == "function" and ns.Compat.CallList(all) or nil
 
+  if purse then purseSlot = purse end -- after the last refusal: a refused module provides nothing
   ns.RegisterModule(rec)
+  if purseIgnored then say(title .. ": purse ignored, only a GuildSync suite module may provide it.") end
   if facts and not rec.factsEarly then factsChanged(rec) end -- a provider that loaded after login
   local page = mod.page
   local W = ns.Window

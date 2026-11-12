@@ -14,6 +14,7 @@ guild module, so the whole guild runs matching versions.
 | GuildSyncNoticeBoard | Notice Board | Guild events, officer notices and polls. |
 | GuildSyncCrafting | Crafting | A work board, a crafter finder and recipes. |
 | GuildSyncGames | Games | WoWdle, a WoW word a day, and a game on flights. |
+| GuildSyncExpeditions | Expeditions | Followers, expeditions and gear, paid in grain. |
 
 ## Install
 

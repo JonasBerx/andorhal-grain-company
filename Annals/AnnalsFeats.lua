@@ -6,7 +6,8 @@
 -- rec.ac (d1193) holds the own record's counters as "<key>=<value>;" entries: key a lowercase letter and an
 -- alphanumeric, value one or more base-36 tokens [0-9a-z]+ joined by "," (a counter is one token; a part 2 set holds
 -- up to N tokens and stops growing at its row's need). Keys: cp the capitals entered (bit set 0-7), cs where counting
--- starts and gl the last own guild line (both server seconds). Feats.Own feeds them and earns g1, g2, ec and st.
+-- starts and gl the last own guild line (both server seconds). Feats.Own feeds them and earns g1, g2, ec, st and,
+-- from Expeditions' facts, xq, xw, xh and xd.
 -- Pure Lua 5.1, no client calls: data and time are passed in. Check(G, now, ctx) is idempotent: nothing is earned
 -- twice and nothing is ever removed.
 local _, ns = ...
@@ -161,9 +162,18 @@ local function hasBit(n, i)
   return n % 2 == 1
 end
 
+-- The Expeditions rows: the obs.expeditions field each reads and the least that earns it.
+local EXPEDITION_ROWS = {
+  { id = "xq", field = "quests", least = 1 },
+  { id = "xw", field = "quests", least = 5 },
+  { id = "xh", field = "quests", least = 12 },
+  { id = "xd", field = "deadly", least = 1 },
+}
+
 -- Own rows (S8a): what this client sees of its own character. obs = { money = copper|nil, zone = text|nil,
--- line = true|nil }. Only G.chars[guid] is touched; cs is set on the first call. Returns the new earns
--- { { guid, id }, ... } and, second, true when a new capital bit was stored (f6670).
+-- line = true|nil, expeditions = { quests = n|nil, deadly = n|nil }|nil }. Only G.chars[guid] is touched; cs is set on
+-- the first call. Returns the new earns { { guid, id }, ... } and, second, true when a new capital bit was stored
+-- (f6670).
 function Feats.Own(G, guid, now, obs)
   local out = {}
   local rec = (G.chars or {})[guid]
@@ -180,6 +190,12 @@ function Feats.Own(G, guid, now, obs)
   if type(obs.money) == "number" then
     if obs.money >= Rules.COIN then earn("g1", now) end
     if obs.money >= Rules.PURSE then earn("g2", now) end
+  end
+  if type(obs.expeditions) == "table" then
+    for _, row in ipairs(EXPEDITION_ROWS) do
+      local n = obs.expeditions[row.field]
+      if type(n) == "number" and n >= row.least then earn(row.id, now) end
+    end
   end
   local moved = false
   for i, zone in ipairs(Rules.CAPITALS) do
@@ -781,6 +797,15 @@ Feats.DEFS = {
   { id = "st", name = "Strong, Silent Type", desc = "30 days in the Company without a word in guild chat, counted "
     .. "while Annals runs.", cat = "Odd Jobs", points = 10, vis = "you", check = Feats.Never, leaf = "Odd Jobs",
     secret = true },
+  -- J2: own rows from Expeditions' facts, earned by Feats.Own only; "you" until sharing exists.
+  { id = "xq", name = "Company Errand", desc = "Finish a writ.", cat = "Odd Jobs", points = 10, vis = "you",
+    check = Feats.Never, leaf = "Odd Jobs" },
+  { id = "xw", name = "Writ Keeper", desc = "Finish 5 writs.", cat = "Odd Jobs", points = 25, vis = "you",
+    check = Feats.Never, leaf = "Odd Jobs" },
+  { id = "xh", name = "Hand of the Company", desc = "Finish 12 writs.", cat = "Odd Jobs", points = 50, vis = "you",
+    check = Feats.Never, leaf = "Odd Jobs" },
+  { id = "xd", name = "Back from the Deadlands", desc = "Win a Deadly expedition.", cat = "Odd Jobs", points = 25,
+    vis = "you", check = Feats.Never, leaf = "Odd Jobs" },
 }
 
 local byId = {}
