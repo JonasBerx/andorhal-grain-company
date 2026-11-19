@@ -2,8 +2,10 @@
 -- What the screens show in place of internal names, and the text of the expedition rows.
 -- API: W.Name[internal] -> shown name, W.Time(seconds) -> string, W.Requires(level, met) -> one string,
 --   W.Taken.pin / .tip / .out / .done -> words for a row sent today, home or out,
---   W.Quality(q) -> name or nil, W.Pool[region] -> entries,
+--   W.Quality(q) -> name or nil, W.Pool[region] -> entries, W.PackRefused[why] -> the line for a refused ns.PackSupply,
 --   W.RowText(row) -> title, text, place; an id ending -6 or -7 picks among the extra entries, every other id among the rest.
+--   W.Talent (the talent window's texts), W.TalentFx[talent id] -> format string for the effect at a rank (one %d: the
+--   talent's amount per rank times the rank; a text with no %d is the same at every rank), W.TalentsToSpend(n) -> line.
 -- Pure: string and math only, no client calls, no random, no clock. Sets no ns.M, so it loads on its own.
 -- B1 files read ns.W at call time, never at file scope: this file loads after them.
 
@@ -36,6 +38,13 @@ W.Name = {
   ["death share"] = "Death chance",
 }
 
+-- Why ns.PackSupply refused; the Barracks and a quest page say the same.
+W.PackRefused = {
+  two = "That follower already carries two supplies.",
+  same = "That follower already carries one of those.",
+  none = "You have none of those.",
+}
+
 -- A row sent today whose run came home (pin, tip); why its page is off: the run is still out, or it came home.
 W.Taken = {
   pin = "Done",
@@ -43,6 +52,90 @@ W.Taken = {
   out = "This expedition is under way.",
   done = "Done for today. New expeditions come with the daily reset.",
 }
+
+-- The talent window (TalentWindow.lua) and the Followers tab's Talents button, card tip and header line.
+local DOT = " \194\183 " -- a middle dot between spaces, as a byte escape: this file stays ASCII
+W.Talent = {
+  button = "Talents",
+  points = "Talent points: %d" .. DOT .. "%d in %s",
+  who = "%s" .. DOT .. "Level %d %s",
+  rank = "Rank %d/%d",
+  nextRank = "Next rank:",
+  tier = "Requires %d points in %s talents",
+  needs = "Requires %d points in %s",
+  needsOne = "Requires %d point in %s",
+  learn = "Learn",
+  reset = "Reset",
+  resetPrice = "Reset" .. DOT .. "%d grain",
+  cancel = "Cancel",
+  ask = "Reset %s's talents for %d grain?",
+  hint = "Left-click adds a rank, right-click takes one back.",
+  -- What a refused Learn, Reset or take-back says in the window. A grain refusal reads ns.GrainLine instead.
+  refuse = {
+    busy = "This follower is out on an expedition. Learn and Reset wait until they are home.",
+    learnNone = "Nothing new to learn: spend a point first.",
+    resetNone = "No talents are learned, so there is nothing to reset.",
+    demo = "Talents are not kept in the demo.",
+    learned = "A learned rank only comes back through a reset.",
+    other = "That cannot be done now.",
+  },
+}
+
+W.TalentFx = {
+  -- Vanguard
+  thickHide = "-%d%% wound chance",
+  drilled = "+%d Power on Assaults",
+  mailCare = "-%d%% gear break chance",
+  holdTheLine = "-%d%% death chance",
+  brawler = "+%d Power on Scouting and Rituals",
+  battleTested = "+%d%% XP",
+  fieldDressing = "Wounds rest %d h less",
+  pressTheAttack = "+%d Power on Dangerous and Deadly Assaults",
+  plunder = "+%d%% grain from wins",
+  bulwark = "-%d%% death chance on Deadly runs",
+  bannerBearer = "+%d Power on Assaults",
+  spoilsOfWar = "Finds green gear %d%% more often",
+  unbreakable = "-%d%% chance gear breaks or is lost",
+  commandingPresence = "+%d Power on every expedition",
+  warbringer = "+%d Power on Assaults",
+  -- Pathfinder
+  lightFeet = "Wounds rest %d h less",
+  trailwise = "+%d Power on Scouting",
+  keenEye = "Finds relics %d%% more often",
+  duckAndWeave = "-%d%% wound chance",
+  hitAndRun = "+%d Power on runs of 4 hours or less",
+  scavenger = "+%d%% salvage",
+  carefulHands = "-%d%% chance gear breaks or is lost",
+  ambusher = "+%d Power on Scouting",
+  lightFingers = "Finds supplies %d%% more often",
+  slipAway = "-%d%% death chance",
+  wanderer = "+%d Power on Assaults and Rituals",
+  talentSpotter = "Finds recruits %d%% more often",
+  shadowed = "-%d%% death chance on Deadly runs",
+  masterScout = "+%d Power on Scouting",
+  quickStudy = "+%d%% XP",
+  pathbreaker = "+%d Power on Scouting and on runs of 4 hours or less",
+  -- Arcanum
+  ward = "-%d%% death chance",
+  riteLearned = "+%d Power on Rituals",
+  studious = "+%d%% XP",
+  mending = "-%d%% wound chance",
+  longVigil = "+%d Power on runs of 8 hours or more",
+  scribe = "Finds maps and writs %d%% more often",
+  wardedKit = "-%d%% gear break chance",
+  insight = "+%d Power on Rituals",
+  darkBargain = "+3 Power on every expedition; wounds rest 2 h longer",
+  spiritTether = "Raising costs %d%% less grain",
+  calmMind = "Wounds rest %d h less",
+  lastRites = "-%d%% death chance on Deadly runs",
+  highRitualist = "+%d Power on Rituals",
+  soulAnchor = "A death on a Deadly run is never permanent",
+}
+
+function W.TalentsToSpend(n)
+  if n == 1 then return "1 talent point to spend" end
+  return n .. " talent points to spend"
+end
 
 local QUALITY = { [0] = "Poor", [1] = "Common", [2] = "Uncommon", [3] = "Rare" }
 

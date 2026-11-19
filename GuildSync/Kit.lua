@@ -7,6 +7,8 @@
 -- InputBox, Checkbox, Tabs, ContextMenu, Confirm, Ask, Pill, SetPill, SectionHeader; and a module's settings(S) gets
 -- S.Checkbox and S.Dropdown. A change of signature or meaning goes to a new name. Every other Kit name is hub-private.
 -- Frozen API 6 (M.Kit on needs >= 6 handles only), same rule: ItemButton, SetItem, SetCardProfession, ClassBackground.
+-- Frozen API 10 (M.Kit on needs >= 10 handles only), same rule: Tokens, Motion, Button.
+-- Frozen API 11 (M.Kit on needs >= 11 handles only), same rule: Menu (Menu.lua).
 -- GUILDSYNC_M_ belongs to modules (their popup and setting names): no hub popup or setting name starts with it.
 
 local ADDON, ns = ...
@@ -17,11 +19,91 @@ local View = ns.View
 local Kit = {}
 ns.Kit = Kit
 
-Kit.PANEL_BG = { 0, 0, 0, 0.3 }
-local HOVER_BG = { 1, 1, 1, 0.08 }
-local ACTIVE_BG = { 1, 1, 1, 0.12 }
+-- A deep copy of t: no table in it is shared with t.
+local function copy(t)
+  local out = {}
+  for k, v in pairs(t) do out[k] = type(v) == "table" and copy(v) or v end
+  return out
+end
+
+local COLOUR = View.TOKENS.colour
+Kit.PANEL_BG = copy(COLOUR.panel)
+local HOVER_BG = copy(COLOUR.hover)
+local ACTIVE_BG = copy(COLOUR.active)
 
 local function hasMethod(obj, name) return type(obj) == "table" and type(obj[name]) == "function" end
+
+-- A read-only view of t (Api.lua's shape): reads go through, every write throws, getmetatable answers false.
+local function readOnly(t)
+  return setmetatable({}, { __index = t, __metatable = false,
+    __newindex = function() error("GuildSync is read-only", 2) end })
+end
+
+-- t copied, with t and every table in it behind a read-only view.
+local function frozenCopy(t)
+  local out = {}
+  for k, v in pairs(t) do out[k] = type(v) == "table" and frozenCopy(v) or v end
+  return readOnly(out)
+end
+
+-- The API 10 Tokens keys (API.md "M.Kit: Tokens, Motion, Button"): a module's copy holds these and nothing else.
+local API10 = {
+  colour = { "panel", "hover", "active", "cardFill", "cardAccent", "divider", "pillBg", "gold", "green", "red",
+    "grey", "online", "trackerOld", "tierLead", "tierOfficer", "tierRaider", "tierMember", "tierMemberText" },
+  space = { "pad", "gap", "buttonH", "buttonPad" },
+  text = { "normal", "highlight", "small", "highlightSmall", "disable", "large" },
+}
+local API10_TEXT = {}
+for _, role in ipairs(API10.text) do API10_TEXT[role] = true end
+
+-- View.TOKENS as it was at load, in plain tables no one else holds.
+local SNAPSHOT = copy(View.TOKENS)
+
+-- The GameFont name for a role of View.TOKENS.text (the API 10 six plus the hub-only names), from the load-time
+-- snapshot; an unknown role answers the highlight name. The hub draws with these names, never with Tokens objects.
+function Kit.Text(role)
+  return SNAPSHOT.text[role] or SNAPSHOT.text.highlight
+end
+
+local function upperFirst(key) return (key:gsub("^%l", string.upper)) end
+
+-- Only the given keys of t (the values are not copied).
+local function pick(t, keys)
+  local out = {}
+  for _, k in ipairs(keys) do out[k] = t[k] end
+  return out
+end
+
+-- Kit.Tokens: the hub's own, never handed to a module (Kit.TokensFor makes theirs). View.TOKENS copied once at load,
+-- read-only (read each entry by key: pairs, next and # see nothing). text.<role> for the six API 10 roles is a font
+-- object copied from its GameFont (GuildSyncText<Role>), or the GameFont name without one.
+do
+  local text = {}
+  for _, role in ipairs(API10.text) do
+    local font = SNAPSHOT.text[role]
+    text[role] = Compat.CreateFont("GuildSyncText" .. upperFirst(role), font) or font
+  end
+  Kit.Tokens = readOnly({ colour = frozenCopy(SNAPSHOT.colour), space = frozenCopy(SNAPSHOT.space),
+    text = readOnly(text) })
+end
+
+-- A fresh read-only Tokens for one module: colour and space copied from the load-time snapshot, only the API 10 keys;
+-- text a read-only view whose <role> is made at first read: Compat.CreateFont("GuildSyncM_<id>_Text<Role>", its
+-- GameFont) or the GameFont name. Unknown keys read nil. A rawset on it reaches only this copy.
+function Kit.TokensFor(id)
+  local made = {}
+  local text = setmetatable({}, { __metatable = false,
+    __index = function(_, role)
+      if made[role] == nil and API10_TEXT[role] then
+        local font = SNAPSHOT.text[role]
+        made[role] = Compat.CreateFont("GuildSyncM_" .. tostring(id) .. "_Text" .. upperFirst(role), font) or font
+      end
+      return made[role]
+    end,
+    __newindex = function() error("GuildSync is read-only", 2) end })
+  return readOnly({ colour = frozenCopy(pick(SNAPSHOT.colour, API10.colour)),
+    space = frozenCopy(pick(SNAPSHOT.space, API10.space)), text = text })
+end
 
 -- True when the client has this frame template.
 function Kit.HasTemplate(name)
@@ -108,7 +190,7 @@ function Kit.HeaderBar(parent, text, width)
   f.bg = f:CreateTexture(nil, "BACKGROUND")
   f.bg:SetAllPoints(f)
   if Kit.Atlas(f.bg, "UI-Character-Info-Title", Kit.PANEL_BG) then Kit.SliceMargins(f.bg, 32, 0, 32, 0) end
-  f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  f.label = f:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   f.label:SetPoint("CENTER", 0, 1)
   f.label:SetText(text)
   return f
@@ -158,7 +240,7 @@ function Kit.SideRow(parent, text, icon, onClick)
   b.icon:SetSize(S.icon, S.icon)
   b.icon:SetPoint("LEFT", S.iconX, 0)
   if icon then Compat.SetIcon(b.icon, icon, View.IsGameIcon(icon)) end
-  b.label = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  b.label = b:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   b.label:SetPoint("LEFT", S.labelX, 0)
   b.label:SetText(text)
   b:SetScript("OnClick", function(self) if onClick then onClick(self) end end)
@@ -172,20 +254,75 @@ function Kit.SetChosen(b, on)
   if b.active then b.active:SetShown(on and true or false) end
   local hover = rawget(b, "hover")
   if type(hover) == "table" then hover:SetShown(not on) end
-  if b.label then b.label:SetFontObject(on and "GameFontHighlight" or "GameFontNormal") end
+  if b.label then b.label:SetFontObject(on and Kit.Text("highlight") or Kit.Text("normal")) end
 end
 
 -- ---------- the Roster's pieces. Nil or false = the caller keeps its fallback. ----------
 
--- A WowStyle1DropdownTemplate button (width x 25) whose menu generate(dd, rootDescription) builds. Nil when the
--- client lacks the template or the menu system, or when the build fails (the partial frame is hidden).
-function Kit.Dropdown(parent, width, generate)
-  if not Kit.HasTemplate("WowStyle1DropdownTemplate") or not Compat.MenuUtil() then return nil end
-  local dd = Compat.CreateFrame("DropdownButton", nil, parent, "WowStyle1DropdownTemplate")
+-- A plain button (width x 25, no template) whose click opens a Kit.Menu that generate(dd, root) builds, and a second
+-- click closes it (on the handle's IsOpen). Its text is the selected radio's (at build, on show, after a pick and
+-- after GenerateMenu) until OverrideText sets one that holds. dd:OpenMenu() -> handle or nil (an empty root opens
+-- nothing), dd:CloseMenu(), dd:GenerateMenu() -> root, dd:OverrideText(text). Nil when the frame cannot be made or the
+-- build fails (the partial frame is hidden). title is hub-private (Api.lua): callbacks are reported under it.
+function Kit.Dropdown(parent, width, generate, title)
+  if type(generate) ~= "function" then generate = function() end end -- a module's non-function builds an empty menu
+  local dd = Compat.CreateFrame("Button", nil, parent)
   if not dd then return nil end
+  title = title or "Core"
+  local handle, override
+  local function follow(root)
+    if override ~= nil then return end
+    for _, e in ipairs(root.entries) do
+      if e.kind == "radio" then
+        local good, on = ns.Safe(title, e.isSelected, e.data)
+        if good and on then ns.Safe(title, dd.SetText, dd, e.text) return end
+      end
+    end
+  end
+  -- generate, then each radio's pick also moves the text.
+  local function build(_, root)
+    generate(dd, root)
+    for _, e in ipairs(root.entries) do
+      local set = e.setSelected
+      if e.kind == "radio" then
+        e.setSelected = function(d)
+          if type(set) == "function" then set(d) end
+          follow(root)
+        end
+      end
+    end
+  end
+  function dd.GenerateMenu()
+    local root = Kit.MenuRoot()
+    ns.Safe(title, generate, dd, root)
+    follow(root)
+    return root
+  end
+  function dd.OpenMenu()
+    handle = Kit.Menu(dd, build, nil, title)
+    return handle
+  end
+  function dd.CloseMenu() if handle then handle.Close() end end
+  function dd.OverrideText(_, text)
+    override = text
+    dd:SetText(text)
+  end
   local good = pcall(function()
     dd:SetSize(width, 25)
-    dd:SetupMenu(generate)
+    dd:SetNormalFontObject(Kit.Text("highlight"))
+    local bg = dd:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    local c = Kit.Tokens.colour.panel
+    bg:SetColorTexture(c[1], c[2], c[3], c[4])
+    local hl = dd:CreateTexture(nil, "HIGHLIGHT")
+    hl:SetAllPoints()
+    c = Kit.Tokens.colour.hover
+    hl:SetColorTexture(c[1], c[2], c[3], c[4])
+    dd:SetScript("OnClick", function()
+      if handle and handle.IsOpen() then handle.Close() else dd:OpenMenu() end
+    end)
+    dd:SetScript("OnShow", function() dd:GenerateMenu() end)
+    dd:GenerateMenu()
   end)
   if not good then
     if hasMethod(dd, "Hide") then dd:Hide() end
@@ -233,7 +370,7 @@ function Kit.ColumnHeader(parent, text, onClick)
   h.middle:SetPoint("RIGHT", h.right, "LEFT")
   h.middle:SetHeight(19)
   h.middle:SetTexCoord(0.078125, 0.90625, 0, 0.59375)
-  h.label = h:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  h.label = h:CreateFontString(nil, "OVERLAY", Kit.Text("highlightSmall"))
   h.label:SetPoint("LEFT", 8, 0)
   h:SetFontString(h.label)
   h:SetText(text)
@@ -303,11 +440,19 @@ function Kit.List(parent, rowH, build, init)
   return list
 end
 
--- A right-click menu on owner, built by generate(owner, rootDescription). False when the client has no menu system.
-function Kit.ContextMenu(owner, generate)
-  local menu = Compat.MenuUtil()
-  if not menu then return false end
-  return pcall(menu.CreateContextMenu, owner, generate) and true or false
+-- A right-click menu (Kit.Menu) at the cursor, else under owner, built by generate(owner, root). False when nothing
+-- opened: generate added no entry or threw, or the menu frame could not be made. title is hub-private (Api.lua).
+function Kit.ContextMenu(owner, generate, title)
+  local x, y = Compat.CursorPosition()
+  local handle = Kit.Menu(owner, generate, nil, title)
+  if handle == nil then return false end
+  local scale = x and y and Compat.UIParent() and Compat.Plain(Compat.UIParent():GetEffectiveScale())
+  if type(scale) == "number" and scale > 0 then
+    local f = Kit.MenuOpen().frame
+    f:ClearAllPoints()
+    f:SetPoint("TOPLEFT", Compat.UIParent(), "BOTTOMLEFT", x / scale, y / scale)
+  end
+  return true
 end
 
 -- A dialog on UIParent (DefaultPanelTemplate, else BasicFrameTemplateWithInset), centred, strata DIALOG, Escape
@@ -341,23 +486,24 @@ function Kit.Dialog(name, width, height)
   if modern and type(tc) == "table" and type(tc.TitleText) == "table" then
     f.title = tc.TitleText
   else
-    f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    f.title = f:CreateFontString(nil, "OVERLAY", Kit.Text("highlight"))
     f.title:SetPoint("TOP", 0, -6)
   end
   return f
 end
 
 -- An edit box: InputBoxInstructionsTemplate width x 20 when the client has it, InputBoxTemplate fallbackWidth x 20
--- otherwise. Sets no scripts.
+-- otherwise. Sets no scripts. Auto focus is off, so showing the box never takes the keyboard (issue #10).
 function Kit.InputBox(parent, width, fallbackWidth)
   local box
   if Kit.HasTemplate("InputBoxInstructionsTemplate") then
     box = Compat.CreateFrame("EditBox", nil, parent, "InputBoxInstructionsTemplate")
   end
-  if box then box:SetSize(width, 20) return box end
+  if box then box:SetSize(width, 20) box:SetAutoFocus(false) return box end
   box = Compat.CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
   if not box then return nil end
   box:SetSize(fallbackWidth, 20)
+  box:SetAutoFocus(false)
   return box
 end
 
@@ -376,14 +522,14 @@ function Kit.MoneyLine(parent)
   f:SetSize(160, 14)
   f.pieces = {}
   for _, coin in ipairs(COINS) do
-    local digits = f:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+    local digits = f:CreateFontString(nil, "OVERLAY", Kit.Text("number"))
     local tex = f:CreateTexture(nil, "ARTWORK")
     tex:SetSize(13, 13)
     digits:Hide()
     tex:Hide()
     f.pieces[coin[1]] = { digits = digits, coin = tex }
   end
-  f.fallback = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  f.fallback = f:CreateFontString(nil, "OVERLAY", Kit.Text("highlightSmall"))
   f.fallback:SetPoint("LEFT", f, "LEFT", 0, 0)
   f.fallback:Hide()
   return f
@@ -439,7 +585,7 @@ function Kit.StateMark(parent)
   local mark = parent:CreateTexture(nil, "ARTWORK")
   mark:SetPoint("CENTER", parent, "TOPLEFT", 14, -11)
   mark:Hide()
-  local word = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  local word = parent:CreateFontString(nil, "OVERLAY", Kit.Text("small"))
   word:SetPoint("LEFT", parent, "TOPLEFT", 6, -11)
   word:Hide()
   mark.word = word
@@ -477,9 +623,9 @@ function Kit.ModuleRow(parent)
   if not Kit.Atlas(hl, "common-list-hoverbg-mid", ROW_HIGHLIGHT) and hasMethod(hl, "SetBlendMode") then hl:SetBlendMode("ADD") end
   row.highlightTex = hl
   row.mark = Kit.StateMark(row)
-  row.name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  row.name = row:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   row.name:SetPoint("LEFT", row, "LEFT", 28, 0)
-  row.status = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  row.status = row:CreateFontString(nil, "OVERLAY", Kit.Text("highlightSmall"))
   row.status:SetPoint("LEFT", row, "LEFT", 132, 0)
   row.status:SetJustifyH("LEFT")
   row.status:SetWordWrap(false)
@@ -511,22 +657,17 @@ local function buildConfirmWindow()
   local f = Kit.Dialog("GuildSyncKitConfirm", 340, 120) -- Escape hides it: the same as Cancel
   if not f then return nil end
   f.title:SetText("GuildSync")
-  f.question = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+  f.question = f:CreateFontString(nil, "OVERLAY", Kit.Text("highlight"))
   f.question:SetPoint("TOPLEFT", 14, -34)
   f.question:SetWidth(312)
-  f.ok = Compat.CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  f.ok:SetSize(100, 22)
-  f.ok:SetPoint("BOTTOMRIGHT", -14, 12)
-  f.ok:SetScript("OnClick", function()
+  f.ok = Kit.Button(f, "", 100, function()
     f:Hide()
     local run = f.onOk
     if type(run) == "function" then run() end
   end)
-  f.cancel = Compat.CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  f.cancel:SetSize(100, 22)
+  f.ok:SetPoint("BOTTOMRIGHT", -14, 12)
+  f.cancel = Kit.Button(f, "Cancel", 100, function() f:Hide() end)
   f.cancel:SetPoint("BOTTOMLEFT", 14, 12)
-  f.cancel:SetText("Cancel")
-  f.cancel:SetScript("OnClick", function() f:Hide() end)
   f:Hide()
   return f
 end
@@ -609,8 +750,8 @@ function Kit.Tabs(parent, entries, onSelect)
   return tabs
 end
 
-local CARD_FILL = { 0, 0, 0, 0.42 }
-local CARD_ACCENT = { 1, 0.82, 0, 0.55 } -- the Bank card's open accent (gold .55)
+local CARD_FILL = copy(COLOUR.cardFill)
+local CARD_ACCENT = copy(COLOUR.cardAccent) -- the Bank card's open accent (gold .55)
 
 local CARD_ART = "Profession-overview-Card"
 local cardArts = setmetatable({}, { __mode = "k" }) -- card -> its private art texture (Kit.Card only)
@@ -702,7 +843,7 @@ function Kit.ItemButton(parent)
   b:SetSize(37, 37)
   b.icon = b:CreateTexture(nil, "ARTWORK")
   b.icon:SetAllPoints(b)
-  b.count = b:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+  b.count = b:CreateFontString(nil, "OVERLAY", Kit.Text("number"))
   b.count:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
   b.count:Hide()
   plainItemButtons[b] = true
@@ -738,7 +879,7 @@ function Kit.Checkbox(parent, text)
   if not cb then return nil end
   local good = pcall(function()
     cb:SetSize(30, 29)
-    cb.label = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    cb.label = cb:CreateFontString(nil, "OVERLAY", Kit.Text("highlight"))
     cb.label:SetPoint("LEFT", cb, "RIGHT", 2, 0)
     cb.label:SetText(text)
   end)
@@ -749,21 +890,10 @@ function Kit.Checkbox(parent, text)
   return cb
 end
 
--- The entry's 16x16 icon at the menu button's left, the text moved beside it. A failing attach leaves the text.
-local function matchIcon(button, icon)
-  pcall(function()
-    local tex = button:AttachTexture()
-    tex:SetSize(16, 16)
-    tex:SetPoint("LEFT")
-    Compat.SetIcon(tex, icon)
-    local fs = rawget(button, "fontString")
-    if type(fs) == "table" and hasMethod(fs, "SetPoint") then fs:SetPoint("LEFT", tex, "RIGHT", 3, 0) end
-  end)
-end
-
 -- A menu under owner (TOPLEFT on its BOTTOMLEFT, 0, -2) with one button per entry ({ text, icon, value }), each
--- with its icon; a pick runs onPick(entry). No entries: one title, emptyText. Nil without the menu system.
-function Kit.MatchMenu(owner, entries, onPick, emptyText)
+-- with its 16x16 icon (Kit.Menu's hub-private element.icon); a pick runs onPick(entry). No entries: one title,
+-- emptyText. Answers Kit.Menu's handle, nil when the menu frame could not be made. title is hub-private (Api.lua).
+function Kit.MatchMenu(owner, entries, onPick, emptyText, title)
   local function generate(_, root)
     if type(entries) ~= "table" or #entries == 0 then
       root:CreateTitle(emptyText)
@@ -771,19 +901,16 @@ function Kit.MatchMenu(owner, entries, onPick, emptyText)
     end
     for _, entry in ipairs(entries) do
       local b = root:CreateButton(entry.text, function() if type(onPick) == "function" then onPick(entry) end end)
-      if entry.icon ~= nil and type(b) == "table" and type(b.AddInitializer) == "function" then
-        b:AddInitializer(function(button) matchIcon(button, entry.icon) end)
-      end
+      b.icon = entry.icon
     end
   end
-  local menu = Compat.OpenMenu(owner, generate, "TOPLEFT", "BOTTOMLEFT", 0, -2)
-  return menu
+  return Kit.Menu(owner, generate, nil, title)
 end
 
 -- Closes a menu Kit.MatchMenu returned. Safe with nil or a closed menu.
--- (A WowStyle1 dropdown's menu, Kit.Dropdown, closes through Kit.CloseDropdown.)
+-- (A Kit.Dropdown's menu closes through Kit.CloseDropdown.)
 function Kit.CloseMenu(menu)
-  Compat.CloseMenu(menu)
+  if type(menu) == "table" and type(menu.Close) == "function" then pcall(menu.Close) end
 end
 
 -- Asks text with okText and cancelText through the game's StaticPopup (which) only: no window of Kit's own. onOk runs
@@ -801,7 +928,7 @@ end
 -- ---------- the Crafters and Recipes pages' pieces. Kit reads no View or Craft code; no callbacks taken. ----------
 
 local STAR_ON, STAR_OFF = "auctionhouse-icon-favorite", "auctionhouse-icon-favorite-off"
-local DIVIDER_BG = { 1, 1, 1, 0.15 }
+local DIVIDER_BG = copy(COLOUR.divider)
 
 -- A favourite star: Kit's own Button 20x18, normal and HIGHLIGHT (ADD) textures on the star atlas, off at first.
 -- Nil (no frame left shown) when the client lacks either star atlas: the caller keeps its own star.
@@ -857,7 +984,7 @@ function Kit.BookRow(parent, w, h)
   b.toggle:SetSize(14, 14)
   b.icon = b:CreateTexture(nil, "ARTWORK")
   b.icon:SetSize(16, 16)
-  b.label = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  b.label = b:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   b.label:SetJustifyH("LEFT")
   b.label:SetWordWrap(false)
   return b
@@ -886,13 +1013,13 @@ function Kit.SetBookRow(row, spec)
     placeLeft(row.toggle, row, 4)
     placeLeft(row.icon, row, 24)
     placeLeft(row.label, row, 44)
-    row.label:SetFontObject("GameFontNormal")
+    row.label:SetFontObject(Kit.Text("normal"))
   else
     chosen = spec.chosen and true or false
     row.toggle:Hide()
     placeLeft(row.icon, row, 28)
     placeLeft(row.label, row, 48)
-    row.label:SetFontObject(chosen and "GameFontHighlight" or "GameFontHighlightSmall")
+    row.label:SetFontObject(chosen and Kit.Text("highlight") or Kit.Text("highlightSmall"))
   end
   Compat.SetIcon(row.icon, spec.icon)
   row.label:SetText(spec.text or "")
@@ -911,8 +1038,8 @@ end
 
 -- ---------- the module mocks' pieces (API 3, d384). No hub caller. ----------
 
-local PILL_TONES = { gold = { 1, 0.82, 0 }, green = { 0.1, 1, 0.1 }, red = { 1, 0.13, 0.13 }, grey = { 0.6, 0.6, 0.6 } }
-local PILL_BG = { 0, 0, 0, 0.5 }
+local PILL_TONES = { gold = copy(COLOUR.gold), green = copy(COLOUR.green), red = copy(COLOUR.red), grey = copy(COLOUR.grey) }
+local PILL_BG = copy(COLOUR.pillBg)
 
 -- Sets a Kit.Pill's text and tone ("gold" | "green" | "red" | "grey"; nil or any other tone draws gold). The width is
 -- the measured text + 10, up to 140; 70 when the client does not measure.
@@ -934,7 +1061,7 @@ function Kit.Pill(parent, text, tone)
   f.bg = f:CreateTexture(nil, "BACKGROUND")
   f.bg:SetAllPoints(f)
   if Kit.Atlas(f.bg, "common-stat-bar-heavy-BG", PILL_BG) then Kit.SliceMargins(f.bg, 9, 9, 9, 9) end
-  f.text = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  f.text = f:CreateFontString(nil, "OVERLAY", Kit.Text("small"))
   f.text:SetPoint("CENTER", 0, 1)
   Kit.SetPill(f, text, tone)
   return f
@@ -991,13 +1118,93 @@ function Kit.SectionHeader(parent, width, text)
       rule:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
     end
   end
-  f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  f.label = f:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   f.label:SetPoint("TOPLEFT", 21, -8)
   f.label:SetText(text)
   return f
 end
 
--- Closes a Kit.Dropdown's open menu (DropdownButton:CloseMenu). Safe with nil, a closed dropdown or any other frame.
+-- Closes a Kit.Dropdown's open menu (its own dd:CloseMenu). Safe with nil, a closed dropdown or any other frame.
 function Kit.CloseDropdown(dd)
   if hasMethod(dd, "CloseMenu") then pcall(dd.CloseMenu, dd) end
+end
+
+-- ---------- the modern button (API 10) ----------
+
+local BUTTON_FALLBACK_W = 100 -- the width when the client does not measure the text
+
+-- A button: SharedButtonTemplate when the client has it, else UIPanelButtonTemplate, else a plain Button with the
+-- GameFont names of the normal, highlight and disable roles. width nil fits the text (its width + space.buttonPad
+-- on each side); onClick(self, button) runs on click; enabled false disables it (default true).
+-- Nil when no frame can be made.
+function Kit.Button(parent, text, width, onClick, enabled)
+  local template = (Kit.HasTemplate("SharedButtonTemplate") and "SharedButtonTemplate")
+    or (Kit.HasTemplate("UIPanelButtonTemplate") and "UIPanelButtonTemplate") or nil
+  local b = Compat.CreateFrame("Button", nil, parent, template)
+  if type(b) ~= "table" then return nil end
+  local T = Kit.Tokens
+  if not template then
+    b:SetNormalFontObject(Kit.Text("normal"))
+    b:SetHighlightFontObject(Kit.Text("highlight"))
+    b:SetDisabledFontObject(Kit.Text("disable"))
+  end
+  b:SetText(text or "")
+  if type(width) ~= "number" then
+    local ok, w = pcall(b.GetTextWidth, b)
+    w = ok and Compat.Plain(w) or nil
+    width = (type(w) == "number" and w >= 0) and (w + 2 * T.space.buttonPad) or BUTTON_FALLBACK_W
+  end
+  b:SetSize(width, T.space.buttonH)
+  if enabled == false then b:Disable() end
+  if type(onClick) == "function" then b:SetScript("OnClick", onClick) end
+  return b
+end
+
+-- ---------- the scroll area (hub-private) ----------
+
+local SCROLL_WHEEL = 18 -- the plain area's wheel step
+
+-- The hub's scroll area on parent, by what the client has (as GuildKOS/Page.lua, f4697):
+-- * ScrollFrameTemplate ("modern"): its bar is made in the template's OnLoad and owns OnMouseWheel, OnVerticalScroll
+--   and OnScrollRangeChanged (setting one unhooks the bar), so none is set here; Forever draws the bar outside the
+--   frame (f4931), so it is moved to barX from the frame's right edge.
+-- * the classic scroll frame template ("classic"): named, as it looks up <name>ScrollBar; only when name is a string.
+-- * neither ("plain", unless noPlain): a frame that clips its children, whose wheel moves s.content within s.range.
+-- s = { scroll, kind, bar, plain }; the caller sets s.content (and s.range on plain), its points and its width.
+-- Nil when no frame can be made, or when noPlain and neither template is there.
+function Kit.ScrollArea(parent, name, barX, noPlain)
+  local s, scroll = {}, nil
+  if Kit.HasTemplate("ScrollFrameTemplate") then
+    local made, f = pcall(Compat.CreateFrame, "ScrollFrame", nil, parent, "ScrollFrameTemplate")
+    if made and type(f) == "table" then
+      scroll, s.kind = f, "modern"
+      if type(f.ScrollBar) == "table" then
+        s.bar = f.ScrollBar
+        s.bar:ClearAllPoints()
+        s.bar:SetPoint("TOPLEFT", f, "TOPRIGHT", barX, 0)
+        s.bar:SetPoint("BOTTOMLEFT", f, "BOTTOMRIGHT", barX, 0)
+      end
+    end
+  end
+  if not scroll and type(name) == "string" then
+    scroll = Compat.CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate")
+    if scroll then s.kind = "classic" end
+  end
+  if not scroll then
+    if noPlain then return nil end
+    scroll = Compat.CreateFrame("Frame", nil, parent)
+    if not scroll then return nil end
+    s.kind, s.plain = "plain", true
+    if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
+    scroll:EnableMouseWheel(true)
+    scroll:SetScript("OnMouseWheel", function(...)
+      ns.Safe("Window", function(_, delta)
+        s.offset = math.min(s.range or 0, math.max(0, (s.offset or 0) - delta * SCROLL_WHEEL))
+        s.content:ClearAllPoints()
+        s.content:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, s.offset)
+      end, ...)
+    end)
+  end
+  s.scroll = scroll
+  return s
 end

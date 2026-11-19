@@ -70,7 +70,8 @@ local M = GuildSync and GuildSync.RegisterModule({
     if ns.DemoState then return ns.DemoState(guild, now) end
     return nil
   end,
-  facts = { best = fact("best"), flair = fact("flair"), quests = fact("quests"), deadly = fact("deadly") },
+  facts = { best = fact("best"), flair = fact("flair"), quests = fact("quests"), deadly = fact("deadly"),
+    nextopen = fact("nextopen") }, -- issue 6: Influence.lua
 })
 if not M then return end
 ns.M = M -- M stays in this addon: never hand it to other code

@@ -14,6 +14,8 @@ DemoGuild.lua
 Demo.lua
 View.lua
 Kit.lua
+Motion.lua
+Menu.lua
 Probe.lua
 Professions.lua
 Roster.lua

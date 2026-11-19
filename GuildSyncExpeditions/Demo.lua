@@ -1,5 +1,6 @@
 -- GuildSyncExpeditions Demo.lua: what /gsync demo shows.
 --   ns.DemoState(guild, now) -> the demo state: one table per part, keyed like GuildSyncExpeditionsDB, plus guildRows
+--     talents: Vesper holds the Vanguard Strike build (TalentData.BUILDS.Might[1])
 --   ns.DemoGuildRows() -> the demo's guildRows as fresh copies | nil        nil when demo is off or the state has none
 -- ns.Part hands out a fresh checked copy of a part on every call. Session only: never saved, never sent. guildRows is not
 -- a part: records live raw and ns.GuildRecords is {} in demo, so the Guild page and the camp's count read it from here.
@@ -71,6 +72,13 @@ local function demoBag(vesper)
   end
   put({ kind = "relic", key = "t1", n = 2 })
   return { next = id + 1, rows = rows }
+end
+
+-- Vesper (a level 10 Paladin, so Vanguard) has the Strike example build learned: all 18 points, nothing left to spend.
+local function demoTalents()
+  local TD, TC = ns.TalentData, ns.TalentCore
+  local tree = TD.TREES.Might
+  return { rows = { [1] = { v = TD.V, ranks = TC.RanksOf(tree, TD.BUILDS.Might[1].ranks) } } }
 end
 
 -- Grubb's run, on the first shared Silverpine row of the demo day.
@@ -145,7 +153,8 @@ function ns.DemoState(guild, now)
     maps = { rows = { tirisfal = {} } },
     relics = { rows = { t1 = {}, t2 = {}, s1 = {} } },
     chains = { rows = { [1] = { row = "o7", temper = 0 } } },
-    quests = { rows = { g2 = { id = "g2", progress = 0 }, b1 = { id = "b1", progress = 12 }, k1 = { id = "k1", progress = 6 } } },
+    quests = { rows = { g2 = { id = "g2", progress = 0 }, b1 = { id = "b1", progress = 12 }, k1 = { id = "k1", progress = 6 },
+      t1 = { id = "t1", progress = 0 } } }, -- four: the demo opens the Tavern (issue 6)
     flair = { title = "g1", rows = { g1 = { id = "g1" }, ["company-hand"] = { id = "company-hand" } } },
     finds = { next = 3, rows = {
       [1] = { id = 1, row = blue, fid = 1, day = day, region = "silverpine" },
@@ -153,6 +162,7 @@ function ns.DemoState(guild, now)
     } },
     story = { chapter = 2, step = 2, sentDay = 0 },
     traitc = { rows = { [1] = { grave = 2, shaken = 0, streak = 1 } } },
+    talents = demoTalents(),
     history = { next = 5, rows = {
       [1] = { kind = "story", c = 2, s = 1, who = "Vesper", res = "succ", t = now },
       [2] = { kind = "writ", wid = "g1", who = "Vesper", res = "complete", t = now - 86400 },

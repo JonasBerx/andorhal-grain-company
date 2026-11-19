@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.20.0
+
+### Expeditions
+
+- Followers have talent trees: Vanguard, Pathfinder or Arcanum, by class, with 2 talent points a level from level 2.
+- The Talents button in the Barracks opens the tree. Learn keeps your picks; a reset costs 10 grain a point.
+- The quest page has two supply slots: click one to pack a supply from Storage or swap it, right-click to unpack.
+- Each granary project the guild finishes in Games opens more of Expeditions, and chat says so once.
+- Andorhal's mill puts the Whetstone Kit and Spirit Candle on sale; the seed store adds the Scout's Chart and Grave-moss Charm.
+- The Quartermaster's supplies have their own Supplies tab.
+- The camp's Apothecary, Tavern, Forge and Arena open with the seed store, watchtower, irrigation ditch and Company hall.
+- With the Tavern open you can hold a fourth writ.
+- With the Forge open the Quartermaster sells green gear on an Uncommon tab.
+
+### Games
+
+- The Company banner in the store shows your own faction's banner on non-English clients too.
+- The Company tab shows what the next granary project opens in Expeditions.
+- The Sickle badge shows a farm scythe.
+
+### Kill on Sight
+
+- Killing a listed player yourself pays 100 grain, up to 5 kills a week and once per player a week; not your own marks or in instances.
+- Officers set the grain a kill and both weekly caps for the guild in the Kill on Sight options; 0 turns kill grain off.
+- Opening the Kill on Sight page no longer puts the cursor in a text box.
+
+### GuildSync
+
+- The window no longer mixes with another addon's panel: clicking it brings all of it to the front.
+- Buttons have the game's own button look, and the window and toasts fade in and out; Animations in the options turns the fades off.
+- Every menu and dropdown in the suite is drawn by GuildSync itself. Esc closes an open menu together with the window.
+- Alt+Z closes the window, like the game's own panels.
+- The bug report now says to paste it in #addon-feedback.
+
 ## 0.19.0
 
 ### Expeditions
@@ -63,7 +97,7 @@
 
 ### GuildSync
 
-- Report a bug: /gsync bug or the Report a bug button on This character builds a report to paste in #bug-reports.
+- Report a bug: /gsync bug or the Report a bug button on This character builds a report to paste in #addon-feedback.
 - The report holds the versions, client, place and your newest GuildSync errors. It is not sent or saved anywhere.
 
 ### Games

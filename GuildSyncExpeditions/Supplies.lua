@@ -1,7 +1,9 @@
 -- GuildSyncExpeditions Supplies.lua: what a follower packs for an expedition (0.19 plan, Seams 5, 6, 8, 9).
 --   ns.SupplyMods(ids, row) -> mods                    ns.SupplyChoices(fid) -> { { id, n, packed, name }, ... }
---   ns.PackSupply(fid, id), ns.GrantSupply(id, n), ns.BuySupply(id) (third value true when ns.Grain has already said the line)
+--   ns.PackSupply(fid, id), ns.GrantSupply(id, n), ns.BuySupply(id) (third value true when ns.Grain has already said the line;
+--   "unknown" for a shop row whose influence step is not open, GC.SupplyOnSale)
 --   ns.CheckPack(fid) -> { droppedId, ... }            ns.ClearPack(fid)
+--   ns.UnpackSupply(fid, id) -> true | nil, "demo" | "unknown" | "none"   takes id out of the pack; the stack is untouched
 -- A pack only reserves: several followers may pack the last of a stack, and the send that comes first gets it.
 -- Grain moves only through ns.Grain.
 
@@ -90,6 +92,20 @@ function ns.PackSupply(fid, id)
   return true
 end
 
+function ns.UnpackSupply(fid, id)
+  if ns.Inert() then return nil, "demo" end
+  if not ns.Follower(fid) then return nil, "unknown" end
+  local rows = packed().rows
+  local pack = rows[fid]
+  if not pack or not holds(pack, id) then return nil, "none" end
+  local kept = {}
+  for _, v in ipairs(pack) do
+    if v ~= id then kept[#kept + 1] = v end
+  end
+  rows[fid] = #kept > 0 and kept or nil
+  return true
+end
+
 -- Runs inside ns.Send with no M.Safe around it, so no fid may make it throw.
 function ns.CheckPack(fid)
   if M.Demo() then return {} end
@@ -120,9 +136,10 @@ function ns.GrantSupply(id, n)
   return ns.AddStack("supply", id, n)
 end
 
+-- nil for a row whose influence step is not open yet, so it cannot be bought.
 local function shopRow(id)
   for _, s in ipairs(GC.SHOP_SUPPLIES) do
-    if s.id == id then return s end
+    if s.id == id then return GC.SupplyOnSale(s, ns.Opened) and s or nil end
   end
   return nil
 end

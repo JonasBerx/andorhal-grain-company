@@ -99,6 +99,9 @@ function Core.OnEvent(event, a1, a2)
     if type(unit) ~= "string" then return end
     local guid = ns.Hub and ns.Hub.Call("UnitGUID", unit) or nil
     route("Spot", "OnUnit", event, unit, guid)
+  elseif event == "PARTY_KILL" then
+    -- the killing blow's attacker and victim GUIDs (issue 8): grain for your own kill of an open target (ns.Kill)
+    route("Kill", "OnPartyKill", Core.Plain(a1), Core.Plain(a2))
   end
 end
 

@@ -1,5 +1,5 @@
--- GuildKOS RulesRecords: the three record kinds (t = kos target, h = kos_h hunter, m = kos_m member), their keys,
--- body format, receive refusals, display-safe text, sizes and trim.
+-- GuildKOS RulesRecords: the record kinds (t = kos target, h = kos_h hunter, m = kos_m member, c = the kill grain
+-- settings, one record under kos_h key "c"), their keys, body format, receive refusals, display-safe text, sizes and trim.
 -- Pure Lua 5.1, no client calls. Time (now) is always passed in.
 --
 -- Body: fixed fields, then one section per list, sections joined by "=", entries by ",", fields by ";".
@@ -9,7 +9,11 @@ local _, ns = ...
 local Records = {}
 ns.RulesRecords = Records
 
-Records.BUDGET = { t = 2811, h = 2365, m = 2293 }  -- packed, escaped body bytes after the hub prefix (f5199)
+Records.BUDGET = { t = 2811, h = 2365, m = 2293, c = 64 }  -- packed, escaped body bytes after the hub prefix (f5199)
+-- The kill grain settings (issue 8, d23-d24): officers set them for the guild in one kos_h record under this key
+-- (member keys there all start with "h"). Each number must lie in its range, or the whole record is refused.
+Records.SETTINGS_KEY = "c"
+Records.SETTINGS_RANGE = { reward = { 0, 1000 }, weekCap = { 0, 20 }, perTarget = { 1, 3 } }
 Records.PLAYER_PREFIX = "Player-"                  -- the one "is a player GUID" test (d757 item 5); Task F may widen it
 Records.FUTURE = 300                               -- seconds a time may lie ahead of now
 Records.KEY_MAX = 25                               -- bytes in a target key
@@ -33,9 +37,19 @@ local SPEC = {
                   { name = "witness", fields = { "killer", "victim", "time" }, max = 6, who = "witness" },
                   { name = "sightings", fields = { "target", "time", "zone", "subzone", "shard" }, max = 3,
                     who = "spotter" } } },
+  c = { fixed = { "reward", "weekCap", "perTarget", "setAt" }, lists = {} },
 }
-local NUMBER = { level = true, markedAt = true, decidedAt = true, time = true, total = true, best = true, since = true }
-local TIME = { markedAt = true, decidedAt = true, time = true }
+local NUMBER = { level = true, markedAt = true, decidedAt = true, time = true, total = true, best = true, since = true,
+  reward = true, weekCap = true, perTarget = true, setAt = true }
+local TIME = { markedAt = true, decidedAt = true, time = true, setAt = true }
+
+-- Records.KindOf(id, key) -> the record kind a domain holds under key: kos "t", kos_m "m", kos_h "h" (key "c": "c").
+function Records.KindOf(id, key)
+  if id == "kos" then return "t" end
+  if id == "kos_m" then return "m" end
+  if id == "kos_h" then return key == Records.SETTINGS_KEY and "c" or "h" end
+  return nil
+end
 local GUID = { victim = true, killer = true, target = true }   -- plus a mark's guid; all required in list entries
 local MEMBER_KEY = { markedBy = true, decidedBy = true, hunter = true, officer = true }   -- capped at ATOM_MAX
 local STATUS = { open = true, removed = true, rejected = true }
@@ -220,6 +234,7 @@ function Records.Parse(kind, key, body, now)
   end
   if kind == "t" and (not isPlayer(key:sub(2)) or Records.TargetKey(key:sub(2)) ~= key) then return nil, "key" end
   if kind == "h" and (key:sub(1, 1) ~= "h" or #key < 2) then return nil, "key" end
+  if kind == "c" and key ~= Records.SETTINGS_KEY then return nil, "key" end
   local sections = splitOn(body, "=")
   if #sections ~= 1 + #spec.lists then return nil, "shape" end
   local rec = {}
@@ -249,6 +264,13 @@ function Records.Parse(kind, key, body, now)
       out[ei] = e
     end
     rec[list.name] = out
+  end
+  if kind == "c" then
+    for name, range in pairs(Records.SETTINGS_RANGE) do
+      local n = rec[name]
+      if n == nil then return nil, "missing " .. name end
+      if n < range[1] or n > range[2] then return nil, "range " .. name end
+    end
   end
   return rec
 end

@@ -2,7 +2,8 @@
 -- streak(key): the streak of key's record when it is for today or yesterday, else 0 (also 0 for a hidden key or a
 -- streak over L2, ns.Limits.WoWdle). wins(key): the own key's wins,
 -- nil for any other key. Both read memory only; in demo both answer from the demo state (M.Demo()), where the row
--- marked you is the own key. ns.FactsChanged is called by Store.lua after the own finish and by Sync.lua after a merge.
+-- marked you is the own key. ns.FactsChanged is called by Store.lua after the own finish, by Sync.lua after a merge, and
+-- by CompanySync.lua when the furthest built granary project moves (issue 6).
 
 local _, ns = ...
 

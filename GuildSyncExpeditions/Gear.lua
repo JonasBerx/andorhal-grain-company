@@ -5,6 +5,7 @@
 --   ns.Equip(fid, id), ns.Unequip(fid, slot), ns.UnequipAll(fid), ns.MovePiece(id, cell)
 --   ns.Temper(id), ns.Repair(id, how), ns.Buy(code) (third value true when ns.Grain has already said the line), ns.OnSale(row), ns.SellPiece(id), ns.BreakDown(id)
 --   ns.BreakGear(fid, slot), ns.LoseGear(fid, slot), ns.LeaveWorn(fid)
+--   A piece ns.Buy put in the bag carries bought = true: it never turns into salvage (ns.BreakDown, ns.LeaveWorn).
 --   ns.ReplaceSlot(fid, code) -> slot | nil, worn copy | nil (the slot Equip fills: an empty one, else the weaker worn piece)
 --   ns.PoorInStorage() -> { { id, n }, ... }, total     ns.SellPoor(ids) -> sold, grain, why (each by ns.SellPiece)
 --   ns.RepairState() -> broken, fixable                 ns.RepairAll() -> repaired, stillBroken (each by ns.Repair, salvage)
@@ -42,7 +43,7 @@ local function soundBagRow(id, row)
   if row.kind == nil then
     if not GD.WellFormed(row.row) then return nil end
     return { id = id, row = row.row, cell = row.cell, broken = row.broken == true,
-      temper = whole(row.temper, 0, TEMPER_MAX) and row.temper or 0 }
+      temper = whole(row.temper, 0, TEMPER_MAX) and row.temper or 0, bought = row.bought == true or nil }
   end
   if row.cell == nil or not goodKey(row.kind, row.key) or not amount(row.n) then return nil end
   return { id = id, kind = row.kind, key = row.key, n = math.min(row.n, GC.STACK_MAX[row.kind]), cell = row.cell }
@@ -396,9 +397,12 @@ function ns.Repair(itemId, how)
   return true
 end
 
+-- The Quartermaster sells green only once the Forge is open (issue 6).
+local function forgeOpen() return ns.Opened ~= nil and ns.Opened("forge") end
+
 -- With no Story.lua no chapter is done, so the shop is the short one.
 function ns.OnSale(row)
-  return GC.OnSale(row, ns.ChaptersDone and #ns.ChaptersDone() or 0)
+  return GC.OnSale(row, ns.ChaptersDone and #ns.ChaptersDone() or 0, forgeOpen())
 end
 
 -- Every check comes before the spend and only plain assignments after it, so grain is never taken for nothing.
@@ -406,8 +410,8 @@ function ns.Buy(code)
   if ns.Inert() then return nil, "demo" end
   local row = GD.Row(code)
   if not row then return nil, "unknown" end
-  local price = GC.SlotPrice(row)
-  if not price then return nil, "quality" end
+  local price = GC.ShopPrice(row)
+  if not price or (row.q == GC.GREEN and not forgeOpen()) then return nil, "quality" end
   if not ns.OnSale(row) then return nil, "stock" end
   local p = bag()
   local cell = freeCells(p.rows)[1]
@@ -419,6 +423,7 @@ function ns.Buy(code)
   local paid, refused = ns.Grain("spend", price)
   if not paid then return nil, refused, true end
   putPiece(p, id, code, cell, 0)
+  p.rows[id].bought = true
   return id
 end
 
@@ -519,6 +524,7 @@ function ns.BreakDown(itemId)
   local piece, row = known(p, itemId)
   if not piece then return nil, "unknown" end
   if not piece.cell then return nil, "worn" end
+  if piece.bought then return nil, "bought" end
   if row.q < 2 then return nil, "quality" end
   local n = GC.SalvageOf(row.q)
   p.rows[itemId] = nil -- first, so a full bag has the cell for the salvage
@@ -570,7 +576,7 @@ function ns.LeaveWorn(fid)
       piece.cell = cell
     else
       local row = GD.Row(piece.row)
-      local kept = hold(piece) or (row and addStack(p, "salvage", row.tier, GC.SalvageOf(row.q)))
+      local kept = hold(piece) or (row and not piece.bought and addStack(p, "salvage", row.tier, GC.SalvageOf(row.q)))
       p.rows[piece.id] = nil
       if not kept then
         ns.Say(ns.W.Name["Company bag"] .. " is full: " .. (row and row.name or "An unknown item") .. " is lost.")

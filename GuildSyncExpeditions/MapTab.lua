@@ -5,8 +5,11 @@
 --     history opens the History list. A right-click on the zone, a pin or the camp pin goes back to the world map.
 --   A row sent today reads Away while its run is out (RunOut), then Done; its quest page's gate line says which.
 -- ns.W, ns.Regions, ns.BoardCore, ns.Followers, ns.TodayRows, ns.ChancesFor, ns.PowerOf and ns.Send are read at call
--- time, and so are the optional seams (CheckPack, SupplyChoices, IsReserve, StoryStep, StoryHeld, StoryData, CampStage,
--- ShowAnya, ShowPortrait, KitScore, GoTo, RunOut, LootCore, BookData, GearData): several load after this file.
+-- time, and so are the optional seams (CheckPack, SupplyChoices, PackSupply, UnpackSupply, IsReserve, StoryStep, StoryHeld,
+-- StoryData, CampStage, ShowAnya, ShowPortrait, KitScore, GoTo, RunOut, LootCore, BookData, GearData, BagGrid,
+-- TalentPercent): several load after this file.
+-- The quest page's two supply slots (issue 12) show the picked follower's pack: a click picks a supply from the Company
+-- bag (M.Kit.ContextMenu), a right-click unpacks it, and the chances redraw at once. The pack stays on the follower.
 
 local _, ns = ...
 if not ns.M then return end
@@ -34,6 +37,8 @@ local BAR_W, BAR_H = 268, 12
 local GEAR_Y, LINE_STEP = -298, 16 -- the page's Gear damaged row; a Deadly row's Killed for good pushes it down one line
 local FINDS_Y = -70 -- the page's finds line, below Gear damaged
 local DOT = " \194\183 "
+local SLOT_N, SLOT_PX, SLOT_STEP, SLOT_X, SLOT_Y = 2, 26, 30, 62, 17 -- the supply slots, bottom left, level with Send
+local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 
 local PARCHMENT = { 0.80, 0.70, 0.52, 1 }
 local MARK_FILL = { 0.85, 0.72, 0.25, 1 }
@@ -383,6 +388,12 @@ local function stepPieces(row)
   return names
 end
 
+-- A talent's percent more on one of the follower's rewards; nil (LootCore counts it as 0) with no follower or no seam.
+local function talentPct(who, lever)
+  if not (who and ns.TalentPercent) then return nil end
+  return ns.TalentPercent(who.id, lever)
+end
+
 -- What a win pays, read the way ns.ApplyRewards reads it; nil when LootCore is absent. The second answer is true when
 -- the line names gear, which makes it run to two lines.
 local function rewardsLine(who, row)
@@ -390,11 +401,12 @@ local function rewardsLine(who, row)
   if not LC then return nil end
   local parts = {}
   if who and who.level < ns.FollowerData.MAX_LEVEL then
-    local xp = LC.XP(row.hours, row.danger, WIN_BAND, who.level, row.level)
+    local xp = LC.XP(row.hours, row.danger, WIN_BAND, who.level, row.level, talentPct(who, "xp"))
     if xp > 0 then parts[1] = xp .. " XP" end
   end
-  parts[#parts + 1] = LC.Grain(row.hours, row.danger, isGreedy(who)) .. " grain"
-  parts[#parts + 1] = LC.Salvage(row.hours, WIN_BAND) .. " " .. ns.W.Name[SCRAP[LC.Tier(row.level)]]
+  parts[#parts + 1] = LC.Grain(row.hours, row.danger, isGreedy(who), talentPct(who, "grain")) .. " grain"
+  local salvage = LC.Salvage(row.hours, WIN_BAND, talentPct(who, "salvage"))
+  parts[#parts + 1] = salvage .. " " .. ns.W.Name[SCRAP[LC.Tier(row.level)]]
   local pieces = stepPieces(row)
   for _, name in ipairs(pieces) do parts[#parts + 1] = name end
   return table.concat(parts, ", "), #pieces > 0
@@ -468,6 +480,18 @@ local function showRowTip(ui, owner, row, hint)
   tip:Show()
 end
 
+-- A locked zone's grey line. A zone on the influence ladder (issue 6) names the Games project that opens it, or, once
+-- that project is built while the zone's expeditions wait for a later update (issue 19), says so.
+local HELD = { hillsbrad = "The Company holds Hillsbrad. Its expeditions come with a later update." }
+
+local function lockedLine(id)
+  local IC = ns.InfluenceCore
+  local need = IC and IC.Need(id)
+  if not need or not HELD[id] then return "Coming later" end
+  if type(ns.Unlocked) == "function" and ns.Unlocked(id) then return HELD[id] end
+  return "Opens when the Company finishes: " .. IC.Project(need)
+end
+
 local function showZoneTip(ui, owner, id)
   local tip = M.Compat.Tooltip()
   if not tip then return end
@@ -475,7 +499,7 @@ local function showZoneTip(ui, owner, id)
   tip:SetOwner(owner, "ANCHOR_RIGHT")
   tip:SetText(info.name)
   if REG[id].lock then
-    tip:AddLine("Coming later", 0.62, 0.62, 0.62)
+    tip:AddLine(lockedLine(id), 0.62, 0.62, 0.62)
   else
     local n = 0
     for _, row in ipairs(ui.rows) do
@@ -737,14 +761,135 @@ local function statLine(who, row)
   return "Level " .. who.level .. " " .. who.race .. " " .. who.class .. ", Power " .. ns.PowerOf(who.id, row)
 end
 
-local function packedLine(fid)
-  if not ns.SupplyChoices then return nil end
-  local names = {}
-  for _, s in ipairs(ns.SupplyChoices(fid) or {}) do
-    if s.packed then names[#names + 1] = s.name end
+-- ---------- supply slots ----------
+
+local draw -- the redraw, set below; a slot click ends in it
+
+local function choicesOf(fid)
+  if fid == nil or not ns.SupplyChoices then return {} end
+  return ns.SupplyChoices(fid) or {}
+end
+
+-- The packed ids still in their stacks, in SupplyChoices' order, at most SLOT_N.
+local function packedIds(fid)
+  local out = {}
+  for _, s in ipairs(choicesOf(fid)) do
+    if s.packed and #out < SLOT_N then out[#out + 1] = s.id end
   end
-  if #names == 0 then return nil end
-  return "Supplies: " .. table.concat(names, ", ")
+  return out
+end
+
+local function supplyWords(id)
+  local BG = ns.BagGrid
+  local name, icon, use
+  if BG and BG.Supply then name, icon, use = BG.Supply(id) end
+  return name or id, icon or UNKNOWN_ICON, use
+end
+
+-- A follower on the page who may change their pack: not away, not dead, on a row that could be sent.
+local function slotsOpen(ui)
+  local who, row = ui.person, ui.open and ui.open.row
+  if not who or not row or not ns.PackSupply then return false end
+  if who.state == "out" or who.state == "dead" then return false end
+  return not row.taken and not gatedFor(who, row)
+end
+
+local function packRefused(why)
+  if why == "demo" then return end -- ns.Inert has said its line
+  ns.Say(ns.W.PackRefused[why] or "You cannot do that now.")
+end
+
+-- old: the id in the clicked slot, swapped out for id; put back when the new pack is refused.
+local function packFrom(ui, fid, id, old)
+  if old and ns.UnpackSupply then
+    local out, why = ns.UnpackSupply(fid, old)
+    if not out then
+      packRefused(why)
+      return draw(ui)
+    end
+  end
+  local done, why = ns.PackSupply(fid, id)
+  if not done then
+    if old then ns.PackSupply(fid, old) end
+    packRefused(why)
+  end
+  draw(ui)
+end
+
+-- What a slot holds lives in page.slotIds, by slot.index: nil there is an empty slot.
+local function idIn(ui, slot) return ui.page.slotIds[slot.index] end
+
+local function openSlotMenu(ui, slot)
+  local fid = ui.person and ui.person.id
+  if fid == nil then return end
+  local old = idIn(ui, slot)
+  M.Kit.ContextMenu(slot, function(_, root)
+    local any = false
+    for _, s in ipairs(choicesOf(fid)) do
+      if not s.packed then
+        any = true
+        local name, _, use = supplyWords(s.id)
+        local text = name .. " (" .. s.n .. ")"
+        if use then text = text .. ": " .. use:gsub("^Use: ", "") end
+        root:CreateButton(text, function() M.Safe(packFrom, ui, fid, s.id, old) end)
+      end
+    end
+    if not any then
+      root:CreateTitle("No supplies in " .. ns.W.Name["Company bag"] .. ". Buy them from the " .. ns.W.Name.shop .. ".")
+    end
+  end)
+end
+
+local function unpackSlot(ui, slot)
+  local fid = ui.person and ui.person.id
+  if fid == nil or not idIn(ui, slot) or not ns.UnpackSupply then return end
+  local done, why = ns.UnpackSupply(fid, idIn(ui, slot))
+  if not done then packRefused(why) end
+  draw(ui)
+end
+
+local function clickSlot(ui, slot, which)
+  if not slotsOpen(ui) then return end
+  if which == "RightButton" then return unpackSlot(ui, slot) end
+  openSlotMenu(ui, slot)
+end
+
+local function showSlotTip(ui, slot)
+  local tip = M.Compat.Tooltip()
+  if not tip then return end
+  local id = idIn(ui, slot)
+  if id then
+    local BG = ns.BagGrid
+    if BG and BG.Tip then
+      BG.Tip(slot, { kind = "supply", key = id }, 0, "ANCHOR_RIGHT")
+    else
+      tip:SetOwner(slot, "ANCHOR_RIGHT")
+      tip:SetText((supplyWords(id)), 1, 1, 1)
+    end
+    if slotsOpen(ui) then tip:AddLine("Click to swap. Right-click to unpack.", 0.1, 1, 0.1) end
+  else
+    tip:SetOwner(slot, "ANCHOR_RIGHT")
+    tip:SetText("Pack a supply", 1, 1, 1)
+    if slotsOpen(ui) then tip:AddLine("Click to choose one from " .. ns.W.Name["Company bag"] .. ".", 0.1, 1, 0.1) end
+  end
+  tip:Show()
+end
+
+local function drawSlots(ui)
+  local page = ui.page
+  local ids = ui.person and packedIds(ui.person.id) or {}
+  local open = slotsOpen(ui)
+  for i, slot in ipairs(page.slots) do
+    page.slotIds[i] = ids[i]
+    if ids[i] then
+      local _, icon = supplyWords(ids[i])
+      slot.icon:SetTexture(icon)
+      slot.icon:Show()
+    else
+      slot.icon:Hide()
+    end
+    slot:SetAlpha(open and 1 or 0.5)
+  end
 end
 
 local function statusOf(f)
@@ -862,9 +1007,7 @@ local function fillPage(ui)
   drawChips(ui)
 
   page.stat:SetText(who and statLine(who, row) or "")
-  local supplies = who and packedLine(who.id)
-  page.supplies:SetText(supplies or "")
-  page.supplies:SetShown(supplies ~= nil)
+  drawSlots(ui)
 
   local gated = gatedFor(who, row)
   if gated or row.taken then
@@ -942,7 +1085,7 @@ local function showLayers(ui)
   ui.page:SetShown(map and ui.open ~= nil)
 end
 
-local function draw(ui)
+function draw(ui)
   ui.rows = soundRows(ns.TodayRows())
   refreshWho(ui)
   -- An arrival ring lasts while a run from its row is out (ns.RunOut); without that seam, until a zoom or a page opens.
@@ -1184,7 +1327,6 @@ local function buildPage(ui, box)
   end) end)
   page.chips = {}
   page.stat = pageText(page, "GameFontHighlightSmall", PAGE_PAD, -212, textW)
-  page.supplies = pageText(page, "GameFontHighlightSmall", PAGE_PAD, -228, textW)
 
   page.gate = pageText(page, "GameFontHighlight", PAGE_PAD, -246, textW, INK)
   page.chance = pageText(page, "GameFontNormal", PAGE_PAD, -246, textW, INK)
@@ -1218,6 +1360,31 @@ local function buildPage(ui, box)
   anchorAt(page.rewards, page.damaged, 0, -54)
   page.finds = pageText(page, "GameFontHighlightSmall", PAGE_PAD, GEAR_Y - 70, textW, INK)
   anchorAt(page.finds, page.damaged, 0, FINDS_Y)
+
+  page.slotLabel = pageText(page, "GameFontNormalSmall", PAGE_PAD, 0, SLOT_X - 4, LABEL_INK)
+  page.slotLabel:ClearAllPoints()
+  page.slotLabel:SetPoint("LEFT", page, "BOTTOMLEFT", PAGE_PAD, SLOT_Y + SLOT_PX / 2)
+  page.slotLabel:SetText("Supplies")
+  page.slots, page.slotIds = {}, {}
+  for i = 1, SLOT_N do
+    local slot = CreateFrame("Button", nil, page)
+    slot.index = i
+    slot:SetSize(SLOT_PX, SLOT_PX)
+    slot:SetPoint("BOTTOMLEFT", page, "BOTTOMLEFT", PAGE_PAD + SLOT_X - 6 + (i - 1) * SLOT_STEP, SLOT_Y)
+    local bg = slot:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(slot)
+    bg:SetTexture("Interface\\Buttons\\UI-Quickslot2")
+    bg:SetTexCoord(0.1875, 0.8125, 0.1875, 0.8125)
+    slot.icon = slot:CreateTexture(nil, "ARTWORK")
+    slot.icon:SetPoint("TOPLEFT", slot, "TOPLEFT", 2, -2)
+    slot.icon:SetPoint("BOTTOMRIGHT", slot, "BOTTOMRIGHT", -2, 2)
+    slot.icon:Hide()
+    slot:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    slot:SetScript("OnClick", function(self, which) M.Safe(clickSlot, ui, self, which) end)
+    slot:SetScript("OnEnter", function(self) M.Safe(showSlotTip, ui, self) end)
+    slot:SetScript("OnLeave", function() M.Safe(hideTip) end)
+    page.slots[i] = slot
+  end
 
   page.send = CreateFrame("Button", nil, page, "UIPanelButtonTemplate")
   page.send:SetSize(126, 24)

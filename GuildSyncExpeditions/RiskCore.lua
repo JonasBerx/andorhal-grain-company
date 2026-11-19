@@ -2,7 +2,8 @@
 -- Pure: string, table and math only, no globals, no game calls, no random.
 --   RC.Need(level, danger) -> n
 --   RC.Chances(power, need, danger, modsList) -> { success, wound, death, perma, broken, lost, bands } | nil
---     mods, in order race, trait, supply, set: { success, deathPct, woundPct, gearPct, broken, noPerma, rest }
+--     mods, in order race, trait, supply, set, then one per learned talent (Expeditions' modsOf):
+--     { success, deathPct, woundPct, gearPct, broken, noPerma, rest }
 --   RC.Seed(key, start, salt) -> 1..2147483646         RC.Stream(seed) -> a function answering [0, 1) | nil
 --   RC.Roll(chances, seed, wornSlots) -> { band, gear = "broken" | "lost" | nil, slot = key | nil }
 

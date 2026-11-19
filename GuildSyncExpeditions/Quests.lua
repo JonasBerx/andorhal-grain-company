@@ -4,7 +4,8 @@
 --   ns.LookTint(id) -> r, g, b | nil
 --   ns.Flair() -> { title, badges, trophies, looks = { [fid] = id }, quests = n }
 --   ns.EarnedTitles() -> { id, ... }                            worn first, then writs in data order, then story titles
---   ns.OpenWrits() -> at most 3 { id, progress, need }          in data order
+--   ns.WritSlots() -> 3 | 4                                     4 once the Tavern is open (issue 6, ns.Opened)
+--   ns.OpenWrits() -> at most ns.WritSlots() { id, progress, need }   in data order; saved writs past it are kept
 --   ns.AddWritProgress(id, n) -> new progress | nil, "demo" | "unknown"
 --   ns.FinishWrit(id) -> true | nil, "demo" | "unknown"
 -- Saved: quests = { rows = { [id] = { id = id, progress = n } } }; flair = { title = id | nil, rows = { [id] = { id = id } } }
@@ -15,7 +16,6 @@ if not ns.M then return end
 local M = ns.M
 local D = ns.QuestData
 
-local SLOTS = 3
 local BAND = 1 -- every writ in 0.19; scaling writs to follower tiers changes this one fit
 
 local function fresh() return { rows = {} } end
@@ -62,13 +62,20 @@ local function whole(v)
   return type(v) == "number" and v == math.floor(v) and v ~= math.huge and v ~= -math.huge
 end
 
+-- Read at call time: Influence.lua loads after this file.
+function ns.WritSlots()
+  if type(ns.Opened) == "function" and ns.Opened("tavern") then return 4 end
+  return 3
+end
+
 function ns.OpenWrits()
+  local slots = ns.WritSlots()
   local rows = questPart().rows
   local out = {}
   for _, w in ipairs(D.WRITS) do
     local row = rows[w.id]
     if row then out[#out + 1] = { id = w.id, progress = row.progress, need = w.need } end
-    if #out == SLOTS then break end
+    if #out == slots then break end
   end
   return out
 end
@@ -77,7 +84,7 @@ function ns.GrantQuest(seed)
   if ns.Inert() then return nil, "demo" end
   if not whole(seed) then return nil, "none" end
   if seed < 0 or seed >= 2^31 then return nil, "none" end
-  if #ns.OpenWrits() >= SLOTS then return nil, "full" end
+  if #ns.OpenWrits() >= ns.WritSlots() then return nil, "full" end
   local q, f = questPart(), flairPart()
   local pool = {}
   for _, w in ipairs(D.WRITS) do

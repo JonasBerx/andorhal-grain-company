@@ -47,7 +47,7 @@ local src = { escape = escape, data = pageData, demo = demoState }
 -- Client functions reached through M.Compat (plan Decisions "Apis"); optional ones in this order for the selftest.
 local APIS = { "GetServerTime", "UnitGUID", "UnitExists", "UnitNameUnmodified", "UnitIsPlayer", "UnitIsEnemy",
   "UnitRace", "UnitClass", "UnitLevel", "GetZoneText", "GetSubZoneText", "GetRealmName",
-  "GetNormalizedRealmName", "C_Sound.PlaySound", "InCombatLockdown",
+  "GetNormalizedRealmName", "C_Sound.PlaySound", "InCombatLockdown", "IsInInstance",
   optional = { "PlaySound", "C_Secrets.ShouldUnitIdentityBeSecret", "GetGuildInfo",
     "C_XMLUtil.GetTemplateInfo", "C_Texture.GetAtlasInfo" } }
 -- What each optional client function turns off when it is missing (status).
@@ -75,11 +75,13 @@ end
 local ok, answer = pcall(hub.RegisterModule, {
   id = "kos",
   title = TITLE,
-  version = "0.6.0",
-  needs = 4,
+  version = "0.7.0",
+  -- API 9 brings the purse (M.Credit) and M.Toast for the kill grain (issue 8); an API 4-8 hub keeps 0.6's page and
+  -- gives no grain (ns.Hub.Credit answers "no purse")
+  needs = hub.API >= 9 and 9 or 4,
   apis = APIS,
   events = { "NAME_PLATE_UNIT_ADDED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED",
-    "ZONE_CHANGED_NEW_AREA" },
+    "ZONE_CHANGED_NEW_AREA", "PARTY_KILL" },
   onEvent = function(event, ...) ns.Core.OnEvent(event, ...) end,
   slash = function(rest) ns.Core.Slash(rest) end,
   page = {
@@ -116,6 +118,38 @@ local ok, answer = pcall(hub.RegisterModule, {
     S.Checkbox("alerts", "Alerts on (banner and sound)", true,
       function() return not ns.Core.DB().muted end,
       function(v) ns.Core.SetMuted(not v) end)
+    -- The kill grain (issue 8, d23-d25): officers set these for the whole guild; everyone sees the guild's numbers.
+    local K = ns.RulesKills
+    local LABEL = {
+      reward = function(n) return n == 0 and "Off" or (n .. " grain") end,
+      weekCap = function(n) return n == 0 and "Off" or (n .. " a week") end,
+      perTarget = function(n) return n .. " a week" end,
+    }
+    -- the choices, plus the guild's current number when an officer set one the list does not offer
+    local function values(name)
+      return function()
+        local cur, list, has = ns.Kill.Settings()[name], {}, false
+        for _, n in ipairs(K.CHOICES[name]) do
+          if n == cur then has = true end
+          list[#list + 1] = { n, LABEL[name](n) }
+        end
+        if not has and type(cur) == "number" then
+          list[#list + 1] = { cur, LABEL[name](cur) }
+          table.sort(list, function(a, b) return a[1] < b[1] end)
+        end
+        return list
+      end
+    end
+    local TIP = "Officers set this for the whole guild; for everyone else it only shows the guild's number."
+    local DEFAULT = { reward = K.REWARD, weekCap = K.WEEK_CAP, perTarget = K.PER_TARGET }
+    for _, row in ipairs({ { "killgrain", "reward", "Kill grain: grain a kill" },
+        { "killweek", "weekCap", "Kill grain: paid kills a week per account" },
+        { "killtarget", "perTarget", "Kill grain: paid kills of one target a week" } }) do
+      local key, name, text = row[1], row[2], row[3]
+      S.Dropdown(key, text, DEFAULT[name], values(name),
+        function() return ns.Kill.Settings()[name] end,
+        function(v) ns.Kill.SetSetting(name, v) end, TIP)
+    end
   end,
 })
 if not ok or type(answer) ~= "table" then return end
@@ -139,4 +173,20 @@ ns.Hub = {
   Now = function() return M.Compat.call("GetServerTime") end,
   Call = function(...) return M.Compat.call(...) end,
   After = function(seconds, fn) M.After(seconds, fn) end,
+  -- API 9 and 7 (the kill grain, issue 8); missing on an older handle, these answer as if there were no purse
+  Credit = function(n)
+    if type(M.Credit) ~= "function" then return nil, "no purse" end
+    return M.Credit(n)
+  end,
+  Toast = function(spec) if type(M.Toast) == "function" then return M.Toast(spec) end end,
+  MyCharacters = function()
+    if type(M.MyCharacters) ~= "function" then return {} end
+    return (M.MyCharacters())
+  end,
+  MyKey = function() return hub.Comm.MyKey() end,
+  Confirm = function(which, text, okText, onOk) return M.Kit.Confirm(which, text, okText, onOk) end,
+  Person = function(key)
+    if type(hub.Comm.Person) ~= "function" then return nil end
+    return hub.Comm.Person(key)
+  end,
 }

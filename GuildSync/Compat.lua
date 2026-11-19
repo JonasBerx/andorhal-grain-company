@@ -55,10 +55,8 @@ Compat.APIS = {
   "Settings.RegisterAddOnCategory", "Settings.RegisterProxySetting", "Settings.CreateCheckbox", "Settings.CreateDropdown",
   "Settings.CreateControlTextContainer", "CreateSettingsButtonInitializer", "Settings.RegisterCanvasLayoutCategory",
   "Settings.OpenToCategory", "StaticPopup_Show",
-  -- the game's page tabs and anchored menus (Compat.SelectTab, Compat.TabResize, Compat.OpenMenu)
+  -- the game's page tabs (Compat.SelectTab, Compat.TabResize)
   "PanelTemplates_SelectTab", "PanelTemplates_DeselectTab", "PanelTemplates_TabResize",
-  "Menu.GetManager", "Menu.PopulateDescription", "MenuVariants.GetDefaultContextMenuMixin",
-  "MenuUtil.CreateRootMenuDescription", "AnchorUtil.CreateAnchor",
   -- installed addons' TOC data (Compat.AddOn, the Modules page)
   "C_AddOns.GetAddOnMetadata", "C_AddOns.GetAddOnInfo", "C_AddOns.IsAddOnLoaded", "C_AddOns.DoesAddOnExist",
   -- kit art (API 6): the game's item button (Kit.SetItem) and the player's faction (Compat.Faction)
@@ -67,6 +65,7 @@ Compat.APIS = {
   -- the bug report (run r-20261106-s30b); UnitRace is SecretWhenUnitIdentityRestricted, read through str()
   "GetLocale", "UnitRace", "GetZoneText", "GetSubZoneText", "IsInInstance",
   "C_Sound.PlaySound", -- Compat.PlaySound (the hub toast, API 9)
+  "CreateFont", -- Compat.CreateFont: Kit.Tokens' text styles (API 10)
 }
 
 -- Compat.APIS names Compat reads only when the client has them; a missing one loses a detail, nothing breaks.
@@ -88,10 +87,8 @@ Compat.OPTIONAL = {
   ["Settings.CreateCheckbox"] = true, ["Settings.CreateDropdown"] = true, ["Settings.CreateControlTextContainer"] = true,
   ["CreateSettingsButtonInitializer"] = true, ["Settings.RegisterCanvasLayoutCategory"] = true,
   ["Settings.OpenToCategory"] = true, ["StaticPopup_Show"] = true,
-  -- page tabs and anchored menus: without them Kit keeps its own buttons and plain lists
+  -- page tabs: without them Kit keeps its own buttons
   ["PanelTemplates_SelectTab"] = true, ["PanelTemplates_DeselectTab"] = true, ["PanelTemplates_TabResize"] = true,
-  ["Menu.GetManager"] = true, ["Menu.PopulateDescription"] = true, ["MenuVariants.GetDefaultContextMenuMixin"] = true,
-  ["MenuUtil.CreateRootMenuDescription"] = true, ["AnchorUtil.CreateAnchor"] = true,
   -- Compat.AddOn: nil without DoesAddOnExist, a missing detail without the others
   ["C_AddOns.GetAddOnMetadata"] = true, ["C_AddOns.GetAddOnInfo"] = true,
   ["C_AddOns.IsAddOnLoaded"] = true, ["C_AddOns.DoesAddOnExist"] = true,
@@ -101,6 +98,7 @@ Compat.OPTIONAL = {
   -- the bug report (Compat.Locale, Race, Place): a missing one leaves that fact unknown
   ["GetLocale"] = true, ["UnitRace"] = true, ["GetZoneText"] = true, ["GetSubZoneText"] = true, ["IsInInstance"] = true,
   ["C_Sound.PlaySound"] = true, -- Compat.PlaySound: the toast still shows, silently
+  ["CreateFont"] = true, -- Compat.CreateFont: Kit.Tokens' text styles stay the GameFont names
 }
 
 -- Names Compat does not call, recorded by the probe only, because they would be useful fallbacks if present.
@@ -115,8 +113,8 @@ Compat.VALUES = {
   "Enum.AddOnRestrictionType.Encounter", "Enum.ClubMemberPresence.Online", "UIParent",
   "Minimap", "GameTooltip", "UISpecialFrames", "AddonCompartmentFrame", "RAID_CLASS_COLORS",
   "ChatFrameUtil", "ChatFrame_SendTell", "ChatEdit_InsertLink", -- Compat.OpenWhisper
-  -- Compat.ScrollList and Compat.MenuUtil hand these back to Kit (read, never called here)
-  "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollUtil", "MenuUtil",
+  -- Compat.ScrollList hands these back to Kit (read, never called here)
+  "CreateScrollBoxListLinearView", "CreateDataProvider", "ScrollUtil",
   "StaticPopupDialogs", -- Compat.Popup
 }
 
@@ -897,6 +895,17 @@ local function infoTable(api, name)
   return nil
 end
 
+-- A font object named name, copied from the game's font object named copyOf (CreateFont, then CopyFontObject); nil
+-- without CreateFont, without that font, or on a throw (a name clash included). Kit.Tokens makes its text styles here.
+function Compat.CreateFont(name, copyOf)
+  local src = type(copyOf) == "string" and resolve(copyOf) or nil
+  if type(name) ~= "string" or type(src) ~= "table" then return nil end
+  local font = call("CreateFont", name)
+  if type(font) ~= "table" or type(font.CopyFontObject) ~= "function" then return nil end
+  if not pcall(font.CopyFontObject, font, src) then return nil end
+  return font
+end
+
 -- What the client knows about a frame template (C_XMLUtil.GetTemplateInfo), or nil. Kit.HasTemplate reads it.
 function Compat.TemplateInfo(name) return infoTable("C_XMLUtil.GetTemplateInfo", name) end
 
@@ -952,13 +961,6 @@ function Compat.ScrollList()
     return nil
   end
   return { linearView = linearView, dataProvider = dataProvider, initWithBar = initWithBar }
-end
-
--- Blizzard_Menu's MenuUtil, read at call time. Nil unless it can open a context menu.
-function Compat.MenuUtil()
-  local menu = resolve("MenuUtil")
-  if type(menu) ~= "table" or type(menu.CreateContextMenu) ~= "function" then return nil end
-  return menu
 end
 
 -- Escape closes the frame with this global name, like Blizzard's own panels.
@@ -1128,31 +1130,4 @@ end
 -- Runs the game's SetItemButton<part> (part "Texture", "Quality" or "Count") on an item button. True once it ran.
 function Compat.SetItemButton(part, button, value)
   return (ran("SetItemButton" .. tostring(part), button, value))
-end
-
--- A menu anchored to owner, built as MenuUtil.CreateContextMenu builds one (MenuUtil.lua:133-167) but opened with
--- Menu.GetManager():OpenMenu at an anchor (Menu.lua:2566-2578). generate(owner, rootDescription). Returns the menu.
-function Compat.OpenMenu(owner, generate, point, relPoint, x, y)
-  return guarded(function()
-    local getManager, populate = fnAt("Menu.GetManager"), fnAt("Menu.PopulateDescription")
-    local mixinOf, newRoot = fnAt("MenuVariants.GetDefaultContextMenuMixin"), fnAt("MenuUtil.CreateRootMenuDescription")
-    local newAnchor = fnAt("AnchorUtil.CreateAnchor")
-    if not (getManager and populate and mixinOf and newRoot and newAnchor) then return nil end
-    local mixin = mixinOf()
-    if not mixin then return nil end
-    local desc = newRoot(mixin)
-    if not desc then return nil end
-    local anchor = newAnchor(point, owner, relPoint, x, y)
-    if not anchor then return nil end
-    local manager = getManager()
-    if type(manager) ~= "table" or type(manager.OpenMenu) ~= "function" then return nil end
-    populate(generate, owner, desc)
-    local menu = manager:OpenMenu(owner, desc, anchor)
-    return menu
-  end)
-end
-
--- Closes a menu OpenMenu returned. Safe with nil or a closed menu.
-function Compat.CloseMenu(menu)
-  if type(menu) == "table" and type(menu.Close) == "function" then pcall(menu.Close, menu) end
 end

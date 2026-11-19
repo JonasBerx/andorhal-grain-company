@@ -2,7 +2,9 @@
 --   QuestTab.Build(f, bar)   builds the page inside f; bar is unused and there is no grain display here
 --   QuestTab.Refresh(f)      fills and lays out for f's size; reads only, so a bag count at need finishes nothing here
 --   QuestTab.frame           f once built; a finished writ refreshes it while it is visible
--- ns.QuestData, ns.OpenWrits and ns.BringCount are read at call time.
+-- ns.QuestData, ns.OpenWrits, ns.WritSlots and ns.BringCount are read at call time.
+-- The page holds ns.WritSlots() cards, stacked. Four (the Tavern, issue 6) take the first card size that leaves the
+-- flair lines on the sheet; on the smallest page each card's text is cut to one line and a hover shows all of it.
 
 local _, ns = ...
 if not ns.M then return end
@@ -10,10 +12,12 @@ local M = ns.M
 
 local BIG = { row = 96, rowGap = 7, pad = 8, gap = 6, line = 18, side = 44 }
 local SMALL = { row = 78, rowGap = 1, pad = 2, gap = 2, line = 14, side = 34 }
+local COMPACT = { row = 59, rowGap = 1, pad = 0, gap = 1, line = 14, side = 34, oneLine = true }
 local BIG_W, BIG_H = 700, 450
 local INDENT, FLAIR_GAP = 8, 6
 local SHEET_Y, BAND, BAND_GAP = 4, 48 / 381, 4
-local ROWS = 3
+local ROWS = 4 -- the most cards ns.WritSlots gives
+local CUT = "..."
 local INK, SUB_INK, LABEL_INK = "2b1a0a", "3b2610", "45200a" -- dark ink on the parchment
 
 local function rgb(hex)
@@ -33,6 +37,16 @@ end
 local function hideTip()
   local tip = M.Compat.Tooltip()
   if tip then tip:Hide() end
+end
+
+local function showText(owner, r)
+  if not r.cut then return end
+  local tip = M.Compat.Tooltip()
+  if not tip then return end
+  tip:SetOwner(owner, "ANCHOR_RIGHT")
+  tip:SetText(r.title, 1, 0.82, 0)
+  tip:AddLine(r.whole, 1, 1, 1, true)
+  tip:Show()
 end
 
 local function label(parent, font, hex)
@@ -56,6 +70,9 @@ local function newRow(f)
   r.text:SetMaxLines(2)
   r.goal = oneLine(frame, "GameFontBlack", INK)
   r.reward = oneLine(frame, "GameFontBlack", SUB_INK)
+  frame:EnableMouse(true)
+  frame:SetScript("OnEnter", function(self) M.Safe(showText, self, r) end)
+  frame:SetScript("OnLeave", hideTip)
   return r
 end
 
@@ -92,12 +109,42 @@ local function fit(line, width)
   end
 end
 
+-- The whole text on as many lines as it takes (two in the card), or cut at a word to one line; true when cut.
+local function setText(fs, text, oneLine, width)
+  fs:SetWordWrap(not oneLine)
+  fs:SetText(text)
+  if not oneLine or (fs:GetStringWidth() or 0) <= width then return false end
+  local words = {}
+  for word in text:gmatch("%S+") do words[#words + 1] = word end
+  local keep = #words - 1
+  repeat
+    fs:SetText(table.concat(words, " ", 1, keep) .. CUT)
+    keep = keep - 1
+  until keep < 1 or (fs:GetStringWidth() or 0) <= width
+  return true
+end
+
+-- n cards, then the gap, three flair lines and Writs done, all on the sheet.
+local function fits(size, top, height, n)
+  return top + n * size.row + (n - 1) * size.rowGap + FLAIR_GAP + 4 * size.line <= height - SHEET_Y
+end
+
+local function sizeFor(width, height, top, n)
+  local big = width >= BIG_W and height >= BIG_H
+  if n <= 3 then return big and BIG or SMALL end
+  for _, size in ipairs(big and { BIG, SMALL } or { SMALL }) do
+    if fits(size, top, height, n) then return size end
+  end
+  return COMPACT
+end
+
 local function place(f)
   local ui = f.writs
   local width, height = f:GetWidth(), f:GetHeight()
-  local size = (width >= BIG_W and height >= BIG_H) and BIG or SMALL
-  local PAD = size.side
+  local slots = ns.WritSlots()
   local top = math.floor(SHEET_Y + (height - 2 * SHEET_Y) * BAND) + BAND_GAP
+  local size = sizeFor(width, height, top, slots)
+  local PAD = size.side
   local rowW = width - 2 * PAD
   local textW = rowW - 2 * INDENT
   local function under(fs, above)
@@ -113,6 +160,7 @@ local function place(f)
     r.name:SetPoint("TOPLEFT", r.frame, "TOPLEFT", INDENT, -size.pad)
     r.name:SetWidth(textW)
     under(r.text, r.name)
+    r.cut = r.whole ~= nil and setText(r.text, r.whole, size.oneLine == true, textW)
     under(r.goal, r.text)
     under(r.reward, r.goal)
   end
@@ -120,7 +168,7 @@ local function place(f)
   ui.empty:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + INDENT, -(top + size.pad))
   ui.empty:SetWidth(textW)
 
-  local y = top + ROWS * size.row + (ROWS - 1) * size.rowGap + FLAIR_GAP
+  local y = top + slots * size.row + (slots - 1) * size.rowGap + FLAIR_GAP
   for i, line in ipairs(ui.lines) do
     line.frame:ClearAllPoints()
     line.frame:SetPoint("TOPLEFT", f, "TOPLEFT", PAD + INDENT, -(y + (i - 1) * size.line))
@@ -180,12 +228,13 @@ function QuestTab.Refresh(f)
     if row then
       local w = D.BY_ID[row.id]
       r.name:SetText(w.name)
-      r.text:SetText(w.text)
+      r.title, r.whole = w.name, w.text -- place sets the text, whole or cut
       r.goal:SetText(goal(w, row))
       local trophy = w.trophyName ~= w.flairName and ", " .. w.trophyName or ""
       r.reward:SetText("Reward: " .. w.flairName .. ", " .. w.lookName .. trophy)
       r.frame:Show()
     else
+      r.whole = nil
       r.frame:Hide()
     end
   end

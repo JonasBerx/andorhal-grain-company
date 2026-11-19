@@ -22,9 +22,13 @@ ns.Toast = Toast
 local queue = {} -- queue[1] is the current toast, on screen or held
 local frame -- GuildSyncToast, built at the first show
 local build
+local leaving = false -- the last toast is fading out (a dismiss then does nothing)
 
 local function hide()
-  if frame then frame:Hide() end
+  leaving = false
+  if not frame then return end
+  if Kit.Motion then Kit.Motion.Stop(frame) end -- a fade ends in its end state; the toast is never protected, so it hides
+  frame:Hide()
 end
 
 local function show()
@@ -42,7 +46,10 @@ local function show()
   frame.title:SetPoint("TOPLEFT", frame.body, "TOPLEFT", t.icon and (PAD + ICON + 10) or PAD, -PAD)
   frame.title:SetText(ns.Escape(t.title))
   frame.line:SetText(ns.Escape(t.text))
-  frame:Show()
+  if leaving or not frame:IsShown() then -- a queued toast on screen only swaps its text
+    leaving = false
+    if Kit.Motion then Kit.Motion.FadeIn(frame) else frame:Show() end
+  end
   if t.sound and not t.played then
     t.played = true
     Compat.PlaySound(t.sound)
@@ -50,14 +57,22 @@ local function show()
 end
 
 local function dismiss()
+  if leaving then return end
   table.remove(queue, 1)
-  hide()
-  show()
+  if queue[1] then return show() end
+  if not frame then return end
+  if Kit.Motion then
+    leaving = true
+    Kit.Motion.FadeOut(frame, function() leaving = false end)
+  else
+    frame:Hide()
+  end
 end
 
 function build()
   local f = Compat.CreateFrame("Frame", "GuildSyncToast")
   if not f then return nil end
+  f:Hide() -- shown by show(), which fades it in
   f:SetSize(W, H)
   f:SetPoint("TOP", Compat.UIParent(), "TOP", 0, TOP_Y)
   f:SetFrameStrata("DIALOG")
@@ -79,17 +94,17 @@ function build()
   if not template then
     close:SetSize(20, 20)
     close:SetText("x")
-    close:SetNormalFontObject("GameFontNormal")
+    close:SetNormalFontObject(Kit.Text("normal"))
   end
   close:SetPoint("TOPRIGHT", body, "TOPRIGHT", 0, 0)
   close:SetScript("OnClick", function() ns.Safe(MODULE, dismiss) end)
 
-  f.title = body:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  f.title = body:CreateFontString(nil, "OVERLAY", Kit.Text("normal"))
   f.title:SetPoint("RIGHT", close, "LEFT", -4, 0)
   f.title:SetJustifyH("LEFT")
   f.title:SetWordWrap(false)
 
-  f.line = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  f.line = body:CreateFontString(nil, "OVERLAY", Kit.Text("highlightSmall"))
   f.line:SetPoint("TOPLEFT", f.title, "BOTTOMLEFT", 0, -4)
   f.line:SetPoint("RIGHT", body, "RIGHT", -PAD, 0)
   f.line:SetJustifyH("LEFT")

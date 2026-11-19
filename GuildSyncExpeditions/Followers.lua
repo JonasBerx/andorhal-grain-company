@@ -7,8 +7,8 @@
 --   ns.AddFollower(spec) -> id | nil, why     no grain moves
 --   ns.Dismiss(fid) -> true | nil, why
 --   ns.RaceMods(fid) -> a fresh table         ns.PowerOf(fid, row) -> n
--- The later slices' ns.UnequipAll, ClearPack, TakeWaitingRecruit, IsReserve, KitScore, SetBonus and TraitBonus are read
--- at call time and skipped while they are missing.
+-- The later slices' ns.UnequipAll, ClearPack, ClearTalents, TakeWaitingRecruit, IsReserve, KitScore, SetBonus, TraitBonus
+-- and TalentBonus are read at call time and skipped while they are missing.
 
 local _, ns = ...
 if not ns.M then return end
@@ -71,7 +71,8 @@ end
 function ns.PowerOf(fid, row)
   local f = part().rows[fid]
   if not f then return 0 end
-  return FC.Power(f.level, ask("KitScore", fid), ask("SetBonus", fid), ask("TraitBonus", fid, row), FC.Affinity(f.class, row))
+  local power = FC.Power(f.level, ask("KitScore", fid), ask("SetBonus", fid), ask("TraitBonus", fid, row), FC.Affinity(f.class, row))
+  return power + (ask("TalentBonus", fid, row) or 0)
 end
 
 -- Every check comes before the spend and only plain assignments after it, so grain is never taken for nothing.
@@ -158,6 +159,7 @@ function ns.Dismiss(fid)
     if not done then return nil, why end
   end
   if ns.ClearPack then ns.ClearPack(fid) end
+  if ns.ClearTalents then ns.ClearTalents(fid) end
   rows[fid] = nil
   if reserve and ns.TakeWaitingRecruit then ns.TakeWaitingRecruit() end
   return true

@@ -3,10 +3,13 @@
 -- ns.LootData is read at call time. A stream is RiskCore's: a function answering [0, 1).
 --   LC.Rate(reward, danger, capstone, traitPct, hours) -> per mille; 0 for an unknown reward, danger or length
 --   LC.Drops(p, stream) -> n                           LC.PickSlot(keys, held, stream) -> key
---   LC.IsSetBlue(stream) -> bool                       LC.PctFor(reward, traits) -> 100 | 125 | 150
---   LC.Tier(level) -> 1 | 2                            LC.XP(hours, danger, band, level, rowLevel) -> n
---   LC.Grain(hours, danger, greedy) -> n               LC.Salvage(hours, band) -> n
+--   LC.IsSetBlue(stream) -> bool                       LC.PctFor(reward, traits, pct) -> 100 | 125 | 150, then pct more
+--   LC.Tier(level) -> 1 | 2                            LC.XP(hours, danger, band, level, rowLevel, pct) -> n
+--   LC.Grain(hours, danger, greedy, pct) -> n          LC.Salvage(hours, band, pct) -> n
 --   LC.PickSupply(danger, stream) -> id                LC.RecruitSpec(stream, rowLevel) -> spec
+--   LC.Plus(n, pct) -> n                               n with pct percent more, rounded down
+-- Every pct is a talent's whole percent more (issue 13, step 3); the caller reads it, so this file stays pure. A pct that
+-- is nil, 0 or not a whole number from 0 up counts as 0 and gives today's number exactly.
 
 local _, ns = ...
 if not ns.M then return end
@@ -25,6 +28,11 @@ local OVER_LEVEL = 3 -- more levels than this above the row halves the XP
 local TRAIT_PCT = { blue = { lucky = 125 }, relic = { keen = 150 } }
 local WIN = { succ = true, succw = true }
 local FAIL = { fail = true, failw = true }
+
+function LC.Plus(n, pct)
+  if type(pct) ~= "number" or pct <= 0 or pct ~= floor(pct) then return n end
+  return floor(n * (100 + pct) / 100)
+end
 
 -- A whole table entry, by the danger factor over 4; 0 for an unknown row.
 local function byRow(column, hours, danger)
@@ -76,35 +84,39 @@ function LC.IsSetBlue(stream)
   return stream() * 100 < SET_BLUE_PCT
 end
 
-function LC.PctFor(reward, traits)
+-- The trait percent first, then a Finds talent's percent on top: floor(traitPct x (100 + pct) / 100).
+function LC.PctFor(reward, traits, pct)
   local pcts = TRAIT_PCT[reward]
   if pcts then
     for _, id in ipairs(traits or {}) do
-      if pcts[id] then return pcts[id] end
+      if pcts[id] then return LC.Plus(pcts[id], pct) end
     end
   end
-  return 100
+  return LC.Plus(100, pct)
 end
 
 function LC.Tier(level)
   return level <= T1_TOP_LEVEL and 1 or 2
 end
 
-function LC.XP(hours, danger, band, level, rowLevel)
+-- The talent's pct goes on last, after a failure's half and the over-level half.
+function LC.XP(hours, danger, band, level, rowLevel, pct)
   local xp = share(byRow(ns.LootData.XP, hours, danger), band)
-  if level > rowLevel + OVER_LEVEL then return floor(xp / 2) end
-  return xp
+  if level > rowLevel + OVER_LEVEL then xp = floor(xp / 2) end
+  return LC.Plus(xp, pct)
 end
 
--- The success grain; the win check is the caller's.
-function LC.Grain(hours, danger, greedy)
+-- The success grain; the win check is the caller's. Greedy's 125% and the talent's pct multiply, rounded down once:
+-- Greedy alone is today's floor(grain x 125 / 100), and Greedy with +20% is 150%, not 145%.
+function LC.Grain(hours, danger, greedy, pct)
   local grain = byRow(ns.LootData.GRAIN, hours, danger)
-  if greedy then return floor(grain * GREEDY_PCT / 100) end
-  return grain
+  local greedyPct = greedy and GREEDY_PCT or 100
+  local more = LC.Plus(100, pct)
+  return floor(grain * greedyPct * more / 10000)
 end
 
-function LC.Salvage(hours, band)
-  return share(ns.LootData.SALVAGE[hours] or 0, band)
+function LC.Salvage(hours, band, pct)
+  return LC.Plus(share(ns.LootData.SALVAGE[hours] or 0, band), pct)
 end
 
 function LC.PickSupply(danger, stream)

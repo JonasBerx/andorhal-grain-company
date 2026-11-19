@@ -83,7 +83,7 @@ CC.ITEMS = {
   { id = 10, kind = "colour", name = "Ember", price = 800, hex = "ff8040" },
   { id = 11, kind = "colour", name = "Forsaken violet", price = 1200, hex = "a07ae0" },
   { id = 12, kind = "colour", name = "Bone white", price = 1200, hex = "ece6d6" },
-  { id = 13, kind = "badge", name = "Sickle", price = 400, icon = "interface\\icons\\inv_misc_herb_01" },
+  { id = 13, kind = "badge", name = "Sickle", price = 400, icon = "interface\\icons\\inv_misc_2h_farmscythe_a_01" },
   { id = 14, kind = "badge", name = "Kodo", price = 600, icon = "interface\\icons\\ability_mount_kodo_01" },
   { id = 15, kind = "badge", name = "Copper coin", price = 900, icon = "interface\\icons\\inv_misc_coin_05" },
   { id = 16, kind = "badge", name = "Lantern", price = 1500, icon = "interface\\icons\\inv_misc_lantern_01" },

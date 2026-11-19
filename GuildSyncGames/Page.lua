@@ -25,6 +25,7 @@ local FOOT_H = 16 -- S14 (o1765, mock of-5): the put footer's room under every h
 local FOOT = "A guildmate's row shows once you were online together after they last changed it."
 local INFO_W, INFO_LINE = 400, 14 -- S28b Task 5 (q1911): the info panel under the menu row's "i", right-aligned
 local INFO_MAX = 6 -- info lines per game, at most
+local INFO_LEVEL = 40 -- the info panel's levels above its page (as Expeditions' panels' LEVEL_ABOVE)
 local INFO_ART = "Interface\\common\\help-i" -- file id 616343
 local ALL_W = 84 -- o2650: the row's All games button
 local ROW_X = 10 + ALL_W + 6 -- the menu (or the plain prev) right of All games
@@ -357,7 +358,9 @@ function P.buildInfo(page)
   local f = CreateFrame("Frame", "GuildSyncGamesInfo", page)
   f:SetSize(INFO_W, infoHeight(INFO_MAX + 1))
   f:SetPoint("TOPRIGHT", b, "BOTTOMRIGHT", 0, 0)
-  f:SetFrameStrata("DIALOG") -- over the game area (q1911)
+  -- Over the game area (q1911) by level, in the window's strata: as DIALOG it drew over another addon's panel that
+  -- sits above the GuildSync window.
+  f:SetFrameLevel(page:GetFrameLevel() + INFO_LEVEL)
   f:EnableMouse(true) -- A#f2: a click on the panel stays on it, never reaching a home card under it
   f:Hide()
   if type(UISpecialFrames) == "table" then table.insert(UISpecialFrames, "GuildSyncGamesInfo") end

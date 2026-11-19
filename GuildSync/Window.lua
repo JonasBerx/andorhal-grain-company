@@ -27,9 +27,8 @@ local BAR_TEXTURE = "Interface\\TargetingFrame\\UI-StatusBar"
 local GRIP_UP = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up"
 local GRIP_DOWN = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down"
 local GRIP_HIGHLIGHT = "Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight"
-local GOLD = { 1, 0.82, 0 }
 local PANEL_BG = Kit.PANEL_BG
-local FLAT_BG = { 1, 1, 1, 0.06 }
+local TC = Kit.Tokens.colour -- read by index only (# and unpack see nothing)
 
 local GAP = View.GAP
 local BUTTON_W, BUTTON_H = 120, 22
@@ -201,20 +200,17 @@ end
 
 -- ---------- building blocks ----------
 
-local function label(parent, text, template)
-  local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontHighlight")
+local function label(parent, text, role)
+  local fs = parent:CreateFontString(nil, "OVERLAY", Kit.Text(role))
   fs:SetJustifyH("LEFT")
   fs:SetText(text or "")
   return fs
 end
 
 local function button(parent, text, x, y, onClick, width, point)
-  local b = Compat.CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local b = Kit.Button(parent, text, width or BUTTON_W, onClick)
   if not b then return nil end
-  b:SetSize(width or BUTTON_W, BUTTON_H)
   b:SetPoint(point or "BOTTOMLEFT", x, y)
-  b:SetText(text)
-  b:SetScript("OnClick", onClick)
   return b
 end
 
@@ -247,15 +243,16 @@ local function flatButton(parent, w, h, font)
   local b = Compat.CreateFrame("Button", nil, parent)
   if not b then return nil end
   b:SetSize(w, h)
-  b:SetNormalFontObject(font or "GameFontHighlightSmall")
+  b:SetNormalFontObject(font or Kit.Text("highlightSmall"))
   b:SetHighlightTexture(HIGHLIGHT, "ADD")
-  b.bg = background(b, FLAT_BG)
+  b.bg = background(b, TC.flat)
   return b
 end
 
 local function markSelected(b, on)
   if on then b:LockHighlight() else b:UnlockHighlight() end
-  if on then b.bg:SetColorTexture(GOLD[1], GOLD[2], GOLD[3], 0.22) else b.bg:SetColorTexture(FLAT_BG[1], FLAT_BG[2], FLAT_BG[3], FLAT_BG[4]) end
+  local c = on and TC.chipOn or TC.flat
+  b.bg:SetColorTexture(c[1], c[2], c[3], c[4])
 end
 
 -- getLines(frame) -> the tooltip lines, or nil for none; getAnchor(frame) (optional) -> showTooltip's anchor
@@ -269,7 +266,7 @@ end
 
 local function setNameColor(fs, class)
   local r, g, b = Compat.ClassColor(class)
-  if r then fs:SetTextColor(r, g, b) else fs:SetTextColor(1, 1, 1) end
+  if r then fs:SetTextColor(r, g, b) else fs:SetTextColor(TC.white[1], TC.white[2], TC.white[3]) end
 end
 
 -- Class icon on a reused row: only touched when the class changes. prefix: an atlas family tried first (Kit.ClassIcon).
@@ -281,7 +278,7 @@ end
 
 -- A rank badge: the rank on a plate in its tier's colour. Two regions on the row, no frame of its own.
 local function makeBadge(parent)
-  local text = label(parent, "", "GameFontHighlightSmall")
+  local text = label(parent, "", "highlightSmall")
   text:SetWordWrap(false)
   local plate = parent:CreateTexture(nil, "BORDER")
   plate:SetPoint("TOPLEFT", text, "TOPLEFT", -4, 2)
@@ -412,7 +409,7 @@ local function buildCharPage(p, u)
   cd:SetHeight(C.card.h)
   local fill = cd:CreateTexture(nil, "BACKGROUND")
   fill:SetAllPoints(cd)
-  fill:SetColorTexture(0, 0, 0, 0.42)
+  fill:SetColorTexture(TC.cardFill[1], TC.cardFill[2], TC.cardFill[3], TC.cardFill[4])
   ch.classBg = cd:CreateTexture(nil, "BACKGROUND", nil, 1) -- the solid part of the class art, above the fill
   ch.classBg:SetPoint("TOPLEFT", A.x, -A.y)
   ch.classBg:SetSize(A.solidW, A.h)
@@ -423,9 +420,9 @@ local function buildCharPage(p, u)
   local function onCard(f, at) f:SetPoint("TOPLEFT", at.x - C.card.x, -(at.y - C.card.y)) end
   ch.icon = icon(cd, C.icon.size)
   onCard(ch.icon, C.icon)
-  ch.name = label(cd, "", "GameFontNormalLarge")
+  ch.name = label(cd, "", "large")
   onCard(ch.name, C.name)
-  ch.level = label(cd, "", "GameFontHighlightSmall")
+  ch.level = label(cd, "", "highlightSmall")
   onCard(ch.level, C.level)
   onCard(ch.money, C.gold)
   u.char = ch
@@ -535,6 +532,10 @@ local function buildSettingsPage(p, u)
       run(Window.SetWindowIcon, self:GetChecked() and "crest" or "bag")
     end)
   end)
+  -- under the minimap row; none when Motion.lua did not load (the page stays as it was)
+  if Kit.Motion then ns.Safe("Window", function()
+    u.motion = checkbox(p, "Animations", 4, -44, function(self) run(Kit.Motion.SetEnabled, self:GetChecked()) end)
+  end) end
 end
 
 -- ---------- Modules (R7, d407-d409) ----------
@@ -544,7 +545,7 @@ end
 -- API 8 (d1042): the page holds three tabs, Addons | Guildmates | What's new, placed as the Bank page places Kit.Tabs
 -- (its 32-tall holder at the page's top, in place of the old header bar), and one holder per tab under them. The
 -- Addons pieces sit in their holder; their y offsets below are inside it (each 28 up from the header-bar page).
-local MOD = { rowH = 52, headerY = 24, listY = 46, sub = { x = 6, y = 4 }, grey = 0.72 }
+local MOD = { rowH = 52, headerY = 24, listY = 46, sub = { x = 6, y = 4 } }
 -- the plan's View.MODULES_TABS, kept here (View.lua is another task's file): the holders start under the tab row;
 -- w = a plain fallback button's width
 local TABS = { holderY = 32, w = 96, entries = {
@@ -569,30 +570,30 @@ local function modulesBuildRow(row)
     if type(level) == "number" then row.card:SetFrameLevel(math.max(0, level - 1)) end
   end
   local edge = row:CreateTexture(nil, "BORDER")
-  edge:SetColorTexture(0, 0, 0, 1)
+  edge:SetColorTexture(TC.black[1], TC.black[2], TC.black[3], TC.black[4])
   edge:SetSize(38, 38)
   edge:SetPoint("TOPLEFT", 7, -7)
   row.icon = row:CreateTexture(nil, "ARTWORK")
   row.icon:SetSize(36, 36)
   row.icon:SetPoint("TOPLEFT", 8, -8)
-  row.name = label(row, "", "GameFontNormal")
+  row.name = label(row, "", "normal")
   row.name:SetPoint("TOPLEFT", 52, -8)
-  row.folder = label(row, "", "GameFontHighlightSmall")
+  row.folder = label(row, "", "highlightSmall")
   row.folder:SetPoint("BOTTOMLEFT", row.name, "BOTTOMRIGHT", 6, 0)
-  row.line = label(row, "", "GameFontHighlightSmall")
+  row.line = label(row, "", "highlightSmall")
   row.line:SetPoint("TOPLEFT", 52, -24)
   row.line:SetPoint("TOPRIGHT", row, "TOPRIGHT", MOD.lineRight, -24)
   row.line:SetJustifyV("TOP")
   if row.line.SetMaxLines then row.line:SetMaxLines(2) end
-  row.version = label(row, "", "GameFontHighlightSmall")
+  row.version = label(row, "", "highlightSmall")
   row.version:SetWidth(MOD.versionW)
   row.version:SetWordWrap(false)
-  row.sub = label(row, "", "GameFontHighlightSmall")
+  row.sub = label(row, "", "highlightSmall")
   row.sub:SetPoint("TOPLEFT", row, "TOPRIGHT", MOD.versionX, -28)
-  row.sub:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  row.sub:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   row.pill = Kit.Pill(row, "", "grey")
   if row.pill then row.pill:SetPoint("TOPLEFT", row, "TOPRIGHT", MOD.stateX, -16) end
-  row.count = label(row, "", "GameFontHighlightSmall")
+  row.count = label(row, "", "highlightSmall")
   row.count:SetPoint("TOPLEFT", row, "TOPRIGHT", MOD.matesX, -21)
   Kit.ListHover(row)
   withTooltip(row, function(self)
@@ -606,26 +607,26 @@ end
 -- piece (never row:SetAlpha, which would dim the pill too).
 local function modulesInitRow(row, r)
   row.data = r
-  local dim, g = r.dim == true, r.dim and 0.5 or MOD.grey
+  local dim, g = r.dim == true, r.dim and 0.5 or TC.mute[1]
   if row.card then row.card:SetShown(r.state == "hub") end
   row.icon:SetTexture(r.icon)
   if row.icon.SetDesaturated then row.icon:SetDesaturated(dim) end
   row.icon:SetAlpha(dim and 0.5 or 1)
-  row.name:SetFontObject(dim and "GameFontDisable" or "GameFontNormal")
+  row.name:SetFontObject(dim and Kit.Text("disable") or Kit.Text("normal"))
   row.name:SetText(r.name)
   row.folder:SetText(r.folder or "")
   row.folder:SetTextColor(g, g, g)
   row.folder:SetShown(r.folder ~= r.name)
-  row.line:SetFontObject(dim and "GameFontDisableSmall" or "GameFontHighlightSmall")
+  row.line:SetFontObject(dim and Kit.Text("disableSmall") or Kit.Text("highlightSmall"))
   row.line:SetText(r.line or "")
-  row.version:SetFontObject(dim and "GameFontDisableSmall" or "GameFontHighlightSmall")
+  row.version:SetFontObject(dim and Kit.Text("disableSmall") or Kit.Text("highlightSmall"))
   row.version:SetText(r.version or "")
   row.version:ClearAllPoints()
   row.version:SetPoint("TOPLEFT", row, "TOPRIGHT", MOD.versionX, r.sub and -14 or -21)
   row.sub:SetText(r.sub or "")
   row.sub:SetShown(r.sub ~= nil)
   Kit.SetPill(row.pill, r.pill, r.tone)
-  row.count:SetFontObject(r.count == 0 and "GameFontDisableSmall" or "GameFontHighlightSmall")
+  row.count:SetFontObject(r.count == 0 and Kit.Text("disableSmall") or Kit.Text("highlightSmall"))
   row.count:SetText(tostring(r.count) .. " of " .. tostring(ui and ui.modules and ui.modules.total or 0))
 end
 
@@ -638,38 +639,13 @@ local NEWS = { w = 460, h = 440, title = "What's new", foot = "Open it again any
   sub = "What changed in each release, newest first.", subH = 24, barRoom = 24, textW = 412, headH = 26, headGap = 6,
   gap = 2, groupGap = 8, sectionGap = 12, iconSize = 16, nameX = 4 }
 
--- The scroll area on parent, inset by pad (as buildSections): ScrollFrameTemplate with its bar moved into the room
--- left of the right edge, else the named UIPanelScrollFrameTemplate (its bar in that room), else a plain frame that
--- clips its children, with its own wheel.
+-- The scroll area on parent (Kit.ScrollArea, its bar 6 right of the frame, in the room left of the right edge),
+-- inset by pad.
 local function newsScroll(parent, name, pad)
-  local s, scroll = {}, nil
-  if Kit.HasTemplate("ScrollFrameTemplate") then
-    local made, f = pcall(Compat.CreateFrame, "ScrollFrame", nil, parent, "ScrollFrameTemplate")
-    if made and f then
-      scroll = f
-      if type(scroll.ScrollBar) == "table" then
-        scroll.ScrollBar:ClearAllPoints()
-        scroll.ScrollBar:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 6, 0)
-        scroll.ScrollBar:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 6, 0)
-      end
-    end
-  end
-  if not scroll then scroll = Compat.CreateFrame("ScrollFrame", name, parent, "UIPanelScrollFrameTemplate") end
-  if not scroll then
-    scroll = Compat.CreateFrame("Frame", nil, parent)
-    if not scroll then return nil end
-    s.plain = true
-    if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
-    scroll:EnableMouseWheel(true)
-    scroll:SetScript("OnMouseWheel", safely(function(_, delta)
-      s.offset = math.min(s.range or 0, math.max(0, (s.offset or 0) - delta * ROW_H))
-      s.content:ClearAllPoints()
-      s.content:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, s.offset)
-    end))
-  end
-  scroll:SetPoint("TOPLEFT", pad, -pad)
-  scroll:SetPoint("BOTTOMRIGHT", -NEWS.barRoom, pad)
-  s.scroll = scroll
+  local s = Kit.ScrollArea(parent, name, 6)
+  if not s then return nil end
+  s.scroll:SetPoint("TOPLEFT", pad, -pad)
+  s.scroll:SetPoint("BOTTOMRIGHT", -NEWS.barRoom, pad)
   return s
 end
 
@@ -703,7 +679,7 @@ local function newsLayout(s, rows)
       local h = take("head", function() -- without the section header, its gold label alone
         local f = Kit.SectionHeader(content, 300, "")
         if f then return { frame = f, text = f.label } end
-        local l = label(content, "", "GameFontNormal")
+        local l = label(content, "", "normal")
         return { frame = l, text = l }
       end)
       h.text:SetText(r.text)
@@ -713,7 +689,7 @@ local function newsLayout(s, rows)
       if prev == "line" then y = y + NEWS.groupGap end
       local g = take("group", function()
         local t = icon(content, NEWS.iconSize)
-        local n = label(content, "", "GameFontNormal")
+        local n = label(content, "", "normal")
         n:SetPoint("LEFT", t, "RIGHT", NEWS.nameX, 0)
         return { icon = t, name = n }
       end)
@@ -725,7 +701,7 @@ local function newsLayout(s, rows)
       y = y + NEWS.iconSize + NEWS.gap
     elseif r.kind == "line" then
       local f = take("line", function()
-        local l = label(content, "", "GameFontHighlight")
+        local l = label(content, "", "highlight")
         l:SetJustifyV("TOP")
         l:SetWordWrap(true)
         return l
@@ -786,8 +762,8 @@ local function stackedList(parent, spec, top, frameType, buildRow, initRow)
   local list = Kit.List(parent, spec.rowH, buildRow, initRow)
   if list then return list end
   local pool = {}
-  local more = label(parent, "", "GameFontHighlightSmall")
-  more:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  local more = label(parent, "", "highlightSmall")
+  more:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   list = {}
   function list.SetRows(_, rows)
     local n = math.min(#rows, spec.cap)
@@ -830,7 +806,7 @@ function headRow.build(row, rowH)
     row.head:SetPoint("TOPLEFT", 0, -1)
     row.head:SetPoint("TOPRIGHT", 0, -1)
   end
-  row.headText = label(row, "", "GameFontNormal")
+  row.headText = label(row, "", "normal")
   row.headText:SetPoint("TOPLEFT", 8, -5)
 end
 
@@ -855,11 +831,11 @@ local function trackerBuildRow(row)
   headRow.build(row, TRACK.rowH)
   row.cls = { icon = icon(row, 16) }
   row.cls.icon:SetPoint("TOPLEFT", 6, -3)
-  row.name = label(row, "", "GameFontHighlightSmall")
+  row.name = label(row, "", "highlightSmall")
   row.name:SetPoint("TOPLEFT", 28, -5)
   row.name:SetPoint("TOPRIGHT", row, "TOPRIGHT", TRACK.x[1] - 4, -5)
   row.name:SetWordWrap(false)
-  row.version = label(row, "", "GameFontHighlightSmall")
+  row.version = label(row, "", "highlightSmall")
   row.version:SetPoint("TOPLEFT", row, "TOPRIGHT", TRACK.x[1] + 8, -5)
   row.mods = {}
   for _, s in ipairs(type(ns.SUITE) == "table" and ns.SUITE or {}) do
@@ -870,7 +846,7 @@ local function trackerBuildRow(row)
       row.mods[#row.mods + 1] = { id = s.id, tex = t }
     end
   end
-  row.heard = label(row, "", "GameFontHighlightSmall")
+  row.heard = label(row, "", "highlightSmall")
   row.heard:SetPoint("TOPLEFT", row, "TOPRIGHT", TRACK.x[3] + 8, -5)
   Kit.ListHover(row)
   withTooltip(row, function(self) -- running rows only: none on header or No addon heard rows (Revision 3)
@@ -893,7 +869,7 @@ local function trackerInitRow(row, r)
   row.name:SetText(member and (r.name .. (r.you and TRACK.you or "")) or "")
   setNameColor(row.name, member and r.class or nil)
   row.version:SetText(member and r.version or "")
-  local c = r.old and View.TRACKER_OLD or (r.dev and { MOD.grey, MOD.grey, MOD.grey }) or { 1, 1, 1 }
+  local c = r.old and View.TRACKER_OLD or (r.dev and TC.mute) or TC.white
   row.version:SetTextColor(c[1], c[2], c[3])
   local lit = {}
   for _, id in ipairs(member and type(r.mods) == "table" and r.mods or {}) do lit[id] = true end
@@ -903,8 +879,8 @@ local function trackerInitRow(row, r)
     m.tex:SetAlpha(lit[m.id] and 1 or 0.25)
   end
   row.heard:SetText(member and r.heard or "")
-  local g = r.heardGrey and MOD.grey or 1
-  row.heard:SetTextColor(g, g, g)
+  local g = r.heardGrey and TC.mute or TC.white
+  row.heard:SetTextColor(g[1], g[2], g[3])
 end
 
 -- The Guildmates list; its stacked fallback starts at TRACK.listY and uses Buttons (hover and tooltip).
@@ -953,9 +929,9 @@ local function buildNewsPanel()
   inset:SetPoint("TOPLEFT", 8, -28)
   inset:SetPoint("BOTTOMRIGHT", -8, 44)
   d.list = newsStack(inset, "GuildSyncWhatsNewScroll", 8)
-  d.foot = label(d, NEWS.foot, "GameFontHighlightSmall")
+  d.foot = label(d, NEWS.foot, "highlightSmall")
   d.foot:SetPoint("BOTTOMLEFT", 12, 16)
-  d.foot:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  d.foot:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   d.close = button(d, "Close", -12, 12, function() d:Hide() end, 96, "BOTTOMRIGHT") -- closing stores nothing
   if not d.close then error("What's new: no Close button") end
   return d
@@ -991,7 +967,7 @@ do
     local d = Kit.Dialog("GuildSyncBugReport", BUG.w, BUG.h)
     if not d then error("Report a bug: no dialog") end
     d.title:SetText("Report a bug")
-    label(d, "What happened?", "GameFontNormalSmall"):SetPoint("TOPLEFT", 16, -32)
+    label(d, "What happened?", "small"):SetPoint("TOPLEFT", 16, -32)
     local typed = Kit.InputBox(d, 516, 510)
     if not typed then error("Report a bug: no input box") end
     typed:SetPoint("TOPLEFT", 22, -46)
@@ -1004,7 +980,7 @@ do
       BUG.typed = self:GetText() or ""
       bugText(d)
     end))
-    label(d, "Report (selected: press Ctrl+C to copy)", "GameFontNormalSmall"):SetPoint("TOPLEFT", 16, -74)
+    label(d, "Report (selected: press Ctrl+C to copy)", "small"):SetPoint("TOPLEFT", 16, -74)
     local inset = Kit.Inset(d)
     if not inset then error("Report a bug: no inset") end
     inset:SetPoint("TOPLEFT", 8, -90)
@@ -1032,7 +1008,7 @@ do
     box:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     box:SetScript("OnTextChanged", function(self, user) if user then self:SetText(d.current) end end) -- read only
     d.box, d.list = box, s
-    d.foot = label(d, "Paste it in #bug-reports on Discord and add a screenshot.", "GameFontHighlightSmall")
+    d.foot = label(d, "Paste it in #addon-feedback on Discord and add a screenshot.", "highlightSmall")
     d.foot:SetPoint("BOTTOMLEFT", 12, 16)
     d.close = button(d, "Close", -12, 12, function() d:Hide() end, 96, "BOTTOMRIGHT")
     if not d.close then error("Report a bug: no Close button") end
@@ -1119,27 +1095,27 @@ local function buildModulesPage(p, u)
     m.holders[e.key] = holder
   end
   local mt = { headers = {} } -- the Guildmates tab: summary line, column headers, the list
-  mt.summary = label(m.holders.mates, "", "GameFontHighlightSmall")
+  mt.summary = label(m.holders.mates, "", "highlightSmall")
   mt.summary:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
-  mt.summary:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  mt.summary:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   for i, text in ipairs(TRACK.columns) do
     mt.headers[i] = Kit.ColumnHeader(m.holders.mates, text)
     if not mt.headers[i] then error("Modules: no column header") end
   end
   mt.list = trackerList(m.holders.mates)
   m.mates = mt
-  m.newsSub = label(m.holders.news, NEWS.sub, "GameFontHighlightSmall") -- mock wn-2's grey line under the tabs
+  m.newsSub = label(m.holders.news, NEWS.sub, "highlightSmall") -- mock wn-2's grey line under the tabs
   m.newsSub:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
-  m.newsSub:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  m.newsSub:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   local newsBody = Compat.CreateFrame("Frame", nil, m.holders.news)
   if not newsBody then error("Modules: no news holder") end
   newsBody:SetPoint("TOPLEFT", 0, -NEWS.subH)
   newsBody:SetPoint("BOTTOMRIGHT", 0, 0)
   m.news = newsStack(newsBody, "GuildSyncNewsTabScroll", 0)
   p = m.holders.addons -- the Addons pieces below live in their holder
-  m.sub = label(p, View.SUITE_SUBLINE, "GameFontHighlightSmall")
+  m.sub = label(p, View.SUITE_SUBLINE, "highlightSmall")
   m.sub:SetPoint("TOPLEFT", MOD.sub.x, -MOD.sub.y)
-  m.sub:SetTextColor(MOD.grey, MOD.grey, MOD.grey)
+  m.sub:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   for i, text in ipairs(View.SUITE_COLUMNS) do
     m.headers[i] = Kit.ColumnHeader(p, text)
     if not m.headers[i] then error("Modules: no column header") end
@@ -1352,7 +1328,7 @@ local function buildConfirm()
   local f = Kit.Dialog("GuildSyncConfirm", 340, 120) -- Escape hides it: the same as Cancel
   if not f then return nil end
   f.title:SetText("GuildSync")
-  f.question = label(f, "", "GameFontHighlight")
+  f.question = label(f, "", "highlight")
   f.question:SetPoint("TOPLEFT", 14, -34)
   f.question:SetWidth(312)
   f.remove = button(f, "Remove", -14, 12, safely(function()
@@ -1423,7 +1399,7 @@ local function saveNote(isPublic)
 end
 
 local function noteBox(f, text, y)
-  local l = label(f, text, "GameFontNormalSmall")
+  local l = label(f, text, "small")
   l:SetPoint("TOPLEFT", 16, y)
   local box = Kit.InputBox(f, 336, 300)
   if not box then return nil end
@@ -1447,7 +1423,7 @@ local function buildNotes()
   f.public = noteBox(f, "Public note", -32)
   f.officer = noteBox(f, "Officer note", -76)
   if not f.public or not f.officer then return nil end
-  f.result = label(f, "", "GameFontHighlightSmall")
+  f.result = label(f, "", "highlightSmall")
   f.result:SetPoint("BOTTOMLEFT", 14, 42)
   f.result:SetWidth(352)
   f.saveOfficer = button(f, "Save officer note", -14, 12, safely(function() saveNote(false) end), 130, "BOTTOMRIGHT")
@@ -1537,7 +1513,7 @@ local function buildActions(d)
     end
   end
   d.promote, d.demote, d.remove, d.notesButton = d.byAction.promote, d.byAction.demote, d.byAction.remove, d.byAction.notes
-  d.actionLine = label(d, "", "GameFontDisableSmall")
+  d.actionLine = label(d, "", "disableSmall")
   d.actionLine:SetPoint("BOTTOMLEFT", 8, 10)
   d.actionLine:SetWidth(w)
 end
@@ -1558,8 +1534,6 @@ local MIX_SLOTS = 13 -- class mix segments built up front, one per class the cli
 local PROF_SCALE = 0.65 -- the profession bars are the class mix bar at this scale
 local PROF_BAR_X, PROF_BAR_RIGHT = 130, 40 -- the profession bar runs from x 130 to colW - 40 (page units)
 local CHIP_GAP = 14
-local AMBER, GREEN = { 0.8, 0.6, 0.2 }, { 0.25, 0.7, 0.25 }
-local DIVIDER_BG = { 1, 1, 1, 0.15 }
 
 -- Width of a profession bar in its own (scaled) units.
 local function profBarW(L) return (L.colW - PROF_BAR_RIGHT - PROF_BAR_X) / PROF_SCALE end
@@ -1611,7 +1585,7 @@ local function chipFrame(o, i)
   chip.icon = icon(chip, 18)
   chip.icon:SetPoint("LEFT", 0, 0)
   chip.iconClass = false
-  chip.label = label(chip, "", "GameFontHighlightSmall")
+  chip.label = label(chip, "", "highlightSmall")
   chip.label:SetPoint("LEFT", 22, 0)
   chip.lines = false
   chip.w = 0
@@ -1666,15 +1640,15 @@ local function onlineRow(parent, i)
   hl:SetAllPoints(f)
   if not Kit.Atlas(hl, "common-list-hoverbg-mid", HIGHLIGHT) then hl:SetBlendMode("ADD") end
   f.iconClass = false
-  f.nameText = label(f, "", "GameFontHighlightSmall")
+  f.nameText = label(f, "", "highlightSmall")
   f.nameText:SetPoint("LEFT", 26, 0)
   f.nameText:SetWidth(120)
   f.nameText:SetWordWrap(false)
-  f.rank = label(f, "", "GameFontHighlightSmall")
+  f.rank = label(f, "", "highlightSmall")
   f.rank:SetPoint("LEFT", 150, 0)
   f.rank:SetWidth(98)
   f.rank:SetWordWrap(false)
-  f.zone = label(f, "", "GameFontDisableSmall")
+  f.zone = label(f, "", "disableSmall")
   f.zone:SetPoint("LEFT", 252, 0)
   f.zone:SetPoint("RIGHT", -4, 0)
   f.zone:SetWordWrap(false)
@@ -1686,11 +1660,11 @@ end
 local function professionRow(parent, i)
   local f = blockRow("Frame", parent, i)
   if not f then return nil end
-  f.nameText = label(f, "", "GameFontHighlightSmall")
+  f.nameText = label(f, "", "highlightSmall")
   f.nameText:SetPoint("LEFT", 26, 0)
   f.nameText:SetWidth(100)
   f.nameText:SetWordWrap(false)
-  f.count = label(f, "", "GameFontHighlightSmall")
+  f.count = label(f, "", "highlightSmall")
   f.count:SetPoint("RIGHT", -4, 0)
   f.count:SetWidth(30)
   f.count:SetJustifyH("RIGHT")
@@ -1712,7 +1686,7 @@ local function professionRow(parent, i)
     local level = bar:GetFrameLevel()
     if type(level) == "number" then over:SetFrameLevel(level + 2) end
   end
-  f.barText = label(over or f, "", "GameFontHighlightSmall")
+  f.barText = label(over or f, "", "highlightSmall")
   f.barText:SetPoint("CENTER", bar, "CENTER", 0, 0)
   f.lines = false
   withTooltip(f, function(self) return self.lines end)
@@ -1733,11 +1707,11 @@ end
 local function logRow(parent, i)
   local f = blockRow("Frame", parent, i)
   if not f then return nil end
-  f.text = label(f, "", "GameFontHighlightSmall")
+  f.text = label(f, "", "highlightSmall")
   f.text:SetPoint("LEFT", 26, 0)
   f.text:SetPoint("RIGHT", -72, 0)
   f.text:SetWordWrap(false)
-  f.age = label(f, "", "GameFontDisableSmall")
+  f.age = label(f, "", "disableSmall")
   f.age:SetPoint("RIGHT", -4, 0)
   f.age:SetWidth(66)
   f.age:SetJustifyH("RIGHT")
@@ -1762,9 +1736,9 @@ local function buildOverview(p, u)
     local t = Compat.CreateFrame("Frame", nil, strip)
     if t then
       t:SetHeight(OL.stripH)
-      t.value = label(t, "", "GameFontHighlightHuge")
+      t.value = label(t, "", "huge")
       t.value:SetPoint("TOP", 0, -9)
-      t.label = label(t, "", "GameFontNormalSmall")
+      t.label = label(t, "", "small")
       t.label:SetPoint("TOP", 0, -35)
       t.lines = false
       withTooltip(t, function(self) return self.lines end)
@@ -1774,7 +1748,7 @@ local function buildOverview(p, u)
   for k = 1, 3 do
     local d = strip:CreateTexture(nil, "ARTWORK")
     d:SetSize(11, 50)
-    Kit.Atlas(d, "common-framedivider", DIVIDER_BG)
+    Kit.Atlas(d, "common-framedivider", TC.divider)
     o.dividers[k] = d
   end
 
@@ -1783,7 +1757,7 @@ local function buildOverview(p, u)
   if not o.bar then return false end
   o.bar:SetPoint("TOPLEFT", OL.barX, -OL.mix)
   o.bar:SetPoint("TOPRIGHT", 0, -OL.mix)
-  o.mixTitle = label(p, "Class mix at " .. View.MAX_LEVEL, "GameFontNormal")
+  o.mixTitle = label(p, "Class mix at " .. View.MAX_LEVEL, "normal")
   o.mixTitle:SetPoint("LEFT", o.bar, "LEFT", -OL.barX, 0)
   local textures = {}
   for i = 1, MIX_SLOTS do
@@ -1816,16 +1790,16 @@ local function buildOverview(p, u)
   if not o.onlineHeader then return false end
   o.onlineHeader:SetPoint("TOPLEFT", 0, 0)
   for i = 1, View.ONLINE_LIMIT do o.online[i] = onlineRow(left, i) end
-  o.onlineMore = label(left, "", "GameFontDisableSmall")
-  o.onlineEmpty = label(left, "", "GameFontDisableSmall")
+  o.onlineMore = label(left, "", "disableSmall")
+  o.onlineEmpty = label(left, "", "disableSmall")
   o.onlineEmpty:SetPoint("TOPLEFT", 4, -ROW_TOP - 2)
 
   o.profHeader = Kit.HeaderBar(right, "Professions covered", 1)
   if not o.profHeader then return false end
   o.profHeader:SetPoint("TOPLEFT", 0, 0)
   for i = 1, View.PROF_LIMIT do o.profs[i] = professionRow(right, i) end
-  o.profMore = label(right, "", "GameFontDisableSmall")
-  o.profEmpty = label(right, "", "GameFontDisableSmall")
+  o.profMore = label(right, "", "disableSmall")
+  o.profEmpty = label(right, "", "disableSmall")
   o.profEmpty:SetPoint("TOPLEFT", 4, -ROW_TOP - 2)
 
   -- the guild log: hidden as a whole when the page is too short for it (relayout)
@@ -1839,7 +1813,7 @@ local function buildOverview(p, u)
   if not o.logHeader then return false end
   o.logHeader:SetPoint("TOPLEFT", 0, 0)
   for i = 1, View.LOG_LIMIT do o.log[i] = logRow(logBlock, i) end
-  o.logEmpty = label(logBlock, "", "GameFontDisableSmall")
+  o.logEmpty = label(logBlock, "", "disableSmall")
   o.logEmpty:SetPoint("TOPLEFT", 4, -ROW_TOP - 2)
   return true
 end
@@ -1900,7 +1874,7 @@ function Window.DrawOverview()
       f.count:SetText(tostring(p.count))
       f.barText:SetText(p.barText)
       f.frac = math.min(p.bar, View.PROF_TARGET) / View.PROF_TARGET
-      local c = p.bar >= View.PROF_TARGET and GREEN or AMBER
+      local c = p.bar >= View.PROF_TARGET and TC.good or TC.amber
       f.fill:SetVertexColor(c[1], c[2], c[3])
       placeFill(f, ui.layout)
       f.lines = View.ProfessionTooltip(p)
@@ -2008,12 +1982,12 @@ local function rowFrame(r, i)
   row.icon = icon(row, 16)
   row.icon:SetPoint("LEFT", 2, 0)
   row.iconClass = false
-  row.nameText = label(row, "", "GameFontHighlightSmall")
+  row.nameText = label(row, "", "highlightSmall")
   row.nameText:SetWordWrap(false)
   row.badge = makeBadge(row)
-  row.level = label(row, "", "GameFontHighlightSmall")
+  row.level = label(row, "", "highlightSmall")
   row.level:SetWidth(c.level - 8)
-  row.last = label(row, "", "GameFontHighlightSmall")
+  row.last = label(row, "", "highlightSmall")
   row.last:SetWidth(c.last - 8)
   row.last:SetWordWrap(false)
   row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -2031,18 +2005,18 @@ local function buildRow(row)
   row.iconClass = false
   row.icon = icon(row, 16)
   row.icon:SetPoint("LEFT", 4, 0)
-  row.nameText = label(row, "", "GameFontHighlightSmall")
+  row.nameText = label(row, "", "highlightSmall")
   row.nameText:SetWordWrap(false)
   row.nameText:SetPoint("LEFT", c.icon + 8, 0)
   row.nameText:SetPoint("RIGHT", row, "RIGHT", -right - 4, 0)
-  row.rank = label(row, "", "GameFontHighlightSmall")
+  row.rank = label(row, "", "highlightSmall")
   row.rank:SetWordWrap(false)
   row.rank:SetWidth(c.rank - 12)
   row.rank:SetPoint("LEFT", row, "RIGHT", -right + 8, 0)
-  row.level = label(row, "", "GameFontHighlightSmall")
+  row.level = label(row, "", "highlightSmall")
   row.level:SetWidth(c.level - 12)
   row.level:SetPoint("LEFT", row, "RIGHT", -(c.level + c.last) + 8, 0)
-  row.last = label(row, "", "GameFontHighlightSmall")
+  row.last = label(row, "", "highlightSmall")
   row.last:SetWordWrap(false)
   row.last:SetWidth(c.last - 12)
   row.last:SetPoint("LEFT", row, "RIGHT", -c.last + 8, 0)
@@ -2072,7 +2046,7 @@ local function initRow(row, r)
   row.rank:SetTextColor(tc[1], tc[2], tc[3])
   row.level:SetText(tostring(r.level or "?"))
   row.last:SetText(r.last or "")
-  local g = r.online and View.ONLINE_GREEN or { 1, 1, 1 }
+  local g = r.online and View.ONLINE_GREEN or TC.white
   row.last:SetTextColor(g[1], g[2], g[3])
   row.selected:SetShown(r.guid == roster.selected)
 end
@@ -2236,47 +2210,14 @@ local function drawSections(r, sel, buttons, only)
 end
 
 -- The member sections under the notes (View.MEMBER_PANEL.sections): a second divider, a scroll area and one frame
--- per section, each built once under ns.Safe with its module title. The scroll area, by what the client has (as
--- GuildKOS/Page.lua, f4697):
--- * ScrollFrameTemplate: its bar is made in the template's OnLoad and owns OnMouseWheel, OnVerticalScroll and
---   OnScrollRangeChanged (setting one unhooks the bar), so none is set here; Forever draws the bar outside the frame
---   (f4931), so it is moved to barX, inside the panel.
--- * UIPanelScrollFrameTemplate: named, as the classic template looks up <name>ScrollBar.
--- * Neither: a plain frame that clips its children, with its own wheel.
+-- per section, each built once under ns.Safe with its module title. The scroll area is Kit.ScrollArea's, its bar
+-- moved to barX, inside the panel.
 local function buildSections(d)
   local S = View.MEMBER_PANEL.sections
-  local s = {}
-  local scroll
-  if Kit.HasTemplate("ScrollFrameTemplate") then
-    local made, f = pcall(Compat.CreateFrame, "ScrollFrame", nil, d, "ScrollFrameTemplate")
-    if made and f then
-      scroll = f
-      scroll:SetWidth(S.scrollW)
-      if type(scroll.ScrollBar) == "table" then
-        s.bar = scroll.ScrollBar
-        s.bar:ClearAllPoints()
-        s.bar:SetPoint("TOPLEFT", scroll, "TOPRIGHT", S.barX - S.scrollW, 0)
-        s.bar:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", S.barX - S.scrollW, 0)
-      end
-    end
-  end
-  if not scroll then
-    scroll = Compat.CreateFrame("ScrollFrame", "GuildSyncMemberScroll", d, "UIPanelScrollFrameTemplate")
-    if scroll then scroll:SetWidth(S.classicW) end
-  end
-  if not scroll then
-    scroll = Compat.CreateFrame("Frame", nil, d)
-    if not scroll then return end
-    s.plain = true
-    scroll:SetWidth(S.scrollW)
-    if scroll.SetClipsChildren then scroll:SetClipsChildren(true) end
-    scroll:EnableMouseWheel(true)
-    scroll:SetScript("OnMouseWheel", safely(function(_, delta)
-      s.offset = math.min(s.range or 0, math.max(0, (s.offset or 0) - delta * ROW_H))
-      s.content:ClearAllPoints()
-      s.content:SetPoint("TOPLEFT", scroll, "TOPLEFT", 0, s.offset)
-    end))
-  end
+  local s = Kit.ScrollArea(d, "GuildSyncMemberScroll", S.barX - S.scrollW)
+  if not s then return end
+  local scroll = s.scroll
+  scroll:SetWidth(s.kind == "classic" and S.classicW or S.scrollW)
   scroll:Hide()
   local content = Compat.CreateFrame("Frame", nil, scroll)
   if not content then return end
@@ -2285,7 +2226,7 @@ local function buildSections(d)
   s.divider = d:CreateTexture(nil, "ARTWORK")
   s.divider:SetSize(S.divider[3], S.divider[4])
   s.divider:SetPoint("TOPLEFT", S.divider[1], -S.divider[2])
-  Kit.Atlas(s.divider, "Options_HorizontalDivider", DIVIDER_BG)
+  Kit.Atlas(s.divider, "Options_HorizontalDivider", TC.divider)
   s.divider:Hide()
   for _, e in ipairs(memberSections) do
     local f = Compat.CreateFrame("Frame", nil, content)
@@ -2313,7 +2254,7 @@ local function drawDetail(r, guild)
     setNameColor(d.nameText, sel.class)
     d.sub:SetText(m.sub)
     d.rank:SetText(m.rank or "?")
-    local tc = m.rankColor or { 1, 1, 1 }
+    local tc = m.rankColor or TC.white
     d.rank:SetTextColor(tc[1], tc[2], tc[3])
     d.publicNote:SetText(m.publicNote)
     d.officerNote:SetText(m.officerNote or m.officerHidden)
@@ -2326,7 +2267,7 @@ local function drawDetail(r, guild)
     if fact then
       row.label:SetText(fact.label)
       row.value:SetText(fact.value or "")
-      local g = fact.green and View.ONLINE_GREEN or { 1, 1, 1 }
+      local g = fact.green and View.ONLINE_GREEN or TC.white
       row.value:SetTextColor(g[1], g[2], g[3])
       row.label:Show()
       row.value:Show()
@@ -2488,7 +2429,7 @@ local function buildRosterPage(p, u)
       search:SetScript("OnTextChanged", safely(searchChanged))
       search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
       search:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
-      local hint = label(p, "Search:", "GameFontNormalSmall")
+      local hint = label(p, "Search:", "small")
       hint:SetPoint("RIGHT", search, "LEFT", -8, 0)
     end
   end
@@ -2503,7 +2444,8 @@ local function buildRosterPage(p, u)
 
   r.list = Kit.List(p, View.ROSTER.rowH, buildRow, initRow)
   if not r.list then
-    local scroll = Compat.CreateFrame("ScrollFrame", "GuildSyncRosterScroll", p, "UIPanelScrollFrameTemplate")
+    local area = Kit.ScrollArea(p, "GuildSyncRosterScroll", 6, true)
+    local scroll = area and area.scroll
     r.scroll = false
     if scroll then
       local content = Compat.CreateFrame("Frame", nil, scroll)
@@ -2530,10 +2472,10 @@ local function buildRosterPage(p, u)
   d:SetWidth(View.DETAIL_W)
   local fill = d:CreateTexture(nil, "BACKGROUND", nil, 1)
   fill:SetAllPoints(d)
-  fill:SetColorTexture(0, 0, 0, 0.42)
+  fill:SetColorTexture(TC.cardFill[1], TC.cardFill[2], TC.cardFill[3], TC.cardFill[4])
   local textW = View.DETAIL_W - 2 * M.notes.x
-  local function text(font, x, y, w)
-    local fs = label(d, "", font)
+  local function text(role, x, y, w)
+    local fs = label(d, "", role)
     fs:SetPoint("TOPLEFT", x, -y)
     fs:SetWidth(w)
     fs:SetWordWrap(false)
@@ -2549,25 +2491,25 @@ local function buildRosterPage(p, u)
   d.icon:SetPoint("TOPLEFT", M.icon.x, -M.icon.y)
   d.iconClass = false
   d.icon:Hide()
-  d.sub = text("GameFontHighlightSmall", M.sub.x, M.sub.y, View.DETAIL_W - M.sub.x - 8)
-  d.rank = text("GameFontHighlightSmall", M.rank.x, M.rank.y, View.DETAIL_W - M.rank.x - 8)
+  d.sub = text("highlightSmall", M.sub.x, M.sub.y, View.DETAIL_W - M.sub.x - 8)
+  d.rank = text("highlightSmall", M.rank.x, M.rank.y, View.DETAIL_W - M.rank.x - 8)
   d.factRows = {}
   for i = 1, 3 do
     local y = M.facts.y + (i - 1) * M.facts.step
-    d.factRows[i] = { label = text("GameFontNormalSmall", M.facts.labelX, y, M.facts.valueX - M.facts.labelX - 4),
-      value = text("GameFontHighlightSmall", M.facts.valueX, y, View.DETAIL_W - M.facts.valueX - 8) }
+    d.factRows[i] = { label = text("small", M.facts.labelX, y, M.facts.valueX - M.facts.labelX - 4),
+      value = text("highlightSmall", M.facts.valueX, y, View.DETAIL_W - M.facts.valueX - 8) }
   end
   d.divider = d:CreateTexture(nil, "ARTWORK")
   d.divider:SetSize(M.divider.w, M.divider.h)
   d.divider:SetPoint("TOPLEFT", M.divider.x, -M.divider.y)
-  Kit.Atlas(d.divider, "Options_HorizontalDivider", DIVIDER_BG)
-  d.publicLabel = text("GameFontNormalSmall", M.notes.x, M.notes.publicLabel, textW)
+  Kit.Atlas(d.divider, "Options_HorizontalDivider", TC.divider)
+  d.publicLabel = text("small", M.notes.x, M.notes.publicLabel, textW)
   d.publicLabel:SetText("Public note")
-  d.publicNote = text("GameFontHighlightSmall", M.notes.x, M.notes.publicValue, textW)
-  d.officerLabel = text("GameFontNormalSmall", M.notes.x, M.notes.officerLabel, textW)
+  d.publicNote = text("highlightSmall", M.notes.x, M.notes.publicValue, textW)
+  d.officerLabel = text("small", M.notes.x, M.notes.officerLabel, textW)
   d.officerLabel:SetText("Officer note")
-  d.officerNote = text("GameFontHighlightSmall", M.notes.x, M.notes.officerValue, textW)
-  d.pick = text("GameFontHighlightSmall", M.pick.x, M.pick.y, textW)
+  d.officerNote = text("highlightSmall", M.notes.x, M.notes.officerValue, textW)
+  d.pick = text("highlightSmall", M.pick.x, M.pick.y, textW)
   d.pick:SetWordWrap(true)
   d.memberParts = { d.header, d.sub, d.rank, d.divider, d.publicLabel, d.publicNote, d.officerLabel, d.officerNote }
   buildActions(d) -- officer actions (0.9), at the panel's foot
@@ -2606,7 +2548,7 @@ end
 -- Search page (View.PAGES' band entry, no sidebar row) draws View.SearchList over the cached groups: a HeaderBar, one
 -- grey line (the count, or the short / no-results line), then a Kit.List with 22-px rows. Emptying the box returns to
 -- the page before, only while Search shows. Nothing here is saved (f6284).
-local SRCH = { rowH = 22, cap = 60, lineY = 32, listY = 50, iconX = 8, textX = 30, detailGap = 8, grey = MOD.grey,
+local SRCH = { rowH = 22, cap = 60, lineY = 32, listY = 50, iconX = 8, textX = 30, detailGap = 8,
   debounce = 0.3, nameShare = 0.6, nameW = 300 } -- nameW: the name's cap while the row has no width yet
 local search = { expanded = {} } -- before, last (the text last run), query (trimmed, as typed), groups, fresh
 local searchClick -- a list row's click, below
@@ -2615,14 +2557,14 @@ local function searchBuildRow(row)
   headRow.build(row, SRCH.rowH)
   row.cls = { icon = icon(row, 16) }
   row.cls.icon:SetPoint("TOPLEFT", SRCH.iconX, -3)
-  row.text = label(row, "", "GameFontHighlight")
+  row.text = label(row, "", "highlight")
   row.text:SetPoint("TOPLEFT", SRCH.textX, -4)
   row.text:SetWordWrap(false)
-  row.detail = label(row, "", "GameFontHighlightSmall")
+  row.detail = label(row, "", "highlightSmall")
   row.detail:SetPoint("LEFT", row.text, "RIGHT", SRCH.detailGap, 0)
   row.detail:SetPoint("RIGHT", row, "RIGHT", -SRCH.detailGap, 0) -- bounded; the client's ellipsis cuts it (f6300)
   row.detail:SetWordWrap(false)
-  row.detail:SetTextColor(SRCH.grey, SRCH.grey, SRCH.grey)
+  row.detail:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
   Kit.ListHover(row)
   row:SetScript("OnClick", safely(function(self) searchClick(self.data) end))
 end
@@ -2642,7 +2584,7 @@ local function searchInitRow(row, r)
     setClassIcon(row.cls, r.class)
   end
   t:SetShown(hit and (r.icon ~= nil or r.class ~= nil))
-  row.text:SetFontObject(more and "GameFontNormal" or "GameFontHighlight")
+  row.text:SetFontObject(more and Kit.Text("normal") or Kit.Text("highlight"))
   row.text:SetText((hit or more) and r.text or "")
   row.text:SetShown(hit or more)
   -- the name's width: its measured width, at most nameShare of the row past the text x (f6300); every init re-measures
@@ -2663,9 +2605,9 @@ local function buildSearchPage(p, u)
   s.header:SetPoint("TOPLEFT", 0, 0)
   s.header:SetPoint("TOPRIGHT", 0, 0)
   local function greyLine()
-    local l = label(p, "", "GameFontHighlightSmall")
+    local l = label(p, "", "highlightSmall")
     l:SetPoint("TOPLEFT", MOD.sub.x, -SRCH.lineY)
-    l:SetTextColor(SRCH.grey, SRCH.grey, SRCH.grey)
+    l:SetTextColor(TC.mute[1], TC.mute[2], TC.mute[3])
     return l
   end
   s.count = greyLine() -- the count line; the short / no-results line on the state screens
@@ -2924,7 +2866,7 @@ end
 
 -- Opens the window when closed, then shows that module page.
 function Window.ShowModulePage(key)
-  if not (frame and frame:IsShown()) then Window.Toggle() end
+  if not Window.IsOpen() then Window.Toggle() end
   if ui and ui.pages[key] then Window.ShowPage(key) end
 end
 
@@ -3001,16 +2943,16 @@ local function buildTitleBar(f, u)
     u.title = text
     u.title:SetText("GuildSync")
   else
-    u.title = label(f, "GuildSync", "GameFontNormal")
+    u.title = label(f, "GuildSync", "normal")
     u.title:SetPoint("TOPLEFT", 12, -6)
   end
   local S = View.SHELL
-  u.counts = label(u.chrome, "", "GameFontHighlightSmall")
+  u.counts = label(u.chrome, "", "highlightSmall")
   u.counts:SetPoint("TOPRIGHT", S.counts.x, S.counts.y)
   u.counts:SetJustifyH("RIGHT")
-  u.banner = label(u.chrome, ns.Demo and ns.Demo.LINES.banner or "", "GameFontNormalSmall") -- D7: on the window, so every page shows it
+  u.banner = label(u.chrome, ns.Demo and ns.Demo.LINES.banner or "", "small") -- D7: on the window, so every page shows it
   u.banner:SetPoint("TOPLEFT", S.banner.x, S.banner.y) -- D7: under the title bar, above the page area
-  u.banner:SetTextColor(1, 0.5, 0.1)
+  u.banner:SetTextColor(TC.warn[1], TC.warn[2], TC.warn[3])
   u.banner:Hide()
   buildSearchBox(u) -- a box that cannot be made leaves u.search = false; the title bar carries on (f6270)
 
@@ -3073,10 +3015,16 @@ local function build()
   local w, h, x, y = View.WindowPlacement(windowSettings(), sw, sh)
   f:SetSize(w, h)
   place(f, x, y)
+  -- One unit with another addon's HIGH panel: levels are shared across a strata, and the window's children sit up to
+  -- 40+ levels above it, so a panel whose level falls in between draws through the window. Toplevel and raised on show
+  -- and on a click, the whole tree moves above every other frame in HIGH (children keep their offsets); a toplevel
+  -- panel clicked after it goes wholly above in turn. No UIPanelWindows / ShowUIPanel (taint, epic #18).
   f:SetFrameStrata("HIGH")
+  f:SetToplevel(true)
   f:SetClampedToScreen(true)
   f:EnableMouse(true)
   f:SetMovable(true)
+  f:HookScript("OnMouseDown", function(self) self:Raise() end) -- a click on a child raises it too (toplevel)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", f.StartMoving)
   f:SetScript("OnDragStop", function(self)
@@ -3084,6 +3032,9 @@ local function build()
     ns.Safe("Window", savePlacement, self)
   end)
   Compat.EscapeCloses("GuildSyncWindow")
+  if type(f.CloseButton) == "table" then -- the template's button fades the window out too (A-5)
+    f.CloseButton:SetScript("OnClick", function() ns.Safe("Window", Window.Close) end)
+  end
 
   local u = { pages = {}, side = {}, frame = f }
   if not buildTitleBar(f, u) then return nil end
@@ -3113,14 +3064,25 @@ local function build()
   buildModulePages(f, u)
   buildGrip(f, u)
 
-  f:SetScript("OnShow", function()
+  f:SetScript("OnShow", function(self)
+    self:Raise() -- above another addon's panel opened while the window was closed
     if ui and ui.overview then ui.overview.stamp = nil end
     ns.Safe("Window", Window.Refresh)
     ns.Fire("windowOpened") -- module addons hear it (M.On); a throwing listener is recorded under its module
   end)
   f:Hide()
-  -- the hide only clears the box; its empty-text path takes the Search page back to the page before (f6274)
-  f:HookScript("OnHide", function() if u.search then u.search:SetText("") end end)
+  -- A parent hide (UIParent hidden) only stops the motion, so the window comes back with the UI. Alt+Z is not one in
+  -- Forever: the game closes its panels and this window with them (BETA step 6, Jonas 2026-11-18). Its own hide (Esc,
+  -- a FadeOut's end, a plain Hide) ends hidden at alpha 1 whatever order a stopped FadeIn fires in (S8, R3).
+  -- The hide then clears the box; its empty-text path takes the Search page back to the page before (f6274)
+  f:HookScript("OnHide", function()
+    if Kit.Motion then
+      local parent = f:GetParent()
+      if parent and not parent:IsShown() then Kit.Motion.Stop(f) else Kit.Motion.Hide(f) end
+    end
+    u.closing = nil
+    if u.search then u.search:SetText("") end
+  end)
   ui = u
   relayout(w, h)
   f:SetScript("OnSizeChanged", function(_, nw, nh) ns.Safe("Window", relayout, nw, nh) end)
@@ -3142,6 +3104,7 @@ function Window.Refresh()
   drawCharBlock()
   if ui.minimap then ui.minimap:SetChecked(not minimapSettings().hidden) end
   if ui.crest then ui.crest:SetChecked(crestOn()) end
+  if ui.motion then ui.motion:SetChecked(Kit.Motion.Enabled()) end
   local guild = syncRows()
   ui.title:SetText(View.TitleText(guild))
   ui.counts:SetText(View.TitleCounts(roster.all))
@@ -3175,7 +3138,26 @@ function Window.Toggle()
     ns.Say("could not open a window on this client. /gsync still prints the status.")
     return
   end
-  if frame:IsShown() then frame:Hide() else frame:Show() end
+  if Window.IsOpen() then
+    Window.Close()
+  else
+    ui.closing = nil
+    if Kit.Motion then Kit.Motion.FadeIn(frame) end
+    if not frame:IsShown() then frame:Show() end -- Motion leaves a frame it reads as protected untouched in combat
+  end
+end
+
+-- Shown and not fading out (Window.Close).
+function Window.IsOpen()
+  return (frame and ui and frame:IsShown() and not ui.closing) and true or false
+end
+
+-- Fades the window out; ui.closing holds until it is hidden (OnHide) or the fade is done.
+function Window.Close()
+  if not (frame and ui) then return end
+  ui.closing = true
+  local fading = Kit.Motion and Kit.Motion.FadeOut(frame, function() ui.closing = nil end)
+  if not fading and frame:IsShown() then frame:Hide() end -- as Toggle: a plain Hide where Motion left it shown
 end
 
 ns.On("demo", function() drawBanner() Window.Refresh() end, "Window") -- the banner and pages follow the toggle at once
@@ -3239,6 +3221,15 @@ local function tryVertical()
   if not setting then return false end
   if not need(Compat.OptionsCheckbox(cat, setting)) then return false end
   ns.Safe("Window", addCrestSetting, cat) -- its own Safe, result ignored: a failure never fails the vertical path
+  if Kit.Motion then ns.Safe("Window", function() -- the same for Animations (inline: this chunk is at the 200-local limit)
+    local motion = need(Compat.OptionsProxy(cat, "GUILDSYNC_ANIMATIONS", "boolean", "Animations", true,
+      Kit.Motion.Enabled,
+      function(v)
+        if not verticalLive then return end
+        Kit.Motion.SetEnabled(v)
+      end))
+    if motion then need(Compat.OptionsCheckbox(cat, motion)) end
+  end) end
   if Window.OnOptions and not Window.OnOptions("vertical", cat) then return false end
   for _, entry in ipairs(moduleSettings) do ns.Safe(entry.title, entry.add, cat) end -- a throw stays the module's
   if not need(Compat.OptionsAddOn(cat)) then return false end
@@ -3261,6 +3252,7 @@ local function tryCanvas()
   canvas.OnRefresh = function()
     cu.minimap:SetChecked(minimapShown())
     if cu.crest then cu.crest:SetChecked(crestOn()) end
+    if cu.motion then cu.motion:SetChecked(Kit.Motion.Enabled()) end
   end
   if Window.OnOptions and not Window.OnOptions("canvas", cu) then return false end
   local cat = need(Compat.OptionsCanvas(canvas, "GuildSync"))

@@ -12,7 +12,7 @@
 --   /gsync ui              open or close the window (also /gsync window, or left-click the minimap button)
 --   /gsync minimap         show or hide the minimap button
 --   /gsync selftest        one PASS/WAIT/FAIL line per module, then a total
---   /gsync bug             open Report a bug: a text to paste in #bug-reports (nothing is sent or saved)
+--   /gsync bug             open Report a bug: a text to paste in #addon-feedback (nothing is sent or saved)
 --
 -- Each command is a function in ns.Commands, so the window's buttons run exactly what the slash command runs.
 --

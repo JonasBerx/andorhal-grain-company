@@ -28,7 +28,9 @@ local TRAIT_TEXT_Y, TRAIT_GAP = 14, 4
 local XP_Y, XP_H = 104, 24
 local XP_ART_W, XP_ART_PAD = 312, 14 -- the frame art is 312 wide and its bar starts 14 in, on every side
 local BUTTON_H = 22
-local TOGGLE_W, MOVE_W, DISMISS_W = 70, 118, 80
+local TOGGLE_W, MOVE_W, DISMISS_W, TALENTS_W = 70, 118, 80, 70
+local MARK, MARK_IN, MARK_HEX = 10, 4, "ffd100" -- the card's unspent-talents dot, in from its top right, talent gold
+local TALENT_LINE_DY = 5 -- the header's talent line sits in the right column, level with the XP bar's text
 local BAR_BUTTON_Y, BAR_TEXT_Y = 450, 454
 local SMALL_HELD_Y = 336
 local SLOT_ICON_IN = 3
@@ -69,10 +71,7 @@ local LINES = {
   level = "That follower is too low level for this piece.",
   busy = "That follower is away.",
   name = "Enter a name of 2 to 12 letters.",
-  two = "That follower already carries two supplies.",
-  same = "That follower already carries one of those.",
-  none = "You have none of those.",
-}
+} -- a refused pack (two, same, none) says ns.W.PackRefused
 -- What a call that pays through ns.Grain answers before it gets there. Any other why came from ns.Grain, which has spoken.
 local BEFORE_GRAIN = { unknown = true, name = true, race = true, class = true, pair = true, sex = true, full = true, state = true, clock = true }
 
@@ -112,7 +111,7 @@ local function refuse(why, full, viaGrain)
   if why == "full" then
     ns.Say(full or (ns.W.Name["Company bag"] .. " is full."))
   else
-    ns.Say(LINES[why] or "You cannot do that now.")
+    ns.Say(LINES[why] or ns.W.PackRefused[why] or "You cannot do that now.")
   end
 end
 
@@ -224,6 +223,14 @@ local function levelLine(x)
   return "Level " .. x.level .. " " .. x.race .. " " .. x.class
 end
 
+-- Points earned at its level that no learned talent holds (a preview does not count); 0 with no talents.
+local function unspent(x)
+  local t = ns.Talents and ns.Talents(x.id)
+  if not t then return 0 end
+  local TC = ns.TalentCore
+  return TC.Points(x.level) - TC.Spent(t.tree, t.learned)
+end
+
 local function showCardTip(owner, f, fid)
   local x = fid and ns.Follower(fid)
   local tip = x and ownedTip(owner, f)
@@ -231,6 +238,8 @@ local function showCardTip(owner, f, fid)
   tip:SetText(x.name, 1, 1, 1)
   tip:AddLine(levelLine(x), 1, 1, 1)
   tip:AddLine(stateLine(x), 1, 1, 1)
+  local points = unspent(x)
+  if points > 0 then tip:AddLine(ns.W.TalentsToSpend(points), rgb(READY)) end
   tip:Show()
 end
 
@@ -255,6 +264,9 @@ local function deathCut(fid)
   apply(ns.RaceMods(fid))
   if ns.TraitMods then apply(ns.TraitMods(fid)) end
   if ns.SetMods then apply(ns.SetMods(fid)) end
+  if ns.TalentMods then
+    for _, mods in ipairs(ns.TalentMods(fid)) do apply(mods) end -- with no row: the talents with no condition
+  end
   return 100 - math.floor(pct + 0.5)
 end
 
@@ -441,6 +453,11 @@ local function newCard(f, ui, i)
 
   view.name = leftText(card)
   view.state = leftText(card, "GameFontHighlightSmall")
+  view.mark = card:CreateTexture(nil, "OVERLAY", nil, 2)
+  view.mark:SetSize(MARK, MARK)
+  view.mark:SetPoint("TOPRIGHT", card, "TOPRIGHT", -MARK_IN, -MARK_IN)
+  view.mark:SetColorTexture(rgb(MARK_HEX))
+  circle(card, view.mark)
 
   view.send = panelButton(card, 44, 18, "Send", function() sendClick(f) end)
   view.send:SetPoint("TOPLEFT", card, "TOPLEFT", 4, -22)
@@ -720,6 +737,11 @@ function CharacterTab.Build(f, bar)
     CharacterTab.Refresh(f)
   end)
   ui.dismiss = panelButton(f, DISMISS_W, BUTTON_H, "Dismiss", function() dismissClick(f, ui.fid) end)
+  ui.talents = panelButton(f, TALENTS_W, BUTTON_H, ns.W.Talent.button, function()
+    if ns.TalentWindow then ns.TalentWindow.Open(f, ui.fid) end
+  end)
+  ui.talentLine = leftText(f, "GameFontNormal")
+  ui.talentLine:SetTextColor(rgb(READY))
   ui.send = panelButton(f, 156, BUTTON_H, nil, function() sendClick(f) end)
 
   ui.grids = { big = BG.New(f, 5, 6, 37, 4, ui), small = BG.New(f, 10, 3, 35, 1, ui) }
@@ -774,14 +796,18 @@ local function place(f, size)
     view.card:SetSize(size.card, CARD_H)
     view.name:ClearAllPoints()
     view.name:SetPoint("TOPLEFT", view.card, "TOPLEFT", size.textX, -size.nameY)
-    view.name:SetWidth(size.card - size.textX - 4)
+    view.name:SetWidth(size.card - size.textX - 4 - MARK - MARK_IN) -- stops short of the talent dot
     view.state:ClearAllPoints()
     view.state:SetPoint("TOPLEFT", view.card, "TOPLEFT", size.textX, -size.stateY)
   end
 
   local right = size.side + size.width
   moveTo(ui.title, f, size.side, DOLL_Y + 2)
-  ui.title:SetWidth(size.width - TOGGLE_W - 4 - 4 - MOVE_W - 4) -- stops short of the header row's Move button at SMALL
+  if size.big then
+    ui.title:SetWidth(size.width - TOGGLE_W - 4 - 4 - MOVE_W - 4) -- stops short of the header row's Talents button
+  else
+    ui.title:SetWidth(size.width - TOGGLE_W - 4 - 4 - MOVE_W - 4 - TALENTS_W - 4) -- and of Move, left of it
+  end
   moveTo(ui.sub, f, size.side, DOLL_Y + 24)
   ui.sub:SetWidth(size.width - 4)
   moveTo(ui.xp, f, size.side, XP_Y)
@@ -792,6 +818,13 @@ local function place(f, size)
   ui.xpFill:SetPoint("TOPLEFT", ui.xp, "TOPLEFT", pad, 0)
   ui.xpFill:SetHeight(XP_H)
   moveTo(ui.toggle, f, right - TOGGLE_W - 4, 56)
+  if size.big then
+    moveTo(ui.talents, f, right - TOGGLE_W - 4 - 4 - TALENTS_W, 56)
+  else
+    moveTo(ui.talents, f, right - TOGGLE_W - 4 - 4 - MOVE_W - 4 - TALENTS_W, 56)
+  end
+  moveTo(ui.talentLine, f, size.col2, XP_Y + TALENT_LINE_DY)
+  ui.talentLine:SetWidth(size.colW) -- one line to the page edge: 18 talent points to spend fits at SMALL
 
   moveTo(ui.hint, f, 8, BAR_TEXT_Y)
   if size.big then
@@ -868,6 +901,8 @@ local function fillCard(f, size, view, x)
     view.dismiss:SetEnabled(x.state ~= "out")
   end
 
+  view.mark:SetShown(x ~= nil and unspent(x) > 0)
+
   local price = dead and ns.Raise and ns.RaisePrice and ns.RaisePrice(x.id)
   view.raise:SetShown(price and true or false)
   if price then view.raise:SetText("Raise " .. commas(price)) end
@@ -892,6 +927,10 @@ local function fillHeader(ui, size, x)
   ui.picture:SetShown(x ~= nil)
   ui.portraitTarget.key = x and x.id or nil
   ui.xp:SetShown(x ~= nil)
+  local points = x and unspent(x) or 0
+  ui.talentLine:SetText(points > 0 and ns.W.TalentsToSpend(points) or "")
+  ui.talentLine:SetShown(points > 0)
+  ui.talents:SetShown(x ~= nil and ns.TalentWindow ~= nil and ns.Talents ~= nil and ns.Talents(x.id) ~= nil)
   if not x then
     ui.classBg:Hide()
     ui.title:SetText("No follower yet")
@@ -1049,4 +1088,5 @@ function CharacterTab.Refresh(f, opts)
   ui.hire:SetText(price and ("Hire · " .. commas(price)) or "Hire")
   ui.hire:SetEnabled(price ~= nil)
   fillPanel(f)
+  if ns.TalentWindow then ns.TalentWindow.Follow(f, ui.fid) end
 end

@@ -1,6 +1,7 @@
 -- GuildSyncExpeditions Camp.lua: the camp, the first view of the page, ns.Camp (0.19 plan, slice V1, Seams 7, 17).
 --   Camp.Build(f)     the plan backdrop and the seven places on f, the 726 x 508 box Page.lua scales
---   Camp.Refresh(f)   re-reads the counts on the places, the unseen results and who is due back next
+--   Camp.Refresh(f)   re-reads the counts on the places, the unseen results and who is due back next, and has
+--                     CampSoon.Refresh open the buildings the influence ladder reached (issue 6)
 -- f.camp = { backdrop, places = { [key] = button }, out = button }, each place with art, hl, label, count;
 -- out is the line at the bottom left, with face, ring, title, text, mode. Mode "back" while ns.Unseen lists a
 -- result (newest first; a click calls ns.SeeAll and opens the History list), else "out": the run due back first
@@ -17,7 +18,6 @@ local PLAN_U, PLAN_V = 672 / 1024, 468 / 512
 local PLAN_W, PLAN_H, PLAN_X = 782, 508, -28
 local PLACE_W = 108
 local BAG_CELLS = 64
-local WRIT_SLOTS = 3
 local OUT_W, OUT_H, OUT_X, OUT_Y, OUT_TEXT_X = 300, 40, 12, 12, 38
 local FACE, RING = 22, 36
 local MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask"
@@ -74,10 +74,11 @@ local function relics()
   return #have.relics, #ns.BookData.relics
 end
 
+-- open, slots
 local function writs()
   local open = read(ns.OpenWrits)
   if type(open) ~= "table" then return nil end
-  return #open
+  return #open, read(ns.WritSlots) or 3
 end
 
 local function barracksTip(tip)
@@ -112,8 +113,8 @@ local function bookTip(tip)
 end
 
 local function writsTip(tip)
-  local n = writs()
-  if n then tip:AddLine(n .. "/" .. WRIT_SLOTS .. " writs", 1, 1, 1) end
+  local n, slots = writs()
+  if n then tip:AddLine(n .. "/" .. slots .. " writs", 1, 1, 1) end
 end
 
 local function barracksCount()
@@ -137,8 +138,8 @@ local function bookCount()
 end
 
 local function writsCount()
-  local n = writs()
-  return n and (n .. "/" .. WRIT_SLOTS)
+  local n, slots = writs()
+  return n and (n .. "/" .. slots)
 end
 
 local PLACES = {
@@ -354,6 +355,8 @@ end
 function Camp.Refresh(f)
   local ui = f.camp
   if type(ui) ~= "table" then return end
+  read(ns.Influence) -- issue 6: the camp is the first view, so the latch rises and says its lines here
+  if type(ns.CampSoon) == "table" then read(ns.CampSoon.Refresh, f) end
   drawBackdrop(ui.backdrop)
   for _, pl in ipairs(PLACES) do
     local count = ui.places[pl.key].count

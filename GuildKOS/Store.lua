@@ -13,6 +13,7 @@ local SEP = "~"
 local KIND = { kos = "t", kos_h = "h", kos_m = "m" }
 local RULE = { kos = "officer", kos_h = "officer", kos_m = "copy" }
 local IDS = { "kos", "kos_h", "kos_m" }
+local SETTINGS = "c"     -- the kill grain settings' kos_h key (RulesRecords.SETTINGS_KEY, d24)
 
 local M                 -- the handle given to Register
 local held = {}         -- own edits made before Ready() ({ edit, guild }), applied in order once it holds
@@ -105,7 +106,7 @@ local function tidy(id, t)
   if not r then return end
   local list = {}
   for k, e in pairs(r) do
-    if type(e) == "table" and e.rev then
+    if type(e) == "table" and e.rev and not (id == "kos_h" and k == SETTINGS) then -- the settings never prune
       local rec = type(e.rec) == "table" and e.rec or {}
       local keep = id == "kos" and KEEP[rec.status]
       if keep and type(t) == "number" and (tonumber(rec.decidedAt) or 0) + keep < t then
@@ -116,9 +117,12 @@ local function tidy(id, t)
       end
     end
   end
-  if #list <= BOUND then return end
+  -- kos_h keeps one place for the settings, so the domain never holds more than the sync's 100 records a sender
+  -- (review f3)
+  local bound = BOUND - ((id == "kos_h" and r[SETTINGS]) and 1 or 0)
+  if #list <= bound then return end
   table.sort(list, function(a, b) return pruneBefore(id, a, r[a], b, r[b]) end)
-  for i = 1, #list - BOUND do
+  for i = 1, #list - bound do
     local e = r[list[i]]
     r[list[i]] = nil
     bury(id, list[i], e.rev, e.hash)
@@ -190,7 +194,7 @@ end
 -- ---------- one store per domain ----------
 
 local function newStore(id)
-  local kind = KIND[id]
+  local function kind(key) return Records().KindOf(id, key) end
   local store = { recordRule = RULE[id], kinds = { round = "H", digest = "D", ask = "R", record = "P" },
     hEvery = 900, maxRecords = 100, maxEntries = 500 }
 
@@ -227,7 +231,7 @@ local function newStore(id)
     local r = recs(id)
     local e = r and r[key]
     if not e or type(e.rec) ~= "table" then return nil end
-    return (e.by or "") .. SEP .. (Records().Pack(kind, e.rec) or "")
+    return (e.by or "") .. SEP .. (Records().Pack(kind(key), e.rec) or "")
   end
   function store.stamp(key, rev, hash)
     local r = recs(id)
@@ -242,12 +246,12 @@ local function newStore(id)
     local r = recs(id)
     local e = r and r[key]
     if not e or not e.rev or type(e.rec) ~= "table" then return nil end
-    return { t = "P", key = key, rev = e.rev, hash = e.hash, by = e.by, body = Records().Pack(kind, e.rec) }
+    return { t = "P", key = key, rev = e.rev, hash = e.hash, by = e.by, body = Records().Pack(kind(key), e.rec) }
   end
   function store.merge(msg, t)
     local r = recs(id)
     if not r then return end
-    local rec = Records().Parse(kind, msg.key, msg.body or "", t)
+    local rec = Records().Parse(kind(msg.key), msg.key, msg.body or "", t)
     if not rec then -- refused body: stored nowhere, its rev marked in gone; a held record stays served (d765)
       local gone = goneSet(id)
       local g = gone and gone[msg.key]
@@ -263,7 +267,7 @@ local function newStore(id)
     local g = gone and gone[msg.key]
     if g and newer(msg.rev, msg.hash, g.rev, g.hash) then gone[msg.key] = nil end
     tidy(id, t)
-    if id == "kos_h" and listener and r[msg.key] then listener(msg.key, rec) end
+    if id == "kos_h" and listener and r[msg.key] and msg.key ~= SETTINGS then listener(msg.key, rec) end
     if id == "kos" and targetListener and r[msg.key] then targetListener(msg.key, rec) end
     if id == "kos_m" and memberListener and r[msg.key] then memberListener(msg.key, rec) end
     return true
@@ -402,7 +406,7 @@ function Store.CanWrite(id, key, rec, t)
   if not KIND[id] or not key or type(rec) ~= "table" or type(t) ~= "number" then return nil, "args" end
   local r = recs(id)
   if not r then return nil, "guild" end
-  local parsed, bad = settle(KIND[id], key, rec, t)
+  local parsed, bad = settle(Records().KindOf(id, key), key, rec, t)
   if not parsed then return nil, bad end
   if id == "kos" then
     if not STATUS[parsed.status] then return nil, "status" end
@@ -431,6 +435,12 @@ function Store.WriteTarget(guid, rec, t)
   if not key then return nil, why end
   return writeOfficer("kos", key, rec, t)
 end
+
+-- The kill grain settings (issue 8, d24): the officers' one record, or nil while none is held.
+function Store.Settings() return read("kos_h", SETTINGS) end
+
+-- An officer's write of the settings rec = { reward, weekCap, perTarget, setAt } -> true | nil, why (as writeOfficer).
+function Store.WriteSettings(rec, t) return writeOfficer("kos_h", SETTINGS, rec, t) end
 
 function Store.WriteHunter(memberKey, rec, t)
   local key, why = ns.RulesRecords.HunterKey(memberKey)

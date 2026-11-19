@@ -13,9 +13,10 @@
 --   ns.PlayCue "find" | "good" | "bad" -> played   the one place the module plays a sound; false in demo
 --   ns.RaisePrice(fid) -> n | nil             ns.Raise(fid) -> true | nil, why
 -- The later slices' ns.IsReserve, CheckPack, ClearPack, LeaveWorn, BreakGear, LoseGear, ApplyRewards, PersonalRows,
--- OnRaised, TraitMods, SupplyMods, SetMods, KitScore, SupplyChoices, TakeStack, OpenRegions and HeldMaps are read at
--- call time and skipped while they are missing. ns.HistoryRun then ns.AnnounceRun (History.lua) follow every settled
--- run, each in its own M.Safe: a throw in one never skips the other, and the run stays settled.
+-- OnRaised, TraitMods, SupplyMods, SetMods, TalentMods, ClearTalents, KitScore, SupplyChoices, TakeStack, OpenRegions
+-- and HeldMaps are read at call time and skipped while they are missing. ns.HistoryRun then ns.AnnounceRun
+-- (History.lua) follow every settled run, each in its own M.Safe: a throw in one never skips the other, and the run
+-- stays settled.
 
 local _, ns = ...
 if not ns.M then return end
@@ -122,12 +123,14 @@ local function rowsFor(day)
   return BC.Rows(day, ask("OpenRegions") or ns.Regions.Open(), ask("HeldMaps") or {}, ask("PersonalRows", day) or {})
 end
 
--- In order race, trait, supply, set; a source with nothing to say adds no entry.
+-- In order race, trait, supply, set, then one entry per talent (never merged, so two cuts multiply); a source with
+-- nothing to say adds no entry.
 local function modsOf(fid, row, ids)
   local list = { ns.RaceMods(fid) }
   list[#list + 1] = ask("TraitMods", fid, row)
   list[#list + 1] = ask("SupplyMods", ids, row)
   list[#list + 1] = ask("SetMods", fid, row)
+  for _, mod in ipairs(ask("TalentMods", fid, row) or {}) do list[#list + 1] = mod end
   return list
 end
 
@@ -298,6 +301,7 @@ local function permadeath(fid, f)
   f.state, f.untilT = "dead", nil
   local left = hook("LeaveWorn", fid)
   hook("ClearPack", fid)
+  hook("ClearTalents", fid)
   if left then followers().rows[fid] = nil end
 end
 
@@ -417,10 +421,15 @@ function ns.SettleDue(t)
   return reports
 end
 
+-- A Raise talent takes its percent off (ns.TalentPercent, issue 13; missing or not a whole number from 0 up counts as 0,
+-- over 100 as 100), rounded down, and the price stays at least 1.
 function ns.RaisePrice(fid)
   local f = ns.Follower(fid)
   if not f then return nil end
-  return 40 + 20 * f.level
+  local price = 40 + 20 * f.level
+  local off = ask("TalentPercent", fid, "raise")
+  if type(off) ~= "number" or off <= 0 or off ~= math.floor(off) then return price end
+  return math.max(1, math.floor(price * (100 - math.min(off, 100)) / 100))
 end
 
 function ns.Raise(fid)

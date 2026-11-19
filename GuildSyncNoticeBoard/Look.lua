@@ -97,18 +97,11 @@ function Look.SetPill(pill, text, kind)
   pill:Show()
 end
 
--- M.Kit.Dropdown, else the board's own WowStyle1 dropdown when the client has the template, else nil (the caller
--- keeps its steppers). Callers wrap every radio's setSelected body in ns.M.Safe and never set a radio menu's text (d699).
+-- M.Kit.Dropdown's dropdown, or nil (the caller keeps its steppers). The hub draws it with its own Kit.Menu, so the
+-- board keeps no dropdown of Blizzard's (run r-20261118-epic-18-p3a, C4). Callers wrap every radio's setSelected body
+-- in ns.M.Safe and never set a radio menu's text (d699).
 function Look.Dropdown(parent, width, generate)
-  local dd = M.Kit.Dropdown(parent, width, generate)
-  if dd then return dd end
-  -- checked first: a client without the template may lack the DropdownButton frame type too
-  if not Look.HasTemplate("WowStyle1DropdownTemplate") then return nil end
-  local good, own = pcall(CreateFrame, "DropdownButton", nil, parent, "WowStyle1DropdownTemplate")
-  if not good or not own then return nil end
-  own:SetSize(width, 22)
-  own:SetupMenu(generate)
-  return own
+  return M.Kit.Dropdown(parent, width, generate)
 end
 
 -- M.Kit.InputBox, else Look.Frame's InputBoxInstructionsTemplate / InputBoxTemplate chain at width x 20; either way

@@ -43,6 +43,20 @@ local lookAt, lookMemo     -- CompanyLook's fold, one clock second
 
 local function forget() hideMemo, lookMemo = nil, nil end
 
+-- issue 6: the furthest built project (the granarybuilt fact) as last seen here. When it moves, ns.FactsChanged tells
+-- the hub, so Expeditions re-reads the fact at once instead of at its next camp refresh. The first look only records.
+local builtSeen
+local function builtNudge()
+  local cp = ns.CompanyProjects and ns.CompanyProjects()
+  if type(cp) ~= "table" or type(cp.done) ~= "table" then return end
+  local n = 0
+  for k = 1, #CC.PROJECTS do
+    if cp.done[k] == true then n = k end
+  end
+  if builtSeen ~= nil and n ~= builtSeen and ns.FactsChanged then ns.FactsChanged() end
+  builtSeen = n
+end
+
 -- GC.LAUNCH once the real clock is past it; nil before (the beta keeps its records) and without a clock.
 local function cutoff()
   local t = ns.Now()
@@ -147,6 +161,7 @@ function store.merge(msg)
   if not b or not L.Company(b, t, off, members, "merge") then return false end
   ns.CompanyRecords()[msg.key] = { rev = msg.rev, hash = msg.hash, body = msg.body }
   forget()
+  M.Safe(builtNudge)
   if M.RefreshPage then M.RefreshPage() end
   return true
 end
@@ -545,6 +560,7 @@ end
 function ns.CompanyChanged()
   dirty = true
   lookMemo = nil
+  M.Safe(builtNudge)
 end
 
 -- Grain.lua's tick: the login check once, the mint drain, then the settle.

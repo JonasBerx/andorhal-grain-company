@@ -1,4 +1,4 @@
--- GuildSync's public API (API 9 adds the purse field, M.Purse, M.Spend, M.Credit and M.Toast; API 8 the search and facts
+-- GuildSync's public API (API 11 adds M.Kit.Menu, the hub's own menu; API 10 adds M.Kit.Tokens, M.Kit.Motion and M.Kit.Button; API 9 adds the purse field, M.Purse, M.Spend, M.Credit and M.Toast; API 8 the search and facts
 -- fields, M.Fact, M.FactsChanged and the "facts" hub event; API 7 the member field, M.RefreshMember, Comm.Person,
 -- M.MyCharacters and M.SetLinks; API 6 the kit art; API 5 the pull store, bulk, limit and the menu and book-row kit
 -- pieces; API 4 the officers audience; API 3 M.Kit; API 2 the demo field, M.Demo and the "demo" hub event): the one
@@ -15,8 +15,9 @@
 
 local ADDON, ns = ...
 
--- Named expectation edit (run r-20261107-a1-hub-purse-guildsync-api-9): API 9 (the purse)
-local API, MIN_API = 9, 1
+-- Named expectation edit (run r-20261116-epic-18-p0-p1-kit-gallery-and-api-10-tok): API 10 (Kit Tokens, Motion, Button)
+-- Named expectation edit (run r-20261118-epic-18-p3a-kit-menu-at-api-11-our-menus): API 11 (M.Kit.Menu)
+local API, MIN_API = 11, 1
 local MAX_NEEDS = 99 -- a needs above this is a mistake, not a future API (math.huge passes the whole-number check)
 local MAX_ID, MAX_TITLE, MAX_NAMES = 12, 32, 5
 -- /gsync words a module id may not take (Core.lua's slash command)
@@ -173,7 +174,8 @@ local TAB_FIELDS = { holder = true, keys = true, selected = true, Select = true 
 -- API 6 (the kit art): plain pass-throughs like KIT_PLAIN, on needs >= 6 handles only.
 local KIT_ART = { "ItemButton", "SetItem", "SetCardProfession", "ClassBackground" }
 
--- One module's kit backing table (23 names, Kit.lua's header; 30 from needs 5; 34 from needs 6 with KIT_ART). Every
+-- One module's kit backing table (23 names, Kit.lua's header; 30 from needs 5; 34 from needs 6 with KIT_ART; 37 from
+-- needs 10 with Tokens, Motion and Button; 38 from needs 11 with Menu). Every
 -- function the module hands in runs under its title and returns nothing; popup names are scoped to the module:
 -- GUILDSYNC_M_<ID>_<WHICH>.
 local function newKit(id, title, needs)
@@ -195,8 +197,8 @@ local function newKit(id, title, needs)
     return ns.Kit.Tabs(parent, entries, cb(onSelect))
   end
   function kit.List(parent, rowH, build, init) return ns.Kit.List(parent, rowH, cb(build), cb(init)) end
-  function kit.Dropdown(parent, width, generate) return ns.Kit.Dropdown(parent, width, cb(generate)) end
-  function kit.ContextMenu(owner, generate) return ns.Kit.ContextMenu(owner, cb(generate)) end
+  function kit.Dropdown(parent, width, generate) return ns.Kit.Dropdown(parent, width, generate, title) end
+  function kit.ContextMenu(owner, generate) return ns.Kit.ContextMenu(owner, generate, title) end
   function kit.Confirm(which, text, okText, onOk)
     local name = popupName(which)
     if not name then return false end
@@ -210,11 +212,30 @@ local function newKit(id, title, needs)
   if needs >= 5 then
     for _, name in ipairs(KIT_PLAIN_5) do kit[name] = function(...) return ns.Kit[name](...) end end
     function kit.MatchMenu(owner, entries, onPick, emptyText)
-      return ns.Kit.MatchMenu(owner, entries, cb(onPick), emptyText)
+      return ns.Kit.MatchMenu(owner, entries, cb(onPick), emptyText, title)
     end
   end
   if needs >= 6 then
     for _, name in ipairs(KIT_ART) do kit[name] = function(...) return ns.Kit[name](...) end end
+  end
+  if needs >= 10 then
+    -- API 10: each Motion closure looks ns.Kit.Motion up at call time and wraps only its onFinish with cb.
+    kit.Tokens = ns.Kit.TokensFor(id)
+    function kit.Button(parent, text, width, onClick, enabled)
+      return ns.Kit.Button(parent, text, width, cb(onClick), enabled)
+    end
+    kit.Motion = readOnly({
+      FadeIn = function(f, done) return ns.Kit.Motion.FadeIn(f, cb(done)) end,
+      FadeOut = function(f, done) return ns.Kit.Motion.FadeOut(f, cb(done)) end,
+      Slide = function(f, dx, dy, done) return ns.Kit.Motion.Slide(f, dx, dy, cb(done)) end,
+      Pop = function(f, done) return ns.Kit.Motion.Pop(f, cb(done)) end,
+      Enabled = function() return ns.Kit.Motion.Enabled() end,
+    })
+  end
+  if needs >= 11 then
+    -- API 11: the hub's own menu; generate and every entry callback run under the module's title. Kit.MenuOpen is
+    -- hub-private and never goes on a module's kit.
+    function kit.Menu(owner, generate, anchor) return ns.Kit.Menu(owner, generate, anchor, title) end
   end
   return kit
 end

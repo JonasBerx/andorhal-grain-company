@@ -4,7 +4,9 @@
 --   GC.WearLevel(tier) -> 1 | 6 | nil                  GC.SalvageOf(q) -> 1 | 2 | nil
 --   GC.SlotPrice(row) -> n | nil                       GC.TemperCost(weight, step, q) -> n
 --   GC.RepairCost(row) -> salvage, grain | nil         GC.Sellable(row) -> n | nil
---   GC.OnSale(row, chaptersDone) -> boolean
+--   GC.OnSale(row, chaptersDone, forge) -> boolean     GC.SupplyOnSale(supplyRow, opened) -> boolean
+--   GC.ShopPrice(row) -> n | nil                       what the Quartermaster asks: SlotPrice, or the Forge's green price
+--   GC.GREEN: the green quality, which the Quartermaster sells only once the Forge is open
 
 local _, ns = ...
 if not ns.M then return end
@@ -16,16 +18,29 @@ ns.GearCore = GC
 GC.QUALITY_BASE = { [0] = 1, [1] = 2, [2] = 4, [3] = 6 }
 GC.QUALITY_COLOUR = { [0] = "9d9d9d", [1] = "ffffff", [2] = "1eff00", [3] = "0070dd" }
 GC.STACK_MAX = { salvage = 99, supply = 20, relic = 20 }
+GC.GREEN = 2
+-- unlock: the influence step (ns.InfluenceCore) that puts the row on sale; a row with none is always on sale.
 GC.SHOP_SUPPLIES = {
   { id = "rations", name = "Field Rations", price = 15, icon = "Interface\\Icons\\INV_Misc_Food_59", note = "+5% success" },
   { id = "bandage", name = "Linen Bandage", price = 10, icon = "Interface\\Icons\\INV_Misc_Bandage_12", note = "Halves wounds" },
+  { id = "whetstone", name = "Whetstone Kit", price = 20, icon = "Interface\\Icons\\INV_Stone_SharpeningStone_01",
+    note = "Halves gear wear", unlock = "supplies" },
+  { id = "candle", name = "Spirit Candle", price = 40, icon = "Interface\\Icons\\INV_Misc_Candle_01",
+    note = "Halves the death chance", unlock = "supplies" },
+  { id = "scoutchart", name = "Scout's Chart", price = 25, icon = "Interface\\Icons\\INV_Misc_Map_01",
+    note = "+10% on Scouting", unlock = "apothecary" },
+  { id = "gravemoss", name = "Grave-moss Charm", price = 150, icon = "Interface\\Icons\\INV_Misc_Herb_07",
+    note = "No permanent death", unlock = "apothecary" },
 }
 
 local WEAR_LEVEL = { 1, 6 }
 local KIT_PRICE = { { [0] = 45, [1] = 120 }, { [0] = 90, [1] = 270 } } -- by tier, then quality
 local KIT_WEIGHT = 300
 local TEMPER_STEP = { 1, 2, 3, 5, 8 }
-local BLUE = 3
+local GREEN, BLUE = GC.GREEN, 3
+-- The Forge's green kit price by tier, for the shop only: KIT_PRICE has no green, so a dropped green keeps no SlotPrice
+-- (Sellable and RepairCost read SlotPrice).
+local GREEN_KIT = { 360, 810 }
 local SALVAGE = { [0] = 1, [1] = 1, [2] = 1, [3] = 2 }
 local REPAIR_PERCENT = 40
 local SELL_DIVISOR = 4
@@ -72,11 +87,27 @@ function GC.SlotPrice(row)
   return math.max(1, math.floor(kit * weight / KIT_WEIGHT))
 end
 
+function GC.ShopPrice(row)
+  if type(row) ~= "table" then return nil end
+  if row.q ~= GREEN then return GC.SlotPrice(row) end
+  local kit, weight = GREEN_KIT[row.tier], WEIGHT[row.slot]
+  if not kit or not weight then return nil end
+  return math.floor(kit * weight / KIT_WEIGHT)
+end
+
 -- The first tier is short until chapter 1 is done. No level here: the level gate is the tier tab's.
-function GC.OnSale(row, chaptersDone)
-  if not GC.SlotPrice(row) then return false end
+-- forge: the Forge is open (ns.Opened("forge")); green is on sale only then.
+function GC.OnSale(row, chaptersDone, forge)
+  if not GC.ShopPrice(row) then return false end
+  if row.q == GREEN and forge ~= true then return false end
   if row.tier ~= 1 or chaptersDone >= 1 then return true end
   return row.q == 0 and START_STOCK[row.slot] == true
+end
+
+-- A SHOP_SUPPLIES row. opened is ns.Opened, passed in so this file stays pure; nil opens only the rows with no unlock.
+function GC.SupplyOnSale(row, opened)
+  if type(row) ~= "table" then return false end
+  return row.unlock == nil or (opened ~= nil and opened(row.unlock) == true)
 end
 
 function GC.TemperCost(weight, step, q)
@@ -108,7 +139,6 @@ local ARMOR = { chest = 8, legs = 7, head = 6, shoulder = 5, feet = 5, hands = 4
 local SHIELD_ARMOR = 10
 local OFFHAND = { p0 = "shield", p1 = "shield", p3 = "shield", p4 = "shield", p2 = "damage", p5 = "damage" } -- any other has no base line
 local SET_STATS = { ["Deathguard's Watch"] = { "Stamina", "Strength" }, ["Ambermill Warding"] = { "Intellect", "Spirit" } }
-local GREEN = 2
 
 local function statNames(row)
   local set = SET_STATS[row.set]

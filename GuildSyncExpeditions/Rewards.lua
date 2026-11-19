@@ -3,7 +3,8 @@
 --   ns.Finds() -> { { row, fid, day, region }, ... }   the newest 5 blue finds, newest first, copies; a read never writes
 -- ns.LootCore, GearData, GearCore, AddGear, AddStack, Gear, Bag, TraitEvents and the later slices' GrantSupply, GrantMap,
 -- GrantRelic, GrantSetPiece, GrantQuest, OfferRecruit, PendingRecruit and StoryRun are read at call time; the hooks are
--- skipped while they are missing.
+-- skipped while they are missing. So are the talent reads ns.TalentPercent and ns.TalentFind (issue 13): missing, throwing
+-- or answering anything but a whole number from 0 up, they count as 0 and the run pays today's numbers.
 
 local _, ns = ...
 if not ns.M then return end
@@ -81,6 +82,12 @@ local function safely(fn, ...)
   return a, b
 end
 
+local function talentPct(fn, fid, key)
+  local pct = safely(fn, fid, key)
+  if type(pct) == "number" and pct >= 0 and pct == math.floor(pct) then return pct end
+  return 0
+end
+
 local function lost(name)
   ns.Say(ns.W.Name["Company bag"] .. " is full: " .. name .. " is lost.")
 end
@@ -132,11 +139,12 @@ local function dropSetPiece(region, stream)
   return nil
 end
 
--- Calls each(stream) once per drop of this reward, on the reward's own stream.
-local function eachDrop(reward, run, traits, each)
+-- Calls each(stream) once per drop of this reward, on the reward's own stream. A Finds talent multiplies the trait percent.
+local function eachDrop(reward, fid, run, traits, each)
   local LC = ns.LootCore
   local stream = RC.Stream(RC.Seed(reward, run.start, run.seed))
-  local n = LC.Drops(LC.Rate(reward, run.danger, run.capstone, LC.PctFor(reward, traits), run.hours), stream)
+  local pct = LC.PctFor(reward, traits, talentPct(ns.TalentFind, fid, reward))
+  local n = LC.Drops(LC.Rate(reward, run.danger, run.capstone, pct, run.hours), stream)
   for _ = 1, n do each(stream) end
 end
 
@@ -145,9 +153,9 @@ local function payDrops(fid, run, traits)
   local LC = ns.LootCore
   local tier = LC.Tier(run.level)
   local blue = false
-  eachDrop("white", run, traits, function(stream) dropPlain(WHITE, tier, stream) end)
-  eachDrop("green", run, traits, function(stream) dropPlain(GREEN, tier, stream) end)
-  eachDrop("blue", run, traits, function(stream)
+  eachDrop("white", fid, run, traits, function(stream) dropPlain(WHITE, tier, stream) end)
+  eachDrop("green", fid, run, traits, function(stream) dropPlain(GREEN, tier, stream) end)
+  eachDrop("blue", fid, run, traits, function(stream)
     local code
     if LC.IsSetBlue(stream) then
       code = dropSetPiece(run.region, stream)
@@ -162,20 +170,20 @@ local function payDrops(fid, run, traits)
       if f and row then ns.Say(ns.Escape(f.name) .. " found " .. row.name .. ".") end
     end
   end)
-  eachDrop("recruit", run, traits, function(stream)
+  eachDrop("recruit", fid, run, traits, function(stream)
     local spec = LC.RecruitSpec(stream, run.level)
     if not safely(ns.PendingRecruit) then safely(ns.OfferRecruit, spec) end
   end)
-  eachDrop("supply", run, traits, function(stream)
+  eachDrop("supply", fid, run, traits, function(stream)
     local _, why = safely(ns.GrantSupply, LC.PickSupply(run.danger, stream), 1)
     if why == "full" then lost("a supply") end
   end)
   if ns.Regions.IsOpen(run.region) then
-    eachDrop("map", run, traits, function() safely(ns.GrantMap, run.region, LC.Tier(run.level)) end)
+    eachDrop("map", fid, run, traits, function() safely(ns.GrantMap, run.region, LC.Tier(run.level)) end)
   end
-  eachDrop("relic", run, traits, function(stream) safely(ns.GrantRelic, run.region, hookSeed(stream)) end)
+  eachDrop("relic", fid, run, traits, function(stream) safely(ns.GrantRelic, run.region, hookSeed(stream)) end)
   if run.hours >= WRIT_MIN_HOURS then
-    eachDrop("writ", run, traits, function(stream) safely(ns.GrantQuest, hookSeed(stream)) end)
+    eachDrop("writ", fid, run, traits, function(stream) safely(ns.GrantQuest, hookSeed(stream)) end)
   end
   return blue
 end
@@ -196,9 +204,9 @@ function ns.ApplyRewards(fid, run, outcome)
   local band = outcome.band
   local paid = { credited = false, blue = false }
 
-  local xp = LC.XP(run.hours, run.danger, band, f.level, run.level)
+  local xp = LC.XP(run.hours, run.danger, band, f.level, run.level, talentPct(ns.TalentPercent, fid, "xp"))
   if xp > 0 then f.level, f.xp = FC.GainXP(f.level, f.xp, xp) end
-  local salvage = LC.Salvage(run.hours, band)
+  local salvage = LC.Salvage(run.hours, band, talentPct(ns.TalentPercent, fid, "salvage"))
   if salvage > 0 then
     local tier = LC.Tier(run.level)
     addSalvage(tier, salvage, ns.W.Name[SALVAGE_NAME[tier]])
@@ -206,7 +214,8 @@ function ns.ApplyRewards(fid, run, outcome)
 
   if WIN[band] then
     paid.blue = payDrops(fid, run, f.traits)
-    local grain = LC.Grain(run.hours, run.danger, holds(f.traits, "greedy"))
+    local more = talentPct(ns.TalentPercent, fid, "grain")
+    local grain = LC.Grain(run.hours, run.danger, holds(f.traits, "greedy"), more)
     if grain > 0 then paid.credited = ns.Grain("credit", grain) == true end
     if run.story or run.capstone then safely(ns.StoryRun, fid, run, outcome) end
   end

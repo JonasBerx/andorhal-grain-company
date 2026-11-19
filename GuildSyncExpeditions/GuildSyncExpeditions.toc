@@ -39,6 +39,10 @@ LootCore.lua
 LootData.lua
 Rewards.lua
 Traits.lua
+TalentData.lua
+TalentCore.lua
+Talents.lua
+TalentWindow.lua
 
 # E
 GearCore.lua
@@ -85,6 +89,10 @@ Camp.lua
 CampSoon.lua
 # V3
 GranaryDoor.lua
+
+# V4 (issue 6)
+InfluenceCore.lua
+Influence.lua
 
 # Y
 History.lua

@@ -6,6 +6,33 @@ local ADDON, ns = ...
 local View = {}
 ns.View = View
 
+-- The shared colours ({ r, g, b[, a] }), spacing (px) and text styles (GameFont names). Pure data: the hub's
+-- constants copy their entries, and Kit.Tokens (Kit.lua) wraps a read-only copy made once at load.
+View.TOKENS = {
+  colour = { panel = { 0, 0, 0, 0.3 }, hover = { 1, 1, 1, 0.08 }, active = { 1, 1, 1, 0.12 },
+    cardFill = { 0, 0, 0, 0.42 },
+    cardAccent = { 1, 0.82, 0, 0.55 }, divider = { 1, 1, 1, 0.15 }, pillBg = { 0, 0, 0, 0.5 }, gold = { 1, 0.82, 0 },
+    green = { 0.1, 1, 0.1 }, red = { 1, 0.13, 0.13 }, grey = { 0.6, 0.6, 0.6 }, online = { 0.1, 1.0, 0.1 },
+    trackerOld = { 1, 0.5, 0.1 }, tierLead = { 0.83, 0.64, 0.30 }, tierOfficer = { 0.55, 0.40, 0.80 },
+    tierRaider = { 0.25, 0.50, 0.80 }, tierMember = { 0.40, 0.40, 0.40 }, tierMemberText = { 0.6, 0.6, 0.6 },
+    -- hub-only (Kit.Tokens, never on a module copy)
+    white = { 1, 1, 1 }, flat = { 1, 1, 1, 0.06 }, chipOn = { 1, 0.82, 0, 0.22 }, black = { 0, 0, 0, 1 },
+    warn = { 1, 0.5, 0.1 }, amber = { 0.8, 0.6, 0.2 }, good = { 0.25, 0.7, 0.25 }, mute = { 0.72, 0.72, 0.72 },
+    menuBase = { 0.05, 0.045, 0.04, 0.95 } },
+  space = { pad = 8, gap = 4, buttonH = 22, buttonPad = 12 },
+  text = { normal = "GameFontNormal", highlight = "GameFontHighlight", small = "GameFontNormalSmall",
+    highlightSmall = "GameFontHighlightSmall", disable = "GameFontDisable", large = "GameFontNormalLarge",
+    -- hub-only names (Kit.Text; no font object is made for them)
+    disableSmall = "GameFontDisableSmall", huge = "GameFontHighlightHuge", number = "NumberFontNormal" },
+}
+
+-- A fresh copy of the colour token key (so no constant shares a table with View.TOKENS).
+local function tokenColour(key)
+  local c, out = View.TOKENS.colour[key], {}
+  for i = 1, #c do out[i] = c[i] end
+  return out
+end
+
 View.RADIUS = 80          -- distance from the minimap's centre to the button's centre
 View.DEFAULT_ANGLE = 200  -- degrees, 0 = east, counter-clockwise. GuildKOS starts at 240 so the two don't overlap.
 View.TOOLTIP = { "GuildSync", "Left-click: open", "Right-click: rescan", "Drag: move" }
@@ -561,7 +588,7 @@ function View.SectionArea(panelH, buttons)
   if bottom - S.top < S.minH then return nil end
   return S.top, bottom
 end
-View.ONLINE_GREEN = { 0.1, 1.0, 0.1 }
+View.ONLINE_GREEN = tokenColour("online")
 View.SEARCH_HINT = "Search name or note"
 View.SEARCH_HINT_BAND = "Search everything" -- the title band's search box (mock se-1)
 -- Roster rows: the class icon, then the name (takes what is left), then fixed rank, level and last online columns.
@@ -693,11 +720,13 @@ end
 
 View.RAIDER_RANK = "Raider" -- the Raiders tile counts members at this rank or above it in the guild's rank order
 View.TIER_COLORS = {
-  lead = { 0.83, 0.64, 0.30 }, officer = { 0.55, 0.40, 0.80 }, raider = { 0.25, 0.50, 0.80 }, member = { 0.40, 0.40, 0.40 },
+  lead = tokenColour("tierLead"), officer = tokenColour("tierOfficer"), raider = tokenColour("tierRaider"),
+  member = tokenColour("tierMember"),
 }
 -- Rank names as text (the Overview); the Roster badges keep TIER_COLORS.
 View.TIER_TEXT = {
-  lead = { 0.83, 0.64, 0.30 }, officer = { 0.55, 0.40, 0.80 }, raider = { 0.25, 0.50, 0.80 }, member = { 0.6, 0.6, 0.6 },
+  lead = tokenColour("tierLead"), officer = tokenColour("tierOfficer"), raider = tokenColour("tierRaider"),
+  member = tokenColour("tierMemberText"),
 }
 
 -- 0-based place of RAIDER_RANK in the guild's rank list, or nil when the guild has no rank of that name.
@@ -1227,7 +1256,7 @@ end
 
 View.WEEKDAYS = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" } -- fixed English, never the locale's %a
 View.HEARD_NOW = 600 -- seconds that read "now"
-View.TRACKER_OLD = { 1, 0.5, 0.1 } -- an older version's colour
+View.TRACKER_OLD = tokenColour("trackerOld") -- an older version's colour
 View.TRACKER_GROUPS = { { "week", "Heard this week" }, { "earlier", "Heard earlier" }, { "none", "No addon heard" } }
 
 -- -> text, grey: "now" within 10 minutes, "HH:MM" earlier today, the weekday under 7 days, then "<n> days" (7-13) and

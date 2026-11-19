@@ -95,6 +95,19 @@ local M = GuildSync and GuildSync.RegisterModule({
       end
       return 0
     end,
+    -- Issue 6: the furthest built project, 0-6, which Expeditions latches. The furthest, not the count: a donor hidden
+    -- after a later project was built can drop an earlier project's total below its goal again.
+    granarybuilt = function()
+      local cp = ns.CompanyProjects and ns.CompanyProjects()
+      if type(cp) ~= "table" or type(cp.done) ~= "table" then return nil end
+      local CC = ns.CompanyCore
+      if not CC then return nil end
+      local built = 0
+      for k = 1, #CC.PROJECTS do
+        if cp.done[k] == true then built = k end
+      end
+      return built
+    end,
   },
   -- API 9: the grain purse other suite modules use. Missing, these answer nothing and the hub says "failed".
   purse = {

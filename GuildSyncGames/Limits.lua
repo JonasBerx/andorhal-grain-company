@@ -14,7 +14,7 @@
 --     mode "merge" | "fold". With members nil the lottery term is left out of L11; merge skips L13 and fold refuses
 --     any d item ("roster", d1608). L11's inflow pays all three dailies a day (Vendor, Flights, Who said it), doubled
 --     by a lucky charm (L.CHARM_MULT), and the Kodo stables at the cap: a dividend a race (L.STABLES_RACE) and the
---     price spread a day (L.STABLES_DAY).
+--     price spread a day (L.STABLES_DAY), and Kill on Sight kill grain at its top a week (L.KOS_WEEK).
 -- Reading: L11's draws counts the drawAt times in (S, t] for the realm offset that gives the most (the signature
 -- carries no offset), so the bound is never tighter than the realm's own count.
 
@@ -53,6 +53,10 @@ L.STABLES_DAY = SC and SC.SHARES_MAX * (SC.PRICE_MAX - SC.PRICE_MIN) or 0 -- 420
 L.BEST_CAP = math.floor(#ns.ITEMS / 2)    -- two unused items a pair
 L.FLIGHTS_BEST_CAP = math.floor(#ns.ROUTES / 2) -- two unused routes a pair
 L.WHO_BEST_CAP = ns.VOICES and #ns.VOICES.lines or 0 -- an endless run never repeats a line (0 without Voices.lua)
+-- frozen: Kill on Sight kill grain (GuildKOS, issue 8) at its top, the officers' highest reward (1000) times their
+-- highest weekly cap (20) (GuildKOS RulesRecords.SETTINGS_RANGE); the cap counts over every guild on the account
+-- (GuildKOS Kill.lua), so this holds per account. kos_kill_test pins the GuildKOS side, games_limits_core_test this.
+L.KOS_WEEK = 20000
 L.SKEW = 300
 L.PREVIEW_DAYS = Core.PREVIEW_DAYS
 L.PREVIEW_START = GC.LAUNCH - (L.PREVIEW_DAYS + 1) * DAY -- 2026-10-20 00:00 UTC
@@ -144,6 +148,7 @@ function L.Company(b, t, off, members, mode)
   local inflow = START_PURSE + L.MAX_RATE * grows + L.BIG * races
     + L.CHARM_MULT * (L.VENDOR_DAY + L.FLIGHTS_DAY + L.WHO_DAY) * days
     + L.CARAVAN_HOUR * races + L.STABLES_RACE * races + L.STABLES_DAY * days
+    + L.KOS_WEEK * (math.floor(days / 7) + 1)
   if members then
     inflow = inflow + draws(S, t) * (members + L.MEMBER_SLACK) * CC.TICKETS_MAX * CC.TICKET_PRICE
   end

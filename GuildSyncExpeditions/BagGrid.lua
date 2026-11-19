@@ -2,6 +2,7 @@
 --   BagGrid.New(parent, cols, rowsInView, cell, gap, host) -> grid   a pool of cells over ns.Bag(), wheel scrolled; the caller anchors grid.frame
 --   BagGrid.Hook(button, host, read)                  read(button) -> a drag or nil; the shared drag, ending in host.drop
 --   BagGrid.Tip(owner, entry, level, anchor, readOnly) a piece's or stack's tooltip, from our own data only
+--   BagGrid.Supply(id) -> name, icon, use line | nil   a supply's words, for the quest page's slots
 --   BagGrid.Menu(owner, entry, host, slotKey)         a piece's right click menu; slotKey set for a worn piece
 --   BagGrid.Compare(tip, entry)                       the lines against the piece ns.PickedFollower would take off (ns.ReplaceSlot);
 --                                                     nothing with no follower or when it wears entry.id; reads only
@@ -53,6 +54,7 @@ local LINES = {
   short = "Not enough scrap.",
   level = "That follower is too low level for this piece.",
   busy = "That follower is away.",
+  bought = "Bought gear cannot be broken down.",
 }
 -- What a call that pays through ns.Grain answers before it gets there. Any other why came from ns.Grain, which has spoken.
 local BEFORE_GRAIN = { unknown = true, intact = true, quality = true, worn = true }
@@ -223,6 +225,13 @@ local BagGrid = {}
 ns.BagGrid = BagGrid
 BagGrid.StatLines = statLines
 BagGrid.Compare = compare
+
+-- A supply's name, icon and use line; nil for an unknown id.
+function BagGrid.Supply(id)
+  local s = SUPPLIES[id]
+  if not s then return nil end
+  return s.name, s.icon, useLine(s)
+end
 
 function BagGrid.Tip(owner, entry, level, anchor, readOnly)
   local tip = M.Compat.Tooltip()

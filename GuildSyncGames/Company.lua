@@ -6,6 +6,10 @@
 -- ns.Purse, ns.CompanyState, ns.CompanyProjects, ns.CompanyDonors, ns.Lottery, ns.BuyItem, ns.Wear, ns.Donate,
 -- ns.BuyTicket, ns.Now and ns.ShownGame are looked up at call time (f7165: Demo.lua wraps them, tests replace them).
 -- Every player name goes through ns.Escape; item titles, colours and icons come from CompanyCore by id (d1589).
+-- Under the project lines, "Next in Expeditions: <text>." while M.Fact("expeditions", "nextopen") answers a non-empty
+-- string, read at each draw and redrawn on the hub's "facts" event for expeditions (issue 6, §1.3); without Expeditions
+-- or that fact the line hides and takes no space. When
+-- the right column runs past the body, the cost line goes first, then this line.
 
 local _, ns = ...
 
@@ -189,7 +193,7 @@ local function drawRow(r, e, st, B, LW, y)
   local priceR = (B.small and btnX or wordR - WORD_W) - 8
   at(r.btn, LEFT + btnX, y)
   r.icon:Show()
-  local _, faction = M.Compat.call("UnitFactionGroup", "player") -- the English token, "Horde" or "Alliance", in any locale
+  local faction = M.Compat.call("UnitFactionGroup", "player") -- the English tag (the 2nd value is localized)
   local icon = ns.CompanyCore.ItemIcon(e.item, faction)
   if e.earned then
     r.icon:SetTexture(e.earned.badge)
@@ -415,6 +419,11 @@ local function drawGranary(B)
   C.donors:SetText(#donors .. (#donors == 1 and " donor" or " donors"))
   C.reward:SetWidth(B.rw)
   C.reward:SetText(prev and ("Next: " .. p.name .. ".") or ("Donors get the " .. p.badgeName .. " badge."))
+  local nx = M.Fact and M.Fact("expeditions", "nextopen")
+  nx = type(nx) == "string" and nx ~= "" and nx or nil
+  C.nextExp:SetWidth(B.rw)
+  C.nextExp:SetText(nx and ("Next in Expeditions: " .. ns.Escape(nx) .. ".") or "")
+  C.nextExp:SetShown(nx ~= nil)
   local built = {}
   for j = 1, #CC.PROJECTS do
     if pr.done and pr.done[j] == true then built[#built + 1] = CC.PROJECTS[j].name end
@@ -542,14 +551,19 @@ function C.Draw()
   drawGranary(B)
   drawLottery(B)
   local g = B.small and 4 or 6
-  local items = { { C.granaryHead, 0, 0 }, { C.projText, 22, g }, { C.reward, 0, 2 }, { C.bar, 0, g },
-    { C.gave, 0, g, true }, { C.built, 0, 4 }, { C.done, 0, g },
+  local items = { { C.granaryHead, 0, 0 }, { C.projText, 22, g }, { C.reward, 0, 2 }, { C.nextExp, 0, 2 },
+    { C.bar, 0, g }, { C.gave, 0, g, true }, { C.built, 0, 4 }, { C.done, 0, g },
     { C.give[1], 0, g }, { C.granaryMsg, 0, g }, { C.lotHead, 0, B.small and 4 or 10 }, { C.sched, 0, 6 },
     { C.status, 0, 4 }, { C.pot, 0, 4 }, { C.tickets, 0, 4 }, { C.buy, 0, g }, { C.lotMsg, 0, g }, { C.wait, 0, g },
     { C.lastHead, 0, g }, { C.last1, 0, 4 }, { C.won, 0, 4 }, { C.last2, 0, 4 }, { C.cost, 0, g } }
   -- the grey cost line shows only when it ends inside the body (f8608, d1883); it is last, so hiding it moves nothing
   local b = columnBottom(items, B.top)
   if b and b > H then C.cost:Hide() end
+  -- then the Expeditions line, when the column still ends past the body (issue 6 §1.3)
+  if b and b > H and C.nextExp:IsShown() then
+    b = columnBottom(items, B.top)
+    if b and b > H then C.nextExp:Hide() end
+  end
   chain(items, x0, B.top)
 end
 
@@ -680,6 +694,8 @@ local function build(body)
   C.donors:SetPoint("TOPRIGHT", C.bar, "BOTTOMRIGHT", 0, -6)
   C.reward = label(body)
   grey(C.reward)
+  C.nextExp = label(body)
+  grey(C.nextExp)
   C.built = label(body)
   C.done = label(body, "GameFontHighlight")
   C.done:SetText("All six projects are built. Thank you, Company.")
@@ -722,3 +738,11 @@ ns.CompanyTab = {
     if C.body and ns.ShownGame and ns.ShownGame() == "company" then C.Draw() end
   end,
 }
+
+-- issue 6: Expeditions calls M.FactsChanged when its influence latch rises; the "Next in Expeditions" line redraws then
+-- (only while the Company tab is on screen, as Refresh does).
+if M.On then
+  M.On("facts", function(id)
+    if id == "expeditions" then M.Safe(ns.CompanyTab.Refresh) end
+  end)
+end
