@@ -7,7 +7,7 @@
 -- ns.W, ns.Regions, ns.BoardCore, ns.Followers, ns.TodayRows, ns.ChancesFor, ns.PowerOf and ns.Send are read at call
 -- time, and so are the optional seams (CheckPack, SupplyChoices, PackSupply, UnpackSupply, IsReserve, StoryStep, StoryHeld,
 -- StoryData, CampStage, ShowAnya, ShowPortrait, KitScore, GoTo, RunOut, LootCore, BookData, GearData, BagGrid,
--- TalentPercent): several load after this file.
+-- TalentPercent, SupplyGain): several load after this file.
 -- The quest page's two supply slots (issue 12) show the picked follower's pack: a click picks a supply from the Company
 -- bag (M.Kit.ContextMenu), a right-click unpacks it, and the chances redraw at once. The pack stays on the follower.
 
@@ -394,14 +394,28 @@ local function talentPct(who, lever)
   return ns.TalentPercent(who.id, lever)
 end
 
--- What a win pays, read the way ns.ApplyRewards reads it; nil when LootCore is absent. The second answer is true when
--- the line names gear, which makes it run to two lines.
-local function rewardsLine(who, row)
+-- v when a whole number from 0 up, else 0: the rule ns.ApplyRewards counts a percent by.
+local function wholePct(v)
+  if type(v) == "number" and v >= 0 and v == math.floor(v) then return v end
+  return 0
+end
+
+-- The packed supplies' percent more on one lever, read as ns.ApplyRewards reads it: a missing seam or a throw is 0.
+local function supplyPct(ids, lever)
+  local pct
+  M.Safe(function() pct = ns.SupplyGain and ns.SupplyGain(ids, lever) end)
+  return wholePct(pct)
+end
+
+-- What a win pays, read the way ns.ApplyRewards reads it; nil when LootCore is absent. ids are the follower's packed
+-- supplies. The second answer is true when the line names gear, which makes it run to two lines.
+local function rewardsLine(who, row, ids)
   local LC = ns.LootCore
   if not LC then return nil end
   local parts = {}
   if who and who.level < ns.FollowerData.MAX_LEVEL then
-    local xp = LC.XP(row.hours, row.danger, WIN_BAND, who.level, row.level, talentPct(who, "xp"))
+    local pct = wholePct(talentPct(who, "xp")) + supplyPct(ids, "xp")
+    local xp = LC.XP(row.hours, row.danger, WIN_BAND, who.level, row.level, pct)
     if xp > 0 then parts[1] = xp .. " XP" end
   end
   parts[#parts + 1] = LC.Grain(row.hours, row.danger, isGreedy(who), talentPct(who, "grain")) .. " grain"
@@ -1023,7 +1037,7 @@ local function fillPage(ui)
 
   page.dropped:SetText("A packed supply is no longer in " .. W.Name["Company bag"] .. ".")
   page.dropped:SetShown(who ~= nil and ui.open.checked[who.id] == true)
-  local rewards, tall = rewardsLine(who, row)
+  local rewards, tall = rewardsLine(who, row, who and packedIds(who.id) or {})
   page.rewards:SetText(rewards or "")
   page.rewards:SetShown(rewards ~= nil)
   page.rewardsLabel:SetShown(rewards ~= nil)

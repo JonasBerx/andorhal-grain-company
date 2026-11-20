@@ -1,10 +1,10 @@
--- GuildSyncExpeditions CampSoon.lua: the camp's four ladder buildings, ns.CampSoon (0.19 plan, slice V2; issue 6).
---   CampSoon.Build(f)     the four buildings on f, the 726 x 508 box Page.lua scales
+-- GuildSyncExpeditions CampSoon.lua: the camp's five ladder buildings, ns.CampSoon (0.19 plan, slice V2; issue 6).
+--   CampSoon.Build(f)     the five buildings on f, the 726 x 508 box Page.lua scales
 --   CampSoon.Refresh(f)   greys and locks each building again, or opens it; Camp.Refresh calls it
 -- f.soon = { [key] = button }, each button with art, hl, lock, label, and fx once clicked.
 -- Each building has an influence step (unlock) and the place it opens (opens, a ns.GoTo place). While ns.Opened(unlock)
 -- is false it is greyed and locked, its tooltip names the Games project that opens it (or a later update, for a step
--- reached before its content shipped), and a click shakes it. Once open, a click calls ns.GoTo(opens). Nothing is saved.
+-- reached before its content shipped), and a click shakes it. Once open, a click calls ns.GoTo(opens, opts). Nothing is saved.
 -- ns.Opened, ns.Unlocked and ns.InfluenceCore are read at call time: Influence.lua loads after this file.
 
 local _, ns = ...
@@ -19,6 +19,9 @@ local SHAKE_S = 0.08
 local LOCKED_SHADE = 0.95
 
 local SOON = {
+  { key = "mill", name = "Mill", atlas = "GarrBuilding_LumberMill_1_H_Map", x = 345, y = 130, h = 80,
+    icon = "Interface\\Icons\\INV_Misc_Food_59", unlock = "supplies", opens = "quartermaster", opts = { supplies = true },
+    about = "More supplies at the Quartermaster.", click = "<Click to open the Quartermaster's supplies>" },
   { key = "apothecary", name = "Apothecary", atlas = "GarrBuilding_Alchemy_1_H_Map", x = 245, y = 262, h = 79,
     icon = "Interface\\Icons\\Trade_Alchemy", unlock = "apothecary", opens = "quartermaster",
     about = "Herbs and charms for the road.", click = "<Click to open the Quartermaster>" },
@@ -117,7 +120,7 @@ end
 local function click(b, row)
   if type(ns.Influence) == "function" then ns.Influence() end
   if not opened(row) then return shake(b) end
-  if type(ns.GoTo) == "function" then ns.GoTo(row.opens) end
+  if type(ns.GoTo) == "function" then ns.GoTo(row.opens, row.opts) end
 end
 
 local function newBuilding(f, row)

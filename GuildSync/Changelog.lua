@@ -8,6 +8,13 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.20.1", lines = {}, addons = {
+    { folder = "GuildSyncExpeditions", lines = {
+      "With Andorhal's mill built, the Quartermaster sells the War Horn and Ritual Chalk: +10% success on Assaults or Rituals.",
+      "The Field Journal gives a follower 25% more XP from one expedition; the Spoils Sack finds Common and Uncommon gear 50% more often.",
+      "The camp has a Mill: it opens with Andorhal's mill and leads to the Quartermaster's supplies.",
+    } },
+  } },
   { version = "0.20.0", lines = {}, addons = {
     { folder = "GuildSyncExpeditions", lines = {
       "Followers have talent trees: Vanguard, Pathfinder or Arcanum, by class, with 2 talent points a level from level 2.",

@@ -11,7 +11,8 @@
 -- live: the step's content is in this version. A step that is not live is held: its line is said once it goes live.
 -- early: a step whose content waits, with a line that is true already; it is said, but the step stays shut (not live).
 -- sayKey: the mark the said line leaves (Influence.lua's said set), the step's key when absent. An early line has its
--- own mark, so the step's real line is still said once the step goes live.
+-- own mark, so the step's real line is still said once the step goes live. A reworded line gets a new sayKey too, so a
+-- client that already said the old line hears the new one once.
 
 local _, ns = ...
 
@@ -33,8 +34,8 @@ local PROJECTS = {
 local GROWS = "The Company's influence grows: "
 
 IC.STEPS = {
-  { built = 1, key = "supplies", text = "more supplies at the Quartermaster",
-    say = GROWS .. "more supplies at the Quartermaster.", live = true },
+  { built = 1, key = "supplies", text = "the Mill", say = GROWS .. "the Mill opens at the camp.", live = true,
+    sayKey = "mill" },
   -- Hillsbrad waits for the follower cap raise (issue 19); its early line is true now. When its expeditions ship, the
   -- step goes live with its own line and drops early and sayKey.
   { built = 2, key = "hillsbrad", text = "Hillsbrad Foothills",

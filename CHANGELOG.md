@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.1
+
+### Expeditions
+
+- With Andorhal's mill built, the Quartermaster sells the War Horn and Ritual Chalk: +10% success on Assaults or Rituals.
+- The Field Journal gives a follower 25% more XP from one expedition; the Spoils Sack finds Common and Uncommon gear 50% more often.
+- The camp has a Mill: it opens with Andorhal's mill and leads to the Quartermaster's supplies.
+
 ## 0.20.0
 
 ### Expeditions

@@ -67,7 +67,8 @@ local function demoBag(vesper)
   put({ row = code("legs", 2, 3), temper = 0 })
   put({ kind = "salvage", key = 1, n = 24 })
   put({ kind = "salvage", key = 2, n = 9 })
-  for _, s in ipairs({ { "rations", 6 }, { "bandage", 5 }, { "whetstone", 3 }, { "candle", 2 }, { "scoutchart", 2 }, { "gravemoss", 1 } }) do
+  for _, s in ipairs({ { "rations", 6 }, { "bandage", 5 }, { "whetstone", 3 }, { "candle", 2 }, { "scoutchart", 2 }, { "gravemoss", 1 },
+    { "warhorn", 2 }, { "chalk", 2 }, { "journal", 2 }, { "sack", 2 } }) do
     put({ kind = "supply", key = s[1], n = s[2] })
   end
   put({ kind = "relic", key = "t1", n = 2 })

@@ -22,15 +22,23 @@ GC.GREEN = 2
 -- unlock: the influence step (ns.InfluenceCore) that puts the row on sale; a row with none is always on sale.
 GC.SHOP_SUPPLIES = {
   { id = "rations", name = "Field Rations", price = 15, icon = "Interface\\Icons\\INV_Misc_Food_59", note = "+5% success" },
+  { id = "warhorn", name = "War Horn", price = 25, icon = "Interface\\Icons\\INV_Misc_Horn_01",
+    note = "+10% on Assaults", unlock = "supplies" },
+  { id = "chalk", name = "Ritual Chalk", price = 25, icon = "Interface\\Icons\\INV_Misc_Dust_02",
+    note = "+10% on Rituals", unlock = "supplies" },
+  { id = "scoutchart", name = "Scout's Chart", price = 25, icon = "Interface\\Icons\\INV_Misc_Map_01",
+    note = "+10% on Scouting", unlock = "apothecary" },
   { id = "bandage", name = "Linen Bandage", price = 10, icon = "Interface\\Icons\\INV_Misc_Bandage_12", note = "Halves wounds" },
   { id = "whetstone", name = "Whetstone Kit", price = 20, icon = "Interface\\Icons\\INV_Stone_SharpeningStone_01",
     note = "Halves gear wear", unlock = "supplies" },
   { id = "candle", name = "Spirit Candle", price = 40, icon = "Interface\\Icons\\INV_Misc_Candle_01",
     note = "Halves the death chance", unlock = "supplies" },
-  { id = "scoutchart", name = "Scout's Chart", price = 25, icon = "Interface\\Icons\\INV_Misc_Map_01",
-    note = "+10% on Scouting", unlock = "apothecary" },
   { id = "gravemoss", name = "Grave-moss Charm", price = 150, icon = "Interface\\Icons\\INV_Misc_Herb_07",
     note = "No permanent death", unlock = "apothecary" },
+  { id = "journal", name = "Field Journal", price = 20, icon = "Interface\\Icons\\INV_Misc_Book_11",
+    note = "+25% XP", unlock = "supplies" },
+  { id = "sack", name = "Spoils Sack", price = 30, icon = "Interface\\Icons\\INV_Misc_Bag_08",
+    note = "+50% gear finds", unlock = "supplies" },
 }
 
 local WEAR_LEVEL = { 1, 6 }

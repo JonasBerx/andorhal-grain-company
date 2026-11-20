@@ -30,7 +30,8 @@ local SCRAP = { [1] = "Rusted salvage", [2] = "Iron salvage" }
 local SCRAP_ICON = { [1] = "Interface\\Icons\\INV_Misc_Gear_02", [2] = "Interface\\Icons\\INV_Ingot_Iron" }
 local UNKNOWN_ICON = "Interface\\Icons\\INV_Misc_QuestionMark"
 
--- Every supply the game can hand out. The chart has no use here: its line names a word from ns.W, see useLine.
+-- Every supply the game can hand out. A kind supply (chart, horn, chalk) has no use here: it has a kind, and useLine
+-- builds its line from ns.W.Name[kind].
 local SUPPLIES = {
   rations = { name = "Field Rations", icon = "Interface\\Icons\\INV_Misc_Food_59",
     use = "Use: +5% chance of success on one expedition." },
@@ -40,9 +41,15 @@ local SUPPLIES = {
     use = "Use: Halves the chance of broken or lost gear on one expedition." },
   candle = { name = "Spirit Candle", icon = "Interface\\Icons\\INV_Misc_Candle_01",
     use = "Use: Halves the chance of death on one expedition." },
-  scoutchart = { name = "Scout's Chart", icon = "Interface\\Icons\\INV_Misc_Map_01" },
+  scoutchart = { name = "Scout's Chart", icon = "Interface\\Icons\\INV_Misc_Map_01", kind = "Scout" },
+  warhorn = { name = "War Horn", icon = "Interface\\Icons\\INV_Misc_Horn_01", kind = "Raid" },
+  chalk = { name = "Ritual Chalk", icon = "Interface\\Icons\\INV_Misc_Dust_02", kind = "Rite" },
   gravemoss = { name = "Grave-moss Charm", icon = "Interface\\Icons\\INV_Misc_Herb_07",
     use = "Use: Keeps a follower from dying for good on one expedition." },
+  journal = { name = "Field Journal", icon = "Interface\\Icons\\INV_Misc_Book_11",
+    use = "Use: +25% XP from one expedition." },
+  sack = { name = "Spoils Sack", icon = "Interface\\Icons\\INV_Misc_Bag_08",
+    use = "Use: Finds Common and Uncommon gear 50% more often on one expedition." },
 }
 
 local WHITE = "ffffff"
@@ -77,7 +84,7 @@ local function refuse(why, viaGrain)
 end
 
 local function useLine(supply)
-  return supply.use or ("Use: +10% chance of success on one " .. ns.W.Name.Scout .. " expedition.")
+  return supply.use or ("Use: +10% chance of success on one " .. ns.W.Name[supply.kind] .. " expedition.")
 end
 
 -- ns.BookData loads after this file and may be absent.

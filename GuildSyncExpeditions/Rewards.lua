@@ -3,8 +3,9 @@
 --   ns.Finds() -> { { row, fid, day, region }, ... }   the newest 5 blue finds, newest first, copies; a read never writes
 -- ns.LootCore, GearData, GearCore, AddGear, AddStack, Gear, Bag, TraitEvents and the later slices' GrantSupply, GrantMap,
 -- GrantRelic, GrantSetPiece, GrantQuest, OfferRecruit, PendingRecruit and StoryRun are read at call time; the hooks are
--- skipped while they are missing. So are the talent reads ns.TalentPercent and ns.TalentFind (issue 13): missing, throwing
--- or answering anything but a whole number from 0 up, they count as 0 and the run pays today's numbers.
+-- skipped while they are missing. So are the talent reads ns.TalentPercent and ns.TalentFind (issue 13) and the supply read
+-- ns.SupplyGain: missing, throwing or answering anything but a whole number from 0 up, they count as 0 and the run pays
+-- today's numbers.
 
 local _, ns = ...
 if not ns.M then return end
@@ -82,11 +83,15 @@ local function safely(fn, ...)
   return a, b
 end
 
-local function talentPct(fn, fid, key)
-  local pct = safely(fn, fid, key)
+local function wholePct(pct)
   if type(pct) == "number" and pct >= 0 and pct == math.floor(pct) then return pct end
   return 0
 end
+
+local function talentPct(fn, fid, key) return wholePct(safely(fn, fid, key)) end
+
+-- The run's packed supplies (run.supplies, saved at the send) on one lever.
+local function supplyPct(run, lever, reward) return wholePct(safely(ns.SupplyGain, run.supplies, lever, reward)) end
 
 local function lost(name)
   ns.Say(ns.W.Name["Company bag"] .. " is full: " .. name .. " is lost.")
@@ -143,7 +148,7 @@ end
 local function eachDrop(reward, fid, run, traits, each)
   local LC = ns.LootCore
   local stream = RC.Stream(RC.Seed(reward, run.start, run.seed))
-  local pct = LC.PctFor(reward, traits, talentPct(ns.TalentFind, fid, reward))
+  local pct = LC.PctFor(reward, traits, talentPct(ns.TalentFind, fid, reward) + supplyPct(run, "find", reward))
   local n = LC.Drops(LC.Rate(reward, run.danger, run.capstone, pct, run.hours), stream)
   for _ = 1, n do each(stream) end
 end
@@ -204,7 +209,8 @@ function ns.ApplyRewards(fid, run, outcome)
   local band = outcome.band
   local paid = { credited = false, blue = false }
 
-  local xp = LC.XP(run.hours, run.danger, band, f.level, run.level, talentPct(ns.TalentPercent, fid, "xp"))
+  local xp = LC.XP(run.hours, run.danger, band, f.level, run.level,
+    talentPct(ns.TalentPercent, fid, "xp") + supplyPct(run, "xp"))
   if xp > 0 then f.level, f.xp = FC.GainXP(f.level, f.xp, xp) end
   local salvage = LC.Salvage(run.hours, band, talentPct(ns.TalentPercent, fid, "salvage"))
   if salvage > 0 then

@@ -1,5 +1,6 @@
 -- GuildSyncExpeditions Supplies.lua: what a follower packs for an expedition (0.19 plan, Seams 5, 6, 8, 9).
 --   ns.SupplyMods(ids, row) -> mods                    ns.SupplyChoices(fid) -> { { id, n, packed, name }, ... }
+--   ns.SupplyGain(ids, lever, reward) -> n   the summed percent more on lever "xp", or "find" for reward; 0 when unknown
 --   ns.PackSupply(fid, id), ns.GrantSupply(id, n), ns.BuySupply(id) (third value true when ns.Grain has already said the line;
 --   "unknown" for a shop row whose influence step is not open, GC.SupplyOnSale)
 --   ns.CheckPack(fid) -> { droppedId, ... }            ns.ClearPack(fid)
@@ -16,16 +17,25 @@ local GC, FC = ns.GearCore, ns.FollowerCore
 local CELLS = 64
 local PACK_MAX = 2
 
+-- +10% success on an expedition of one kind only.
+local function onKind(kind)
+  return function(row)
+    if row and row.kind == kind then return { success = 10 } end
+    return {}
+  end
+end
+
 local SUPPLIES = {
   { id = "rations", name = "Field Rations", mods = function() return { success = 5 } end },
   { id = "bandage", name = "Linen Bandage", mods = function() return { woundPct = 50 } end },
   { id = "whetstone", name = "Whetstone Kit", mods = function() return { gearPct = 50 } end },
   { id = "candle", name = "Spirit Candle", mods = function() return { deathPct = 50 } end },
-  { id = "scoutchart", name = "Scout's Chart", mods = function(row)
-    if row and row.kind == "Scout" then return { success = 10 } end
-    return {}
-  end },
+  { id = "scoutchart", name = "Scout's Chart", mods = onKind("Scout") },
   { id = "gravemoss", name = "Grave-moss Charm", mods = function() return { noPerma = true } end },
+  { id = "warhorn", name = "War Horn", mods = onKind("Raid") },
+  { id = "chalk", name = "Ritual Chalk", mods = onKind("Rite") },
+  { id = "journal", name = "Field Journal", mods = function() return {} end, gain = { xp = 25 } },
+  { id = "sack", name = "Spoils Sack", mods = function() return {} end, gain = { find = { white = 50, green = 50 } } },
 }
 
 local BY_ID = {}
@@ -67,6 +77,18 @@ function ns.SupplyMods(ids, row)
     end
   end
   return out
+end
+
+function ns.SupplyGain(ids, lever, reward)
+  local sum = 0
+  if type(ids) ~= "table" then return sum end
+  for _, id in ipairs(ids) do
+    local gain = BY_ID[id] and BY_ID[id].gain
+    local v = gain and gain[lever]
+    if lever == "find" then v = type(v) == "table" and v[reward] or nil end
+    if type(v) == "number" then sum = sum + v end
+  end
+  return sum
 end
 
 function ns.SupplyChoices(fid)
