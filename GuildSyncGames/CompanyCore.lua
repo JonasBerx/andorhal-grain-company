@@ -56,7 +56,7 @@ local KEY_MAX = 64
 local AT_DIGITS = 10
 local FUTURE = 300 -- a hide entry stamped more than this past now is ignored
 
-CC.TICKET_PRICE = 10
+CC.TICKET_PRICE = 100
 CC.TICKETS_MAX = 10
 CC.SETTLE_AFTER = 7200
 CC.FIRST_WEEK = FIRST_WEEK

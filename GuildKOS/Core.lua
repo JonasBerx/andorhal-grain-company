@@ -36,11 +36,33 @@ end
 
 -- The guild's key as the hub keeps it (CommRegistry.lua:70, f5226), or nil while the guild name is unread. Read as
 -- the hub reads it (Roster.lua:72): GetGuildInfo's name and realm, the realm falling back to the character's.
+-- 1.60.1.71037 answers "" for the realm: the realm of the one saved list under this guild's name stands in, else the
+-- last realm read (GuildKOSDB.realm). With neither the key stays unread (no stand-in realm: it would start a second,
+-- empty list once the realm reads again).
+local function savedRealm(db, name)
+  local prefix, found = name .. "..", nil
+  for key in pairs(db.guilds) do
+    if type(key) == "string" and #key > #prefix and key:sub(1, #prefix) == prefix then
+      local realm = key:sub(#prefix + 1)
+      if found and found ~= realm then found = false break end
+      found = realm
+    end
+  end
+  if found then return found end
+  if type(db.realm) == "string" and db.realm ~= "" then return db.realm end
+  return nil
+end
+
 function Core.GuildKey()
   if not ns.Hub then return nil end
   local name, _, _, realm = ns.Hub.Call("GetGuildInfo", "player")
   if type(name) ~= "string" or name == "" then return nil end
-  if type(realm) ~= "string" or realm == "" then realm = ns.Hub.Call("GetRealmName") end
+  if type(realm) ~= "string" or realm == "" then
+    realm = ns.Hub.Call("GetRealmName")
+    if type(realm) ~= "string" or realm == "" then realm = ns.Hub.Call("GetNormalizedRealmName") end
+    local db = Core.DB()
+    if type(realm) == "string" and realm ~= "" then db.realm = realm else realm = savedRealm(db, name) end
+  end
   if type(realm) ~= "string" or realm == "" then return nil end
   return name .. ".." .. realm
 end

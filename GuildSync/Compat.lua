@@ -330,6 +330,12 @@ function Compat.Player()
   local p = {}
   p.name = str((call("UnitName", "player")))
   p.realm = str((call("GetRealmName")))
+  -- 1.60.1.71037 answers "" for the realm (and UnitName's second return is the surname): the saved realm stands in
+  -- (Core.lua ns.SavedRealm), marked realmSaved so it is never remembered as a read
+  if not p.realm and p.name and type(ns.SavedRealm) == "function" then
+    p.realm = ns.SavedRealm(p.name)
+    p.realmSaved = p.realm ~= nil or nil
+  end
   p.guid = str((call("UnitGUID", "player")))
   local _, classToken = call("UnitClass", "player")
   p.class = str(classToken)

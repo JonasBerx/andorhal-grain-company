@@ -1,6 +1,7 @@
 -- GuildSyncExpeditions Gear.lua: the Company bag and what followers wear (0.19 plan, Seams 7, 8, 9).
 --   ns.Bag() -> { [cell] = copy }                      ns.Gear(id) -> copy | nil
 --   ns.StackCount(kind, key) -> n                      ns.KitScore(fid) -> n
+--   ns.StatBonus(fid[, slot, piece]) -> n              the Power the worn +stats give the follower's class kind (GC.StatPower)
 --   ns.AddStack(kind, key, n), ns.TakeStack(kind, key, n), ns.GrantMaterial(tier, n), ns.AddGear(spec)
 --   ns.Equip(fid, id), ns.Unequip(fid, slot), ns.UnequipAll(fid), ns.MovePiece(id, cell)
 --   ns.Temper(id), ns.Repair(id, how), ns.Buy(code) (third value true when ns.Grain has already said the line), ns.OnSale(row), ns.SellPiece(id), ns.BreakDown(id)
@@ -255,13 +256,26 @@ function ns.StackCount(kind, key)
   return total
 end
 
-function ns.KitScore(fid)
-  local f = ns.Follower(fid)
-  if not f then return 0 end
+local function wornBySlot(f)
   local p = bag()
   local pieces = {}
   for _, s in ipairs(GD.SLOTS) do pieces[s.key] = wornPiece(p, f, s.key) end
-  return GC.KitScore(pieces)
+  return pieces
+end
+
+function ns.KitScore(fid)
+  local f = ns.Follower(fid)
+  if not f then return 0 end
+  return GC.KitScore(wornBySlot(f))
+end
+
+-- With a slot given, the answer is read as if piece (or nothing, for nil) were worn there; nothing is saved.
+function ns.StatBonus(fid, slot, piece)
+  local f = ns.Follower(fid)
+  if not f then return 0 end
+  local pieces = wornBySlot(f)
+  if slot then pieces[slot] = piece end
+  return GC.StatPower(pieces, ns.FollowerData.KIND[f.class])
 end
 
 function ns.AddStack(kind, key, n)

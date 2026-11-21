@@ -4,8 +4,11 @@
 --   BagGrid.Tip(owner, entry, level, anchor, readOnly) a piece's or stack's tooltip, from our own data only
 --   BagGrid.Supply(id) -> name, icon, use line | nil   a supply's words, for the quest page's slots
 --   BagGrid.Menu(owner, entry, host, slotKey)         a piece's right click menu; slotKey set for a worn piece
---   BagGrid.Compare(tip, entry)                       the lines against the piece ns.PickedFollower would take off (ns.ReplaceSlot);
+--   BagGrid.Compare(tip, entry)                       the lines against the piece ns.PickedFollower would take off (ns.ReplaceSlot),
+--                                                     the last one the change in the Power its stats give (ns.StatBonus);
 --                                                     nothing with no follower or when it wears entry.id; reads only
+--   BagGrid.StatLines(tip, piece, plain)              a piece's base line and +stat lines; a +stat that gives ns.PickedFollower
+--                                                     no Power is grey, unless plain
 --   BagGrid.Build(f, bar), BagGrid.Refresh(f)         the Storage page, host f.bag, the count in bar (left of bar.barracks when the band made one);
 --                                                     Sell All Poor and Repair All right of the grid (host.sellPoor, host.repairAll)
 -- A host is f.bag here or f.char on the Barracks; see the plan's Seams for its fields.
@@ -121,13 +124,26 @@ local function setCount(owner, set)
   return n
 end
 
+-- The stat weights of the follower a piece is weighed for (ns.PickedFollower, as the comparison); nil with none.
+local function pickedWeights()
+  local follower = ns.PickedFollower and ns.PickedFollower()
+  local D = ns.FollowerData
+  return follower and D.STAT_WEIGHT[D.KIND[follower.class]]
+end
+
 -- A piece's base line and +stat lines. The Quartermaster adds the same lines through BagGrid.StatLines.
-local function statLines(tip, piece)
+-- A +stat that gives the picked follower no Power is grey. With no follower, or plain (a guildmate's piece), all are green.
+local function statLines(tip, piece, plain)
   local s = ns.GearCore.PieceStats(piece)
+  local weights = not plain and pickedWeights() or nil
   if s.armor then tip:AddLine(s.armor .. " Armor", 1, 1, 1) end
   if s.low then tip:AddLine(s.low .. " - " .. s.high .. " Damage", 1, 1, 1) end
   for _, stat in ipairs(s.stats) do
-    tip:AddLine("+" .. stat.n .. " " .. stat.name, 0.12, 1, 0)
+    if weights and not weights[stat.name] then
+      tip:AddLine("+" .. stat.n .. " " .. stat.name, 0.62, 0.62, 0.62)
+    else
+      tip:AddLine("+" .. stat.n .. " " .. stat.name, 0.12, 1, 0)
+    end
   end
 end
 
@@ -173,6 +189,8 @@ local function compare(tip, entry)
   for _, s in ipairs(a.stats) do have[s.name] = s.n end
   for _, s in ipairs(b.stats) do had[s.name] = s.n end
   for _, stat in ipairs(GC.STATS) do change(tip, (have[stat] or 0) - (had[stat] or 0), " " .. stat) end
+  -- The follower's whole kit with each side in the slot: the stats' Power is rounded down over the kit, never per piece.
+  change(tip, ns.StatBonus(follower.id, slot, new) - ns.StatBonus(follower.id, slot, old), " Power from stats")
 end
 
 local function pieceTip(tip, owner, entry, level, readOnly)
@@ -187,7 +205,7 @@ local function pieceTip(tip, owner, entry, level, readOnly)
   tip:SetText(row.name, r, g, b)
   tip:AddLine(SLOT_LABEL[GC.KIND[row.slot]], 1, 1, 1)
   tip:AddLine(W.Name["piece value"] .. " " .. GC.Value({ row = entry.row, temper = entry.temper }), 1, 0.82, 0)
-  statLines(tip, entry)
+  statLines(tip, entry, readOnly)
   if entry.temper and entry.temper > 0 then tip:AddLine("Tempered +" .. entry.temper, 0.12, 1, 0) end
   tip:AddLine(W.Requires(need, level >= need), 1, 1, 1)
   if entry.broken then tip:AddLine("Broken", 1, 0.13, 0.13) end

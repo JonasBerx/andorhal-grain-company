@@ -135,12 +135,16 @@ function GC.Sellable(row)
   return price and math.floor(price / SELL_DIVISOR)
 end
 
--- Gear stats, shown only: nothing reads them for odds, Power or prices. From a piece's row and temper, never an item id.
+-- Gear stats. From a piece's row and temper, never an item id. Armor and Damage are shown only. The five +stats give Power
+-- through GC.StatPower, by the follower's class kind; prices, repair, temper, sell values and the kit score never read them.
 --   GC.STATS                                  the five +stat names, in the order the screens list them
 --   GC.PieceStats(piece) -> { armor = n|nil, low = n|nil, high = n|nil, stats = { { name = "Stamina", n = 3 }, ... } }
 --                                             a broken piece answers as if intact; an unknown row answers { stats = {} }
 --   GC.StatTotals({ [slot] = piece }) -> { armor = n, low = n|nil, high = n|nil, stats = { [name] = n } }
 --                                             a broken piece adds nothing; Damage is the main hand's only
+--   GC.StatPower({ [slot] = piece }, kind) -> n   the Power the worn +stats give a class kind ("Might", "Cunning", "Lore"):
+--                                             floor(sum of stat x FollowerData.STAT_WEIGHT[kind][stat] / STAT_DIVISOR);
+--                                             0 for an unknown kind or no table of pieces
 GC.STATS = { "Strength", "Agility", "Intellect", "Stamina", "Spirit" }
 
 local ARMOR = { chest = 8, legs = 7, head = 6, shoulder = 5, feet = 5, hands = 4, waist = 3, wrist = 3, back = 2 }
@@ -191,4 +195,16 @@ function GC.StatTotals(pieces)
     end
   end
   return out
+end
+
+-- ns.FollowerData is read at call time: this file takes nothing from it at load.
+function GC.StatPower(pieces, kind)
+  local D = ns.FollowerData
+  local weights = D.STAT_WEIGHT[kind]
+  if type(pieces) ~= "table" or not weights then return 0 end
+  local sum = 0
+  for name, n in pairs(GC.StatTotals(pieces).stats) do
+    sum = sum + n * (weights[name] or 0)
+  end
+  return math.floor(sum / D.STAT_DIVISOR)
 end

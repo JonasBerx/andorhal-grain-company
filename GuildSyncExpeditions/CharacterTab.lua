@@ -964,7 +964,9 @@ local function fillStats(f, size, x, show)
   local function add(label, value, hex)
     rows[#rows + 1] = { label = label, value = value, hex = hex }
   end
-  add("Power", tostring(ns.PowerOf(x.id)))
+  -- The stats' share sits on the Power row: the panel's 12 rows are all the small layout holds.
+  local fromStats = ns.StatBonus(x.id)
+  add("Power", ns.PowerOf(x.id) .. (fromStats > 0 and (" (+" .. fromStats .. " from stats)") or ""))
   add(W.Name["kit score"], tostring(ns.KitScore(x.id)))
   local kind = D.KIND[x.class]
   if kind then add(kind, "+" .. D.AFFINITY .. " Power on " .. ROAD[kind]) end
@@ -978,9 +980,11 @@ local function fillStats(f, size, x, show)
   local totals = GC.StatTotals(pieces)
   if totals.armor > 0 then add("Armor", tostring(totals.armor)) end
   if totals.low then add("Damage", totals.low .. " - " .. totals.high) end
+  -- Green for a stat that gives this follower's class kind Power, grey for one that gives it none.
+  local weights = D.STAT_WEIGHT[kind] or {}
   for _, name in ipairs(GC.STATS) do
     local stat = totals.stats[name]
-    if stat and stat > 0 then add(name, "+" .. stat, READY) end
+    if stat and stat > 0 then add(name, "+" .. stat, weights[name] and READY or RESERVE) end
   end
   -- One step for every row: the full step when they fit, tighter when they would reach the bar or the held line.
   local ROW_H = 14

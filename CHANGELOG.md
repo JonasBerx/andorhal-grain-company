@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.2
+
+- With today's game client naming no realm, GuildSync and Kill on Sight use the realm they saved before, so your
+  characters and the KOS list come back.
+
+### Expeditions
+
+- Gear stats give Power by class: Strength for Might, Agility for Cunning, Intellect for Lore. The Barracks and gear tooltips show which stats count.
+
+### Games
+
+- A lottery ticket costs 100 grain, up from 10, and the pot grows by 100 a ticket.
+
 ## 0.20.1
 
 ### Expeditions

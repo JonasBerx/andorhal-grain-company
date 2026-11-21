@@ -8,6 +8,16 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.20.2", lines = {
+    "With today's game client naming no realm, GuildSync and Kill on Sight use the realm they saved before, so your characters and the KOS list come back.",
+  }, addons = {
+    { folder = "GuildSyncExpeditions", lines = {
+      "Gear stats give Power by class: Strength for Might, Agility for Cunning, Intellect for Lore. The Barracks and gear tooltips show which stats count.",
+    } },
+    { folder = "GuildSyncGames", lines = {
+      "A lottery ticket costs 100 grain, up from 10, and the pot grows by 100 a ticket.",
+    } },
+  } },
   { version = "0.20.1", lines = {}, addons = {
     { folder = "GuildSyncExpeditions", lines = {
       "With Andorhal's mill built, the Quartermaster sells the War Horn and Ritual Chalk: +10% success on Assaults or Rituals.",

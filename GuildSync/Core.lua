@@ -114,10 +114,30 @@ end
 
 local charKey
 
+-- The realm to use while the client names none (Compat.Player), in this order: the realm of the saved character with
+-- this name; the last realm the client read (GuildSyncDB3.realm); the one realm every saved character shares (an
+-- account saved before GuildSyncDB3.realm existed). nil when none answers; characters on two realms answer nothing.
+function ns.SavedRealm(name)
+  local db = ns.SavedDB()
+  if type(db) ~= "table" or type(name) ~= "string" or name == "" then return nil end
+  local prefix, mine, every = name .. "-", nil, nil
+  for key in pairs(type(db.chars) == "table" and db.chars or {}) do
+    local realm = type(key) == "string" and key:match("^[^-]+%-(.+)$") or nil
+    if realm then
+      if key:sub(1, #prefix) == prefix then mine = (mine == nil or mine == realm) and realm or false end
+      every = (every == nil or every == realm) and realm or false
+    end
+  end
+  if mine then return mine end
+  if type(db.realm) == "string" and db.realm ~= "" then return db.realm end
+  return every or nil
+end
+
 -- This character's record, refreshed. Returns nil while the client cannot name the player yet.
 function ns.Char()
   local db = ns.DB()
   local p = Compat.Player()
+  if p.realm and not p.realmSaved then db.realm = p.realm end -- remembered for a client that names no realm
   if p.name and p.realm then charKey = p.name .. "-" .. p.realm end
   if not charKey then return nil end
   local c = db.chars[charKey]

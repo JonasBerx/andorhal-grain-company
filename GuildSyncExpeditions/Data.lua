@@ -24,4 +24,12 @@ ns.FollowerData = {
   CAP_USE = 3, CAP_RESERVE = 2, CAP_ALL = 5, CAP_BOUGHT = 3,
   MAX_LEVEL = 10, XP_BASE = 100, XP_STEP = 75, LEVEL_POWER = 5, AFFINITY = 8,
   TRAIT_POWER = { veteran = { power = 5 }, quiet = { power = 4, rowKind = "Scout" } },
+  -- What a worn gear stat is worth to a class kind, in tenths; a stat a kind does not name counts for nothing.
+  -- Stat Power = floor(sum of stat x weight / STAT_DIVISOR), read by ns.GearCore.StatPower (issue 43).
+  STAT_WEIGHT = {
+    Might = { Strength = 10, Agility = 4, Stamina = 6 },
+    Cunning = { Strength = 4, Agility = 10, Stamina = 6 },
+    Lore = { Intellect = 10, Stamina = 4, Spirit = 6 },
+  },
+  STAT_DIVISOR = 40,
 }
