@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.3
+
+- A new install works on today's game client, which names no realm: GuildSync and Kill on Sight no longer wait for one.
+
+### Kill on Sight
+
+- The Kill on Sight page says what an empty List, Waiting or Mine means, and the List says when it waits for the guild roster.
+
 ## 0.20.2
 
 - With today's game client naming no realm, GuildSync and Kill on Sight use the realm they saved before, so your

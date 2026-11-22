@@ -60,6 +60,14 @@ local MARK_H2, STRIP_Y = 116, 89       -- a mark card with buttons: the 84 block
 local WAIT_TOP, MINE_TOP = 30, 34        -- the first mark card under Waiting's header and under "Your marks"
 local OFFICER_NOTE = "Members see only their own marks here."
 local MEMBER_NOTE = "Only your own marks show here."
+-- The empty and not-ready lines (issue 44 step s1): each tab says what an empty view means.
+local EMPTY_LIST = "No one is on the list yet. Target an enemy player and click Mark as bounty, or type a name in the "
+  .. "first box."
+local WAIT_EMPTY = { officer = "No marks wait. When a member marks a player, it shows here.",
+  member = "You have no marks waiting for an officer." }
+local MINE_EMPTY = { officer = "Your marks go straight on the list, so none wait here.",
+  member = "You have no marks. A mark you make shows here until an officer decides." }
+local NOTE_H = 28                        -- an empty or not-ready line and the gap under it
 local TONES = { waiting = "gold", approved = "green", rejected = "red", removed = "grey" }
 local TABS = { { key = "list", text = "List" }, { key = "waiting", text = "Waiting" }, { key = "kills", text = "Kills" },
   { key = "hunters", text = "Hunters" }, { key = "mine", text = "Mine" } }
@@ -317,6 +325,23 @@ local function textLine(f, font, x, y, right)
   return fs
 end
 
+-- A muted line that wraps, anchored to both sides of parent at y, hidden until set (issue 44 s1: the empty and
+-- not-ready lines).
+local function noteLine(parent, y)
+  local fs = textLine(parent, "GameFontHighlightSmall", 4, y, -4)
+  fs:SetWordWrap(true)
+  fs:SetTextColor(DIM[1], DIM[2], DIM[3])
+  fs:Hide()
+  return fs
+end
+
+-- Shows text on a note line, or hides it for nil; answers the height it takes (NOTE_H or 0).
+local function setNote(fs, text)
+  fs:SetText(text or "")
+  fs:SetShown(text ~= nil)
+  return text and NOTE_H or 0
+end
+
 -- The content height of the active tab and the plain frame's clamp.
 local function setContentHeight(page, child, h)
   child:SetSize((page.width or PAGE_W) - page.boxRight, math.max(1, h))
@@ -337,7 +362,7 @@ local function layout(page)
   local markW = (page.width or PAGE_W) - BOX_RIGHT
   if page.mark then page.mark:SetWidth(markW) end
   if page.markBox then page.markBox:SetWidth(math.min(MARK_BOX_W, markW - MARK_BOX_LESS)) end
-  local y = 0
+  local y = page.noteH or 0   -- the empty or not-ready line above the cards (s1)
   for i = 1, page.n do
     local cd = page.cards[i]
     local f = cd.frame
@@ -664,6 +689,13 @@ local function refreshList(page, roster, now)
   page.count:SetText(Page.Targets(n))
   page.alerts:SetText(ns.Core.DB().muted and ALERTS_OFF or ALERTS_ON)
   page.canWrite = ns.List.CanWrite() == true
+  -- s1: while the stores are not ready (roster or guild name unread) the List says so, else an empty List says what
+  -- to do; the demo draws made-up targets and needs neither
+  local ready, why = true, nil
+  if not demoOf(src) then ready, why = ns.Store.Ready() end
+  local note
+  if not ready then note = ns.List.RefusalLine(why) elseif n == 0 then note = EMPTY_LIST end
+  page.noteH = setNote(page.note, note)
 
   local openFound = false
   for i, t in ipairs(targets) do
@@ -1005,7 +1037,7 @@ local function refreshWaiting(page, roster, now)
   local n = #list
   set.count:SetText(n == 1 and "1 mark waits for an officer" or (n .. " marks wait for an officer"))
   set.note:SetText(officer and OFFICER_NOTE or MEMBER_NOTE)
-  local y = WAIT_TOP
+  local y = WAIT_TOP + setNote(set.empty, n == 0 and (officer and WAIT_EMPTY.officer or WAIT_EMPTY.member) or nil)
   for i, e in ipairs(list) do
     local m = e.mark
     local cd = markCard(page, set, i)
@@ -1029,6 +1061,7 @@ local function buildWaiting(page)
   set.note:SetPoint("TOPRIGHT", -4, -7)
   set.note:SetJustifyH("RIGHT")
   set.note:SetTextColor(ALERTS_GREY[1], ALERTS_GREY[2], ALERTS_GREY[3])
+  set.empty = noteLine(child, -WAIT_TOP)
   return child
 end
 
@@ -1062,7 +1095,9 @@ local function refreshMine(page, roster, now)
   local src, set = page.src, page.mine
   if set.head then set.head:SetWidth((page.width or PAGE_W) - page.boxRight) end
   local list = mineEntries(demoOf(src))
-  local y = MINE_TOP
+  -- s1: an officer's marks go straight on the list, so the officer line says why Mine stays empty
+  local empty = #list == 0 and (ns.List.CanWrite() == true and MINE_EMPTY.officer or MINE_EMPTY.member) or nil
+  local y = MINE_TOP + setNote(set.empty, empty)
   for i, e in ipairs(list) do
     local m = e.mark
     local state = ns.RulesMarks.State(m, e.target)
@@ -1084,6 +1119,7 @@ local function buildMine(page)
   page.mine = set
   set.head = kitCall(page.src.kit, "SectionHeader", child, (page.width or PAGE_W) - page.boxRight, "Your marks")
   if set.head then set.head:SetPoint("TOPLEFT", child, "TOPLEFT", 0, 0) end
+  set.empty = noteLine(child, -MINE_TOP)
   return child
 end
 
@@ -1139,6 +1175,7 @@ function Page.Build(frame, src)
   page.scroll, page.plain = scroll, plain
   -- each tab's child is created with the scroll as parent, then set as its scroll child when the tab shows
   page.content = emptyChild(page)
+  page.note = noteLine(page.content, -4)   -- s1: the List's empty or not-ready line
   page.children.list = page.content
   page.children.waiting = buildWaiting(page)
   if kills then

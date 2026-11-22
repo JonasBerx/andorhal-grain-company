@@ -37,8 +37,14 @@ end
 -- The guild's key as the hub keeps it (CommRegistry.lua:70, f5226), or nil while the guild name is unread. Read as
 -- the hub reads it (Roster.lua:72): GetGuildInfo's name and realm, the realm falling back to the character's.
 -- 1.60.1.71037 answers "" for the realm: the realm of the one saved list under this guild's name stands in, else the
--- last realm read (GuildKOSDB.realm). With neither the key stays unread (no stand-in realm: it would start a second,
--- empty list once the realm reads again).
+-- last realm read (GuildKOSDB.realm). With no list saved under this guild's name and no realm remembered (issue 48: a
+-- fresh install, which would wait for good), Core.NO_REALM stands in: the realm only names this client's saved list
+-- and is never sent. Lists under this guild's name on two realms with no remembered realm answer nothing (issue 48
+-- Q2). The stand-in is never remembered as a read, and its list moves to the real realm when the client names one
+-- again (Core.GuildKey), so no second, empty list starts. The hub remembers its realm on its own (GuildSyncDB3.realm),
+-- so this key and the hub's can name different realms; nothing compares the two.
+Core.NO_REALM = "No realm" -- the same text as the hub's ns.NO_REALM (kos_realm_test pins both)
+
 local function savedRealm(db, name)
   local prefix, found = name .. "..", nil
   for key in pairs(db.guilds) do
@@ -50,6 +56,7 @@ local function savedRealm(db, name)
   end
   if found then return found end
   if type(db.realm) == "string" and db.realm ~= "" then return db.realm end
+  if found == nil then return Core.NO_REALM end
   return nil
 end
 
@@ -57,14 +64,25 @@ function Core.GuildKey()
   if not ns.Hub then return nil end
   local name, _, _, realm = ns.Hub.Call("GetGuildInfo", "player")
   if type(name) ~= "string" or name == "" then return nil end
+  local read = true -- the client named the realm, as against a saved or stand-in one
   if type(realm) ~= "string" or realm == "" then
     realm = ns.Hub.Call("GetRealmName")
     if type(realm) ~= "string" or realm == "" then realm = ns.Hub.Call("GetNormalizedRealmName") end
     local db = Core.DB()
-    if type(realm) == "string" and realm ~= "" then db.realm = realm else realm = savedRealm(db, name) end
+    if type(realm) == "string" and realm ~= "" then
+      db.realm = realm
+    else
+      realm, read = savedRealm(db, name), false
+    end
   end
   if type(realm) ~= "string" or realm == "" then return nil end
-  return name .. ".." .. realm
+  local key = name .. ".." .. realm
+  if read and realm ~= Core.NO_REALM then
+    -- a real realm again: the list saved under the stand-in moves to it, unless the real one already holds a list
+    local guilds, standIn = Core.DB().guilds, name .. ".." .. Core.NO_REALM
+    if guilds[standIn] ~= nil and guilds[key] == nil then guilds[key], guilds[standIn] = guilds[standIn], nil end
+  end
+  return key
 end
 
 -- This guild's saved table, made on first use; nil while the guild name is unread.

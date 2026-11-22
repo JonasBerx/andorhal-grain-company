@@ -114,9 +114,17 @@ end
 
 local charKey
 
+-- The realm used when the client names none and nothing is saved (issue 48: a fresh install on a client that hides
+-- the realm). A realm names saved data on this client (the character key, the guild's saved tables) and is never sent
+-- to other members, so they need not agree on it. It is never remembered as a read (ns.Char), and the data saved
+-- under it moves to the real realm when the client names one again (adoptRealm, at the first read of a session; a
+-- realm that only arrives after a roster read can leave the stand-in links and version tables behind, unused).
+ns.NO_REALM = "No realm"
+
 -- The realm to use while the client names none (Compat.Player), in this order: the realm of the saved character with
 -- this name; the last realm the client read (GuildSyncDB3.realm); the one realm every saved character shares (an
--- account saved before GuildSyncDB3.realm existed). nil when none answers; characters on two realms answer nothing.
+-- account saved before GuildSyncDB3.realm existed); with no character saved at all and the saved data loaded,
+-- ns.NO_REALM. nil when none answers: characters on two realms answer nothing (issue 48 Q2).
 function ns.SavedRealm(name)
   local db = ns.SavedDB()
   if type(db) ~= "table" or type(name) ~= "string" or name == "" then return nil end
@@ -130,14 +138,57 @@ function ns.SavedRealm(name)
   end
   if mine then return mine end
   if type(db.realm) == "string" and db.realm ~= "" then return db.realm end
-  return every or nil
+  if every then return every end
+  -- before the saved data is loaded a saved realm may still arrive, so the stand-in waits for it
+  if every == nil and ns.Loaded() then return ns.NO_REALM end
+  return nil
+end
+
+-- Moves t[<name><sep>ns.NO_REALM] to t[<name><sep>realm] for every such key, unless the real key already holds
+-- something (then both stay). fix(value) runs on each moved value.
+local function moveKeys(t, sep, realm, fix)
+  if type(t) ~= "table" then return end
+  local tail, from = sep .. ns.NO_REALM, {}
+  for key in pairs(t) do
+    if type(key) == "string" and #key > #tail and key:sub(-#tail) == tail then from[#from + 1] = key end
+  end
+  for _, key in ipairs(from) do
+    local to = key:sub(1, #key - #tail) .. sep .. realm
+    if t[to] == nil then
+      t[to], t[key] = t[key], nil
+      if fix then fix(t[to]) end
+    end
+  end
+end
+
+-- The client names a real realm (issue 48): what was saved under the stand-in moves to it, once a session, after the
+-- saved data is loaded: the character records, the guild's realm and reader, and the per-guild links and version
+-- tables (LinksStore.lua, CommVersion.lua key them "<guild>-<realm>").
+local adopted = false
+local function adoptRealm(db, realm)
+  moveKeys(db.chars, "-", realm, function(c) if type(c) == "table" then c.realm = realm end end)
+  local g, tail = db.guild, "-" .. ns.NO_REALM
+  if type(g) == "table" then
+    if g.realm == ns.NO_REALM then g.realm = realm end
+    if type(g.by) == "string" and #g.by > #tail and g.by:sub(-#tail) == tail then
+      g.by = g.by:sub(1, #g.by - #tail) .. "-" .. realm
+    end
+  end
+  moveKeys(db.links, "-", realm)
+  moveKeys(type(db.comm) == "table" and db.comm.versions or nil, "-", realm)
 end
 
 -- This character's record, refreshed. Returns nil while the client cannot name the player yet.
 function ns.Char()
   local db = ns.DB()
   local p = Compat.Player()
-  if p.realm and not p.realmSaved then db.realm = p.realm end -- remembered for a client that names no realm
+  if p.realm and not p.realmSaved then
+    db.realm = p.realm -- remembered for a client that names no realm
+    if not adopted and ns.Loaded() then
+      adopted = true
+      adoptRealm(db, p.realm)
+    end
+  end
   if p.name and p.realm then charKey = p.name .. "-" .. p.realm end
   if not charKey then return nil end
   local c = db.chars[charKey]

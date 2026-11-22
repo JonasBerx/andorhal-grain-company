@@ -8,6 +8,13 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.20.3", lines = {
+    "A new install works on today's game client, which names no realm: GuildSync and Kill on Sight no longer wait for one.",
+  }, addons = {
+    { folder = "GuildKOS", lines = {
+      "The Kill on Sight page says what an empty List, Waiting or Mine means, and the List says when it waits for the guild roster.",
+    } },
+  } },
   { version = "0.20.2", lines = {
     "With today's game client naming no realm, GuildSync and Kill on Sight use the realm they saved before, so your characters and the KOS list come back.",
   }, addons = {
