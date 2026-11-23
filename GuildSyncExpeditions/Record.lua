@@ -1,23 +1,25 @@
 -- GuildSyncExpeditions Record.lua: the shared record (0.19 plan, Seams 12; slice I plan, "The body").
 --   ns.Rec.MAX_BODY                      read at call time by Pack
---   ns.Rec.Pack(view) -> body | nil, "field" | "too big"
---   ns.Rec.Unpack(body) -> view | nil    nil only for a malformed field; a follower also gets pieces = { [slot] = piece }
+--   ns.Rec.Pack(view) -> body | nil, "field" | "too big"    sends only what 0.20.3 parses
+--   ns.Rec.Unpack(body) -> view | nil    nil only for a malformed field, against the wider wire bounds; a follower also
+--                                        gets pieces = { [slot] = piece },
+--                                        a piece { row, temper, broken, roll = 1..4 | nil, unknown = true | nil }
 --   ns.OwnView() -> view                 reads only: no settle, no grain (R-quiet); ns.OwnOfficer is read when it exists;
 --                                        acct is the token only for a Person of two or more characters, else "00000000"
 --   ns.AccountToken() -> 8 hex           written once in the acct part; "00000000" in demo
 -- A view: { v, acct, followers = { { name, race, class, sex, level, state, wins, deadly, look, traits, gear, pieces } },
 --   flair = { title, badges, trophies, quests }, collection = { relics, sets, chains, badges } (numbers, bit sets as they
 --   arrived), deadly, runs, finds = { { code, who, day, region } }, officer = { bank, at, hides = { { owner, name } } } }.
--- Everything a record claims is bounded here, so nothing else has to trust it. The body holds no escape byte: Pack and
--- Unpack both go through the positive set.
+-- Everything a record claims is bounded here, so nothing else has to trust it: Unpack by the wire bounds, Pack also by
+-- 0.20.3's. The body holds no escape byte: Pack and Unpack both go through the positive set.
 
 local _, ns = ...
 if not ns.M then return end
 local M = ns.M
 
-local D, FC, GD, QD, BD = ns.FollowerData, ns.FollowerCore, ns.GearData, ns.QuestData, ns.BookData
+local D, FC, GD, BD = ns.FollowerData, ns.FollowerCore, ns.GearData, ns.BookData
 
-local Rec = { MAX_BODY = 1711 }
+local Rec = { MAX_BODY = 1807 }
 ns.Rec = Rec
 
 local NOT_ALLOWED = "[^%w %^!%.%+%-\128-\255]"
@@ -25,10 +27,17 @@ local HEX8 = "^%x%x%x%x%x%x%x%x$"
 local RECORD_TOP = 5000000
 local DAY_TOP, AT_TOP = 999999, 9999999999
 local BITS_TOP = 4294967295
-local MAX_FOLLOWERS, MAX_FINDS, MAX_LIST, MAX_HIDES = 5, 5, 16, 10
+local MAX_FOLLOWERS, MAX_FINDS, MAX_HIDES = 5, 5, 10
+-- Unpack takes the wire bounds; Pack sends only what 0.20.3 parses.
+local WIRE_MAX_LEVEL, WIRE_MAX_LIST, WIRE_MAX_QUESTS = 20, 32, 99
+local SEND_MAX_LIST, SEND_MAX_QUESTS, SEND_MAX_BODY = 16, 16, 1711 -- 0.20.3's parse caps and MAX_BODY
 local KEY_MAX = 50
 local GEAR_LEN = 48
 local BROKEN = "abcdef"
+-- The third character of a gear triple (issue 43, stage 2): its position, from 0, is roll x 12 + (6 when broken) + temper.
+-- The first 12 are what 0.20.3 sends: 0-5 a temper, a-f a broken temper. 8 and 9 are unassigned and read as temper 0.
+local THIRD = "012345abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ67"
+local TEMPERS = 6
 local LETTER = { idle = "i", out = "o", rest = "r", dead = "d" }
 local STATE_OK = { i = true, b = true, o = true, r = true, d = true }
 
@@ -81,7 +90,7 @@ local function isKey(s) return #s >= 1 and #s <= KEY_MAX end
 local function idList(s)
   if s == "-" then return {} end
   local out = split(s, "+")
-  if #out > MAX_LIST then return nil end
+  if #out > WIRE_MAX_LIST then return nil end
   for _, id in ipairs(out) do
     if not string.match(id, "^%l%d$") then return nil end
   end
@@ -94,13 +103,11 @@ local function parsePieces(gear)
   for i, slot in ipairs(GD.SLOTS) do
     local code, third = string.match(string.sub(gear, i * 3 - 2, i * 3), "^([0-9A-Za-z][0-9A-Za-z])([0-9A-Za-z])$")
     if code then
-      local temper, broken = tonumber(third), false
-      if not temper or temper > 5 then
-        local at = string.find(BROKEN, third, 1, true)
-        temper = at and at - 1 or 0
-        broken = at ~= nil
-      end
-      pieces[slot.key] = { row = code, temper = temper, broken = broken, unknown = GD.Row(code) == nil or nil }
+      local at = string.find(THIRD, third, 1, true)
+      local n = at and at - 1 or 0
+      local roll = math.floor(n / (2 * TEMPERS))
+      pieces[slot.key] = { row = code, temper = n % TEMPERS, broken = n % (2 * TEMPERS) >= TEMPERS,
+        roll = roll > 0 and roll or nil, unknown = GD.Row(code) == nil or nil }
     end
   end
   return pieces
@@ -110,7 +117,7 @@ local function parseFollower(line)
   local p = split(line, ".")
   if #p ~= 13 or not FC.ValidName(p[1]) then return nil end
   local race, class = text(p[2], 8, "^%u%l+$"), text(p[3], 7, "^%a+$")
-  local level = int(p[5], 2, 1, D.MAX_LEVEL)
+  local level = int(p[5], 2, 1, WIRE_MAX_LEVEL)
   local wins, deadly = int(p[7], 7, 0, FC.STAT_MAX), int(p[8], 7, 0, FC.STAT_MAX)
   if not (race and class and level and wins and deadly) then return nil end
   if (p[4] ~= "m" and p[4] ~= "f") or not STATE_OK[p[6]] or #p[13] ~= GEAR_LEN then return nil end
@@ -151,7 +158,7 @@ local function parseFlair(s)
     if not title then return nil end
   end
   local badges, trophies = idList(p[2]), idList(p[3])
-  local quests = int(p[4], 2, 0, #QD.WRITS)
+  local quests = int(p[4], 2, 0, WIRE_MAX_QUESTS)
   if not (badges and trophies and quests) then return nil end
   return { title = title, badges = badges, trophies = trophies, quests = quests }
 end
@@ -257,10 +264,21 @@ local function build(v)
     v.deadly, v.runs, packFinds(v.finds), packOfficer(v.officer) }, "^")
 end
 
+-- 0.20.3's bounds on the parsed view, so a 0.20.3 reader takes what we send. A change that widens what the gear field
+-- parses must add its 0.20.3 bound here in the same commit. SEND_MAX_BODY is a backstop: these bounds stay under it.
+local function sendable(v)
+  for _, f in ipairs(v.followers) do
+    if f.level > D.MAX_LEVEL then return false end
+  end
+  local fl = v.flair
+  return #fl.badges <= SEND_MAX_LIST and #fl.trophies <= SEND_MAX_LIST and fl.quests <= SEND_MAX_QUESTS
+end
+
 function Rec.Pack(view)
   local good, body = pcall(build, view)
-  if not good or not Rec.Unpack(body) then return nil, "field" end
-  if #body > Rec.MAX_BODY then return nil, "too big" end
+  local back = good and Rec.Unpack(body)
+  if not back or not sendable(back) then return nil, "field" end
+  if #body > math.min(Rec.MAX_BODY, SEND_MAX_BODY) then return nil, "too big" end
   return body
 end
 

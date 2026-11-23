@@ -32,4 +32,13 @@ ns.FollowerData = {
     Lore = { Intellect = 10, Stamina = 4, Spirit = 6 },
   },
   STAT_DIVISOR = 40,
+  -- The odds of each rolled stat on a dropped Uncommon or Rare piece, by the expedition's kind, in ns.GearCore.ROLLS
+  -- order: the Bear, the Monkey, the Owl, the Whale. A kind with no row rolls even (ns.LootCore.PickRoll, issue 43),
+  -- and so does a capstone, which Rewards.lua rolls with no kind.
+  STAT_ROLL = {
+    Raid = { 2, 1, 1, 1 },
+    Scout = { 1, 2, 1, 1 },
+    Rite = { 1, 1, 2, 1 },
+    even = { 1, 1, 1, 1 },
+  },
 }

@@ -51,7 +51,10 @@ local ORDER = { "hillsbrad", "arathi", "westpl", "eastpl", "tirisfal", "silverpi
 
 -- wr: the zone sheet's rectangle on the 1002 x 668 layer of map 947, by eye. land and lock: fractions of the sheet.
 local REG = {
-  hillsbrad = { map = 1424, wr = { 708.6, 213.2, 73, 48.6 }, land = { 0.08, 0.12, 0.9, 0.62 }, lock = { 0.5, 0.4 } },
+  hillsbrad = { map = 1424, wr = { 708.6, 213.2, 73, 48.6 }, land = { 0.08, 0.12, 0.92, 0.88 }, lock = { 0.5, 0.4 },
+    -- The 12 ids below are a synthetic sequence, a stand-in until the real ones are read.
+    -- UNVERIFIED PLACEHOLDER: not read from wago.tools or the client. manual-verify before go-live (BETA-CHECK step 33a, q45); replace all 12.
+    tiles = { 1424001, 1424002, 1424003, 1424004, 1424005, 1424006, 1424007, 1424008, 1424009, 1424010, 1424011, 1424012 } },
   arathi = { map = 1417, wr = { 752.7, 225.3, 82.1, 54.7 }, land = { 0.08, 0.08, 0.95, 0.85 }, lock = { 0.5, 0.47 } },
   westpl = { map = 1422, wr = { 723.4, 145.5, 98, 65.4 }, land = { 0.1, 0.15, 0.9, 0.9 }, lock = { 0.55, 0.35 } },
   eastpl = { map = 1423, wr = { 785.1, 137.8, 91.9, 61.3 }, land = { 0.08, 0.15, 0.9, 0.85 }, lock = { 0.49, 0.5 } },
@@ -60,6 +63,9 @@ local REG = {
   silverpine = { map = 1421, wr = { 654.2, 184.3, 95.8, 63.8 }, land = { 0.38, 0.1, 0.68, 0.95 },
     tiles = { 8064925, 8064931, 8064933, 8064935, 8064936, 8064937, 8064939, 8064940, 8064942, 8064926, 8064929, 8064930 } },
 }
+
+-- A zone with a lock opens on the ladder; asked at call time, never stored.
+local function isOpen(id) return ns.Regions.IsOpen(id) end
 
 local WORLD_TILES = { 8025428, 8025432, 8025433, 8025434, 8025435, 8025436, 8025437, 8025438, 8025439, 8025429, 8025430,
   8025431 }
@@ -103,6 +109,21 @@ local PLACES = {
     ["The Sepulcher"] = { 0.43, 0.41 },
     ["North Tide's Hollow"] = { 0.505, 0.135 },
     ["Shadowfang Keep"] = { 0.45, 0.68 },
+  },
+  hillsbrad = { -- spec 2.4's start values, to fix by eye in the beta. manual-verify: each pin on its place.
+    ["Tarren Mill"] = { 0.62, 0.20 },
+    ["Darrow Hill"] = { 0.43, 0.24 },
+    ["Hillsbrad Fields"] = { 0.33, 0.45 },
+    ["Southpoint Tower"] = { 0.20, 0.47 },
+    ["Southshore"] = { 0.51, 0.53 },
+    ["Azurelode Mine"] = { 0.27, 0.64 },
+    ["Nethander Stead"] = { 0.66, 0.62 },
+    ["Durnholde Keep"] = { 0.80, 0.40 },
+    ["Eastern Strand"] = { 0.57, 0.74 },
+    ["Western Strand"] = { 0.38, 0.73 },
+    ["Dun Garok"] = { 0.70, 0.80 },
+    ["Purgation Isle"] = { 0.19, 0.84 },
+    ["Hillsbrad Foothills"] = { 0.80, 0.47 }, -- the capstone's own spot
   },
 }
 
@@ -506,14 +527,21 @@ local function lockedLine(id)
   return "Opens when the Company finishes: " .. IC.Project(need)
 end
 
+-- The Company's banner beside Hillsbrad's lock: the Roof is built and the zone is not open yet. Never in demo.
+local function bannerShown()
+  return not M.Demo() and type(ns.Unlocked) == "function" and ns.Unlocked("hillsbrad") == true
+    and not isOpen("hillsbrad")
+end
+
 local function showZoneTip(ui, owner, id)
   local tip = M.Compat.Tooltip()
   if not tip then return end
   local info = regionInfo(id)
   tip:SetOwner(owner, "ANCHOR_RIGHT")
   tip:SetText(info.name)
-  if REG[id].lock then
+  if not isOpen(id) then
     tip:AddLine(lockedLine(id), 0.62, 0.62, 0.62)
+    if id == "hillsbrad" and bannerShown() then tip:AddLine("The Company's banner stands at Tarren Mill.", 1, 1, 1) end
   else
     local n = 0
     for _, row in ipairs(ui.rows) do
@@ -690,7 +718,11 @@ local function drawMarks(ui, spots)
   for id, lock in pairs(ui.locks) do
     local at = REG[id].lock
     putCentre(lock, ui.world, worldPoint(ui, id, at[1], at[2]))
+    local open = isOpen(id)
+    lock:SetShown(not open)
+    ui.hits[id]:SetFrameLevel(ui.world:GetFrameLevel() + (open and 2 or 1))
   end
+  ui.heldBanner:SetShown(bannerShown())
   putCentre(ui.camp, ui.world, worldPoint(ui, "tirisfal", CAMP[1], CAMP[2]))
   for id, hit in pairs(ui.hits) do
     local land = REG[id].land
@@ -1217,8 +1249,8 @@ function MapTab.Preload()
     for _, file in ipairs(filesOf(map, math.ceil(lw / tw) * math.ceil(lh / th), fallback)) do hold(file) end
   end
   holdLayer(WORLD_MAP, WORLD_TILES)
-  for _, reg in pairs(REG) do
-    if reg.tiles then
+  for id, reg in pairs(REG) do
+    if reg.tiles and isOpen(id) then
       holdLayer(reg.map, reg.tiles)
       for _, o in ipairs(overlaysOf(reg.map) or {}) do
         for _, file in ipairs(o.fileDataIDs) do hold(file) end
@@ -1248,7 +1280,7 @@ local function arrive(ui, opts)
     end
   end
   local reg = opts.region ~= nil and REG[opts.region]
-  if reg and not reg.lock then
+  if reg and isOpen(opts.region) then
     ui.current = opts.region
     closePage(ui)
     ui.ring = opts.ring
@@ -1472,10 +1504,16 @@ function MapTab.Build(f, bar)
       name:SetText(regionInfo(id).name)
       lock:SetScript("OnEnter", enter)
       ui.locks[id] = lock
-    else
-      hit:SetScript("OnClick", function() M.Safe(zoomTo, ui, id) end)
     end
+    hit:SetScript("OnClick", function() M.Safe(function() if isOpen(id) then zoomTo(ui, id) end end) end)
   end
+
+  -- Hangs off the lock's left side, so it follows the lock on every redraw; drawMarks shows or hides it.
+  ui.heldBanner = ui.world:CreateTexture(nil, "ARTWORK")
+  ui.heldBanner:SetSize(MARK_PX, MARK_PX)
+  ui.heldBanner:SetPoint("RIGHT", ui.locks.hillsbrad, "LEFT", 0, 0)
+  M.Kit.Atlas(ui.heldBanner, "hordewarfrontmapbanner", MARK_FILL)
+  ui.heldBanner:Hide()
 
   local function goCamp()
     M.Safe(function() if ns.GoTo then ns.GoTo("camp") end end)

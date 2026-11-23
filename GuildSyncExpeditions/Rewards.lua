@@ -6,6 +6,10 @@
 -- skipped while they are missing. So are the talent reads ns.TalentPercent and ns.TalentFind (issue 13) and the supply read
 -- ns.SupplyGain: missing, throwing or answering anything but a whole number from 0 up, they count as 0 and the run pays
 -- today's numbers.
+-- A plain green or blue drop rolls its stat (issue 43): LootCore.PickRoll by the run's kind, on the run's own "stat"
+-- stream, one draw per such drop whether or not it lands, so no other reward's draws move. Set pieces, story gear and
+-- white drops never roll. A capstone rolls even odds: the board gives every capstone the kind Raid, and a plain blue
+-- drops nowhere else, so its kind would lean every Rare to one roll.
 
 local _, ns = ...
 if not ns.M then return end
@@ -120,16 +124,19 @@ local function heldPieces(q, tier)
   return held
 end
 
--- Answers the row's code when the piece landed.
-local function dropPlain(q, tier, stream)
+-- Answers the row's code and the piece's roll when the piece landed. rolls is the run's stat stream; nil rolls nothing.
+local function dropPlain(q, tier, stream, kind, rolls)
   local GD = ns.GearData
   local keys = {}
   for i, s in ipairs(GD.SLOTS) do keys[i] = s.key end
   local row = GD.Find(ns.LootCore.PickSlot(keys, heldPieces(q, tier), stream), tier, q)
   if not row then return nil end
-  local id, why = ns.AddGear({ row = row.code })
-  if id then return row.code end
-  if why == "full" then addSalvage(row.tier, ns.GearCore.SalvageOf(row.q), row.name) end
+  local roll = rolls and ns.GearCore.CanRoll(row) and ns.LootCore.PickRoll(kind, rolls) or nil
+  local id, why = ns.AddGear({ row = row.code, roll = roll })
+  if id then return row.code, roll end
+  if why == "full" then
+    addSalvage(row.tier, ns.GearCore.SalvageOf(row.q), ns.GearCore.PieceName({ row = row.code, roll = roll }) or row.name)
+  end
   return nil
 end
 
@@ -158,21 +165,23 @@ local function payDrops(fid, run, traits)
   local LC = ns.LootCore
   local tier = LC.Tier(run.level)
   local blue = false
+  local rolls = RC.Stream(RC.Seed("stat", run.start, run.seed))
+  local kind = not run.capstone and run.kind or nil -- no kind rolls even
   eachDrop("white", fid, run, traits, function(stream) dropPlain(WHITE, tier, stream) end)
-  eachDrop("green", fid, run, traits, function(stream) dropPlain(GREEN, tier, stream) end)
+  eachDrop("green", fid, run, traits, function(stream) dropPlain(GREEN, tier, stream, kind, rolls) end)
   eachDrop("blue", fid, run, traits, function(stream)
-    local code
+    local code, roll
     if LC.IsSetBlue(stream) then
       code = dropSetPiece(run.region, stream)
     else
-      code = dropPlain(BLUE, BLUE_TIER, stream)
+      code, roll = dropPlain(BLUE, BLUE_TIER, stream, kind, rolls)
     end
     if code then
       addFind(code, fid, run.region)
       blue = true
       -- d2139: the find in words, for a player who cannot hear its sound
-      local f, row = ns.Follower(fid), ns.GearData.Row(code)
-      if f and row then ns.Say(ns.Escape(f.name) .. " found " .. row.name .. ".") end
+      local f, name = ns.Follower(fid), ns.GearCore.PieceName({ row = code, roll = roll })
+      if f and name then ns.Say(ns.Escape(f.name) .. " found " .. name .. ".") end
     end
   end)
   eachDrop("recruit", fid, run, traits, function(stream)

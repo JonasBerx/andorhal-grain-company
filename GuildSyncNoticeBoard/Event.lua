@@ -9,6 +9,14 @@
 -- stored only for a known tag this client wrote (Create) or read (an open description), never for an untagged
 -- description's default. A readable open description with no known tag deletes the entry; an unreadable one (not a
 -- string) leaves it. detail.description is the shown description, escaped. Never OpenEvent for it.
+-- Cancel event (issue 33): the game deletes an event only through a day's menu, so Event.Cancel does the same.
+-- detail.canCancel is the client's own ContextMenuEventCanRemove answer for our open event's place (the answer the
+-- game's Delete entry uses). Cancel runs only from the confirm's Yes, never in demo, re-checks the slot like Respond,
+-- selects the event (ContextMenuSelectEvent), reads the selection back and only then calls ContextMenuEventRemove,
+-- which takes no argument and would otherwise act on whatever the game's calendar last selected. No other client
+-- call sits between the select, the read-back and the remove: OpenCalendar runs before the three, and once more
+-- after, so the list it asks for is the one without the event. The removed event's banner entry goes in the same
+-- call. Never RemoveEvent: that is the invitee's Remove button.
 
 local _, ns = ...
 if not ns.M then return end
@@ -23,6 +31,8 @@ local LOADING = "Loading names"
 local LOCKED = "Who is coming is not readable now"
 local WAITING = "Waiting for the game's calendar."
 local CLICK_AGAIN = "Click again"
+local COULD_NOT_CANCEL = "Could not cancel this event"
+local STALE_CANCEL = "Nothing was cancelled. That event is no longer open on the board."
 local GROUPS = { "coming", "standby", "tentative", "notcoming", "unanswered", "other" }
 local BANNER_CAP = 200
 
@@ -118,7 +128,7 @@ end
 -- ---------- open (AC22, AC23) ----------
 
 local function fail(line)
-  detail.state, detail.line, detail.canRespond = "failed", line, false
+  detail.state, detail.line, detail.canRespond, detail.canCancel = "failed", line, false, false
   expect = nil
 end
 
@@ -152,7 +162,8 @@ local function openRow(row)
   expect = { monthDay = monthDay, eventIndex = eventIndex }
 end
 
--- The open event's info when the slot still holds the selected row (index, title and time); else nil.
+-- The open event's info and its index info when the slot still holds the selected row (index, title and time);
+-- else nil.
 local function ours()
   if not (detail and expect) then return nil end
   local idx = call("C_Calendar.GetEventIndex")
@@ -162,12 +173,45 @@ local function ours()
   local row = detail.row
   if row.rawTitle == nil or str(info.title) ~= row.rawTitle then return nil end
   if not sameTime(calTime(info.time), row.time) then return nil end
-  return info
+  return info, idx
 end
 
--- Buttons only for a future guild sign-up event while my status is one I may answer from (AC24).
-local function readInfo(info)
+-- ---------- may I cancel it (issue 33) ----------
+
+-- Cancel event needs every name in ns.CANCEL_APIS (Config.lua's optional ContextMenu apis): a client without one
+-- shows no button and Event.Cancel does nothing.
+local function cancelReady()
+  for _, name in ipairs(ns.CANCEL_APIS) do
+    if not GuildSync.Compat.Has(name) then return false end
+  end
+  return true
+end
+
+-- An event's place in the month the client shows now (CalendarEventIndexInfo): offsetMonths, monthDay, eventIndex;
+-- nil when any part is missing or unreadable.
+local function placeOf(idx)
+  idx = Plain(idx)
+  if type(idx) ~= "table" then return nil end
+  local offset = num(idx.offsetMonths)
+  if offset == nil then offset = num(idx.offsetMonth) end
+  local day, index = num(idx.monthDay), num(idx.eventIndex)
+  if not (offset and day and index) then return nil end
+  return offset, day, index
+end
+
+-- The client's own answer for the open event (idx from ours()): true only for a plain true.
+local function canRemove(idx)
+  if not cancelReady() then return false end
+  local offset, day, index = placeOf(idx)
+  if not offset then return false end
+  return call("C_Calendar.ContextMenuEventCanRemove", offset, day, index) == true
+end
+
+-- Buttons only for a future guild sign-up event while my status is one I may answer from (AC24). idx is the open
+-- event's index info (ours()): Cancel event shows when the client says I may remove the event at that place.
+local function readInfo(info, idx)
   local row = detail.row
+  detail.canCancel = canRemove(idx)
   local status = num(info.inviteStatus)
   local now = calTime(call("C_DateAndTime.GetCurrentCalendarTime"))
   local time = calTime(info.time)
@@ -233,12 +277,12 @@ end)
 
 ns.Listen("CALENDAR_OPEN_EVENT", function()
   if not (detail and expect) or ns.InDemo() then return end
-  local info = ours()
+  local info, idx = ours()
   if not info then
     fail(COULD_NOT)
   else
     detail.state, detail.line = "open", nil
-    readInfo(info)
+    readInfo(info, idx)
     readInvites()
   end
   M.RefreshPage()
@@ -246,7 +290,7 @@ end)
 
 ns.Listen("CALENDAR_CLOSE_EVENT", function()
   if not detail or ns.InDemo() then return end
-  detail.state, detail.canRespond = "closed", false
+  detail.state, detail.canRespond, detail.canCancel = "closed", false, false
   expect = nil
   M.RefreshPage()
 end)
@@ -311,8 +355,8 @@ end)
 
 ns.Listen("CALENDAR_UPDATE_EVENT", function()
   if not (detail and expect and detail.state == "open") or ns.InDemo() then return end
-  local info = ours()
-  if info then readInfo(info) end
+  local info, idx = ours()
+  if info then readInfo(info, idx) end
   M.RefreshPage()
 end)
 
@@ -342,7 +386,8 @@ function Event.Respond(which)
     M.RefreshPage()
     return
   end
-  local info = call("C_Calendar.IsEventOpen") == true and ours() or nil
+  local info, idx
+  if call("C_Calendar.IsEventOpen") == true then info, idx = ours() end
   if not info then
     -- the slot closed or holds another event: open ours again, the next click answers
     openRow(detail.row)
@@ -351,7 +396,7 @@ function Event.Respond(which)
     return
   end
   -- AC24 again at the click: the status or the clock may have moved since the buttons were drawn
-  readInfo(info)
+  readInfo(info, idx)
   if not detail.canRespond then
     M.RefreshPage()
     return
@@ -368,4 +413,68 @@ function Event.Respond(which)
   if not fn then return end
   ns.Cal.Open("write")
   call(fn)
+end
+
+-- ---------- cancel (issue 33) ----------
+
+-- Removes the chosen event from the guild calendar; only from the confirm's Yes for that eventID (another event
+-- chosen since the question was asked is left alone). Every check runs in this one call.
+function Event.Cancel(eventID)
+  if ns.InDemo() then ns.Inert() return end
+  if eventID == nil then return end
+  if not detail or detail.row.eventID ~= eventID then
+    -- a Yes whose event is no longer the chosen one: not a write, so the error line stays; say why nothing happens
+    GuildSync.Say(STALE_CANCEL)
+    return
+  end
+  if not cancelReady() then return end
+  ns.Cal.ClearError()
+  if call("C_Calendar.IsActionPending") ~= false then
+    detail.pending, detail.line = true, WAITING
+    M.RefreshPage()
+    return
+  end
+  detail.pending = false
+  local free, slotLine = ns.Cal.SlotFree()
+  if not free then
+    detail.line = slotLine
+    M.RefreshPage()
+    return
+  end
+  local info, idx
+  if call("C_Calendar.IsEventOpen") == true then info, idx = ours() end
+  if not info then
+    -- the slot closed or holds another event: open ours again, the next click asks again
+    openRow(detail.row)
+    if detail.state == "loading" then detail.line = CLICK_AGAIN end
+    M.RefreshPage()
+    return
+  end
+  -- the client's answer again at the click: it may have changed since the button was drawn
+  readInfo(info, idx)
+  if not detail.canCancel then
+    M.RefreshPage()
+    return
+  end
+  local offset, day, index = placeOf(idx)
+  local row = detail.row
+  -- as every board write, open before it; never between the select and the remove
+  ns.Cal.Open("write")
+  call("C_Calendar.ContextMenuSelectEvent", offset, day, index)
+  local so, sd, si = placeOf(call("C_Calendar.ContextMenuGetEventIndex"))
+  if so ~= offset or sd ~= day or si ~= index then
+    -- the selection did not take: ContextMenuEventRemove would act on some other event
+    detail.line = COULD_NOT_CANCEL
+    M.RefreshPage()
+    return
+  end
+  call("C_Calendar.ContextMenuEventRemove")
+  -- asked after the remove, so the list the game sends back no longer holds the event
+  ns.Cal.Open("cancelled")
+  -- if the game refuses, the entry comes back when the event's description is next read
+  forgetBanner(row.rawTitle, row.time)
+  counts[row.eventID], statuses[row.eventID] = nil, nil
+  -- no CloseEvent: the next Select opens over the slot, and every use re-checks it
+  detail, expect = nil, nil
+  M.RefreshPage()
 end

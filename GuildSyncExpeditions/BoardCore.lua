@@ -33,17 +33,24 @@ local SHARED = {
     { hours = 4, lo = 6, hi = 9, weights = { 20, 40, 30, 10 } },
     { hours = 8, lo = 6, hi = 9, weights = { 20, 40, 30, 10 } },
   },
+  hillsbrad = {
+    { lo = 11, hi = 15, weights = { 40, 40, 15, 5 } },
+    { hours = 4, lo = 11, hi = 15, weights = { 20, 40, 30, 10 } },
+    { hours = 8, lo = 13, hi = 15, weights = { 10, 30, 40, 20 } },
+  },
 }
 -- Rows -6 and -7: fixed hours, levels a zone's newest follower may always go on.
 local EASY = {
   tirisfal = { lo = 1, hi = 3, weights = { 60, 40, 0, 0 } },
   silverpine = { lo = 6, hi = 8, weights = { 50, 40, 10, 0 } },
+  hillsbrad = { lo = 11, hi = 12, weights = { 50, 40, 10, 0 } },
 }
 local EASY_HOURS = { 1, 2 }
 local SILVERPINE_GUARANTEE = 8
 local MAP_HOURS = { 4, 8 }
 local MAP_WEIGHTS = { 0, 30, 45, 25 }
-local CAPSTONE_GATE = { tirisfal = { level = 8, kit = 24 }, silverpine = { level = 10, kit = 30 } }
+local CAPSTONE_GATE = { tirisfal = { level = 8, kit = 24 }, silverpine = { level = 10, kit = 30 },
+  hillsbrad = { level = 15, kit = 36 } }
 
 local function whole(v, lo, hi)
   return type(v) == "number" and v >= lo and v <= hi and v == floor(v)
@@ -137,14 +144,14 @@ function BC.Rows(day, regions, maps, personal)
   local wanted, held = setOf(regions), setOf(maps)
   local out = {}
   for _, info in ipairs(ns.Regions.LIST) do
-    if info.open and wanted[info.id] then
+    if ns.Regions.IsOpen(info.id) and wanted[info.id] then
       addShared(out, info.id, day)
       addEasy(out, info.id, day)
       addCapstone(out, info.id)
     end
   end
   for _, info in ipairs(ns.Regions.LIST) do
-    if info.open and wanted[info.id] and held[info.id] then addMapRows(out, info, day) end
+    if ns.Regions.IsOpen(info.id) and wanted[info.id] and held[info.id] then addMapRows(out, info, day) end
   end
   for _, row in ipairs(personal or {}) do
     if personalFits(row) then

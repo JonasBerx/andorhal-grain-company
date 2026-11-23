@@ -17,8 +17,9 @@ ns.C = { READER = "guild", NOTICE_TITLE = 60, NOTICE_BODY = 1000, NOTICE_DAYS = 
   TITLE_STORE = 64, CREATE_DAYS = 30, MINUTE_STEP = 5, LIST_WAIT = 30, LOGIN_HOURS = 24, LEAD = 15, SECOND_WAIT = 120,
   QUICK_TIMES = { { 19, 0 }, { 19, 45 }, { 20, 0 }, { 21, 0 } } }
 
--- The client functions this module calls, all through M.Compat (AC4). Never RemoveEvent, ContextMenuEventRemove or
--- CanEditGuildEvent.
+-- The client functions this module calls, all through M.Compat (AC4). Never RemoveEvent (the invitee's Remove
+-- button, not a delete), EventCanEdit, UpdateEvent or CanEditGuildEvent: the board removes an event the game's own
+-- way (the four optional ContextMenu names, Event.Cancel) and edits none.
 local APIS = {
   "C_Calendar.OpenCalendar", "C_Calendar.GetNumGuildEvents", "C_Calendar.GetGuildEventInfo",
   "C_Calendar.GetGuildEventSelectionInfo", "C_Calendar.SetAbsMonth", "C_Calendar.OpenEvent",
@@ -37,8 +38,17 @@ local APIS = {
     -- Look.lua: a template or an atlas is used only when the client has it, else the fallback.
     "C_XMLUtil.GetTemplateInfo", "C_Texture.GetAtlasInfo",
     -- Look.Gradient: the colours of a gradient shade; without it the shade is flat.
-    "CreateColor" },
+    "CreateColor",
+    -- Event.Cancel: the calls behind the game's own Delete on a day's menu. Without any one, no Cancel event button.
+    "C_Calendar.ContextMenuEventCanRemove", "C_Calendar.ContextMenuSelectEvent",
+    "C_Calendar.ContextMenuGetEventIndex", "C_Calendar.ContextMenuEventRemove" },
 }
+
+-- The names Event.Cancel needs, read from the list above so the two cannot drift: every optional ContextMenu name.
+ns.CANCEL_APIS = {}
+for _, name in ipairs(APIS.optional) do
+  if name:find("^C_Calendar%.ContextMenu") then ns.CANCEL_APIS[#ns.CANCEL_APIS + 1] = name end
+end
 
 local EVENTS = {
   "CALENDAR_UPDATE_GUILD_EVENTS", "CALENDAR_UPDATE_EVENT_LIST", "CALENDAR_OPEN_EVENT", "CALENDAR_CLOSE_EVENT",

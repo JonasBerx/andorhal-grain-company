@@ -3,7 +3,9 @@
 -- my answer, description, counts, who is coming in its own scroll, the respond bar at the bottom), the nothing-chosen
 -- state, or a state line. Draw only reads (Event.Detail, Cal.Rows/Closed/SlotFree/ErrorLine); the respond buttons call
 -- ns.Event.Respond from their OnClick only (AC24's rule is Event's: shown for an open event I may answer, disabled
--- while the game's calendar has an action pending).
+-- while the game's calendar has an action pending). Cancel event (issue 33) sits in the banner's top right corner,
+-- away from the bar, shown while Event says I may remove the open event (detail.canCancel); its click only asks, and
+-- the confirm's Yes calls ns.Event.Cancel for that event's id.
 
 local _, ns = ...
 if not ns.M then return end
@@ -14,6 +16,10 @@ ns.PageDetail = PageDetail
 
 local PAD, GAP, LINE, BTN_H, BAR_H, CLOSE_W, BTN_GAP, RIGHT = 8, 6, 16, 22, 36, 64, 6, 12 -- layout only
 local YOU_W, PILL_MIN, COUNTS_H, PEOPLE_MIN = 34, 70, 34, 3 * LINE
+local CANCEL_W = 96
+local CANCEL, CANCEL_YES, CANCEL_NO = "Cancel event", "Yes, cancel it", "No, keep it"
+-- the hub's confirm window names its second button "Cancel": here that could read as the action, so the question says
+local CANCEL_KEEPS = " The Cancel button keeps the event."
 local DOT = " \194\183 " -- " · "
 local WAITING = "Waiting for the game's calendar."
 local LOADING = "Opening the event."
@@ -66,6 +72,23 @@ local function button(parent, label, onClick)
   return ns.Look.Button(parent, label, onClick)
 end
 
+-- Asks before the open event is cancelled. The question names the event and is tied to its id: Yes for an event
+-- that is no longer the chosen one does nothing (Event.Cancel). The game's popup with both answers named; without it
+-- the hub's own confirm window, whose question also says what its Cancel button does.
+local function askCancel()
+  local detail = ns.Event.Detail()
+  local row = detail and detail.row
+  if not (row and detail.canCancel) then return end
+  local id = row.eventID
+  local question = 'Cancel "' .. Rules.ShownTitle(row.kind, row.title or "?")
+    .. '"? It is removed from the guild calendar for everyone.'
+  local function yes() ns.Event.Cancel(id) end
+  local Kit = ns.M.Kit
+  if not Kit.Ask("cancel_event", question, CANCEL_YES, CANCEL_NO, yes) then
+    Kit.Confirm("cancel_event", question .. CANCEL_KEEPS, CANCEL_YES, yes)
+  end
+end
+
 function PageDetail.Build(panel)
   local d = { panel = panel, names = {}, headers = {}, cells = {} }
   states[panel] = d
@@ -107,6 +130,7 @@ function PageDetail.Build(panel)
     d.buttons[#d.buttons + 1] = button(panel, r[2], function() ns.Event.Respond(which) end)
   end
   d.close = button(panel, "Close", function() ns.Event.Close() end)
+  d.cancel = button(panel, CANCEL, askCancel)
   -- nothing chosen
   d.pick = text(panel, "GameFontNormal")
   d.pick:SetJustifyH("CENTER")
@@ -124,7 +148,7 @@ end
 
 local function hideAll(d)
   for _, f in ipairs({ d.banner, d.emblem, d.shade, d.title, d.sub, d.by, d.you, d.pill, d.line, d.desc,
-    d.scroll, d.divider, d.close, d.pick, d.next, d.new, d.state, d.error }) do
+    d.scroll, d.divider, d.close, d.cancel, d.pick, d.next, d.new, d.state, d.error }) do
     f:Hide()
   end
   for _, cell in ipairs(d.cells) do cell.bg:Hide() cell.num:Hide() cell.label:Hide() end
@@ -249,6 +273,13 @@ local function drawChosen(d, detail, w, h, compact)
   d.shade:ClearAllPoints()
   d.shade:SetPoint("BOTTOMLEFT", d.banner, "BOTTOMLEFT", 0, 0)
   d.shade:Show()
+  -- Cancel event: PAD inside the banner's top right corner, disabled (not hidden) while an action is pending
+  if detail.state == "open" and detail.canCancel then
+    d.cancel:SetSize(CANCEL_W, BTN_H)
+    place(d.cancel, d.panel, 3 + bw - PAD - CANCEL_W, 3 + PAD)
+    d.cancel:SetEnabled(not detail.pending)
+    d.cancel:Show()
+  end
 
   -- my answer: no pill for an announcement, nor a nil status outside a sign-up (inviteType 1) (f1517)
   local status = detail.status

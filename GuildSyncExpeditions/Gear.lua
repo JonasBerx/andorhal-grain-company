@@ -7,6 +7,8 @@
 --   ns.Temper(id), ns.Repair(id, how), ns.Buy(code) (third value true when ns.Grain has already said the line), ns.OnSale(row), ns.SellPiece(id), ns.BreakDown(id)
 --   ns.BreakGear(fid, slot), ns.LoseGear(fid, slot), ns.LeaveWorn(fid)
 --   A piece ns.Buy put in the bag carries bought = true: it never turns into salvage (ns.BreakDown, ns.LeaveWorn).
+--   A piece may carry roll = 1..#GC.ROLLS, its rolled stat (issue 43): ns.AddGear({ row, temper, roll }) keeps it on a row
+--   that can roll (GC.CanRoll), and it stays with the piece. A saved roll outside 1..4 is dropped, the piece kept.
 --   ns.ReplaceSlot(fid, code) -> slot | nil, worn copy | nil (the slot Equip fills: an empty one, else the weaker worn piece)
 --   ns.PoorInStorage() -> { { id, n }, ... }, total     ns.SellPoor(ids) -> sold, grain, why (each by ns.SellPiece)
 --   ns.RepairState() -> broken, fixable                 ns.RepairAll() -> repaired, stillBroken (each by ns.Repair, salvage)
@@ -20,6 +22,7 @@ local GC, GD, FC = ns.GearCore, ns.GearData, ns.FollowerCore
 
 local CELLS = 64
 local TEMPER_MAX = 5
+local ROLL_MAX = #GC.ROLLS
 
 local function whole(v, lo, hi)
   return type(v) == "number" and v >= lo and v <= hi and v == math.floor(v)
@@ -44,7 +47,8 @@ local function soundBagRow(id, row)
   if row.kind == nil then
     if not GD.WellFormed(row.row) then return nil end
     return { id = id, row = row.row, cell = row.cell, broken = row.broken == true,
-      temper = whole(row.temper, 0, TEMPER_MAX) and row.temper or 0, bought = row.bought == true or nil }
+      temper = whole(row.temper, 0, TEMPER_MAX) and row.temper or 0, bought = row.bought == true or nil,
+      roll = whole(row.roll, 1, ROLL_MAX) and row.roll or nil }
   end
   if row.cell == nil or not goodKey(row.kind, row.key) or not amount(row.n) then return nil end
   return { id = id, kind = row.kind, key = row.key, n = math.min(row.n, GC.STACK_MAX[row.kind]), cell = row.cell }
@@ -223,8 +227,8 @@ local function idle(fid)
   return f
 end
 
-local function putPiece(p, id, code, cell, temper)
-  p.rows[id] = { id = id, row = code, cell = cell, temper = temper, broken = false }
+local function putPiece(p, id, code, cell, temper, roll)
+  p.rows[id] = { id = id, row = code, cell = cell, temper = temper, broken = false, roll = roll }
   p.next = id + 1
 end
 
@@ -301,12 +305,14 @@ end
 function ns.AddGear(spec)
   if ns.Inert() then return nil, "demo" end
   local code = type(spec) == "table" and spec.row or nil
-  if not GD.Row(code) then return nil, "unknown" end
+  local row = GD.Row(code)
+  if not row then return nil, "unknown" end
   local p = bag()
   local cell = freeCells(p.rows)[1]
   local id = FC.NextId(p)
   if not cell or not id then return nil, "full" end
-  putPiece(p, id, code, cell, whole(spec.temper, 0, TEMPER_MAX) and spec.temper or 0)
+  local roll = whole(spec.roll, 1, ROLL_MAX) and GC.CanRoll(row) and spec.roll or nil
+  putPiece(p, id, code, cell, whole(spec.temper, 0, TEMPER_MAX) and spec.temper or 0, roll)
   return id
 end
 
@@ -593,7 +599,7 @@ function ns.LeaveWorn(fid)
       local kept = hold(piece) or (row and not piece.bought and addStack(p, "salvage", row.tier, GC.SalvageOf(row.q)))
       p.rows[piece.id] = nil
       if not kept then
-        ns.Say(ns.W.Name["Company bag"] .. " is full: " .. (row and row.name or "An unknown item") .. " is lost.")
+        ns.Say(ns.W.Name["Company bag"] .. " is full: " .. (GC.PieceName(piece) or "An unknown item") .. " is lost.")
       end
     end
   end

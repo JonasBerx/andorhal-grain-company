@@ -536,13 +536,14 @@ function ns.CompanyLook(key)
   local b = groupsNow()[type(p) == "table" and p.main or key]
   if not b then return nil end
   local look = {}
-  if b.title > 0 then look.title = CC.Item(CC.WIRE_BASE.title + b.title).name end
+  local title = CC.Worn("title", b.title)
+  if title then look.title = title.name end
   if b.colour > 0 then look.hex = CC.COLOURS[b.colour].hex end
-  if b.badge > 4 then
-    local k = b.badge - 4
+  local badge, k = CC.Worn("badge", b.badge)
+  if k then
     if b.gifts[k] > 0 and doneNow()[k] == true then look.badge = CC.PROJECTS[k].badge end
-  elseif b.badge > 0 then
-    look.badge = CC.Item(CC.WIRE_BASE.badge + b.badge).icon
+  elseif badge then
+    look.badge = badge.icon
   end
   return look
 end

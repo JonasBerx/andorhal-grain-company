@@ -8,6 +8,7 @@
 --   LC.Grain(hours, danger, greedy, pct) -> n          LC.Salvage(hours, band, pct) -> n
 --   LC.PickSupply(danger, stream) -> id                LC.RecruitSpec(stream, rowLevel) -> spec
 --   LC.Plus(n, pct) -> n                               n with pct percent more, rounded down
+--   LC.PickRoll(kind, stream) -> 1..4                  a dropped green's or blue's rolled stat (ns.GearCore.ROLLS), by the run's kind
 -- Every pct is a talent's whole percent more (issue 13, step 3); the caller reads it, so this file stays pure. A pct that
 -- is nil, 0 or not a whole number from 0 up counts as 0 and gives today's number exactly.
 
@@ -82,6 +83,15 @@ end
 
 function LC.IsSetBlue(stream)
   return stream() * 100 < SET_BLUE_PCT
+end
+
+-- The rolled stat of a dropped green or blue: one draw over FollowerData.STAT_ROLL's row for the run's kind.
+function LC.PickRoll(kind, stream)
+  local rows = ns.FollowerData.STAT_ROLL
+  local weights = kind ~= nil and rows[kind] or rows.even
+  local rolls = {}
+  for i = 1, #weights do rolls[i] = i end
+  return weighted(rolls, function(i) return weights[i] end, stream)
 end
 
 -- The trait percent first, then a Finds talent's percent on top: floor(traitPct x (100 + pct) / 100).

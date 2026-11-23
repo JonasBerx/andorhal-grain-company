@@ -26,6 +26,7 @@
 --   CC.CaravanSeed(key, start, salt) -> 1..PM-1;  CC.Outcome(hours, stake, seed, escort) -> back, kind | nil
 --     (escort == true: a bandit slot pays the fair road);  CC.ESCORT_PCT[hours], CC.EscortPrice(hours, stake) -> n | nil
 --   CC.PackBody(b) -> string;  CC.ParseBody(body, weekNow) -> b | nil, why
+--   CC.Worn(kind, n) -> item | nil, project | nil   (kind "title" or "badge"; nil, nil for a number with no item)
 --   CC.PackRow(b, off) -> string;  CC.ParseRow(row, weekNow) -> b, off | nil, why
 --     row = body *( "!" item ); item = "d" week "." salt "." target "." total "." i "." key | "d" week ".0"
 --       | "h" at "." key | "u" at "." key; off = { draw = d | nil, hides = { [key] = { on, at } } }
@@ -64,6 +65,7 @@ CC.GIVES = { 10, 100, 1000 }
 CC.TRIPS = { 1, 2, 4, 8 }
 CC.STAKES = { 50, 100, 250, 500 }
 CC.WIRE_BASE = { title = 0, colour = 6, badge = 12 }
+CC.WIRE_MAX_TITLE, CC.WIRE_MAX_BADGE = 15, 31     -- wire bounds, wider than any item
 CC.PROJECT_BADGE_BASE = 22
 CC.HIDE_MAX = 20                                  -- o1769; the worst-case row splits into 13 chunks
 CC.TOTAL_CAP = CC.TICKETS_MAX * (1000 + 50)       -- 10500, the fixed draw-total cap (d1608)
@@ -119,6 +121,20 @@ for _, it in ipairs(CC.FIELD_ITEMS) do FIELD_BY_ID[it.id] = it end
 function CC.Item(id)
   if type(id) ~= "number" then return nil end
   return CC.ITEMS[id] or FIELD_BY_ID[id]
+end
+
+-- What a worn title or badge number stands for: the item of that kind (title 1-6, badge 1-4) or the project
+-- (badge 5-10). A number with no item (0, or one a later release sends) gives nil, nil.
+function CC.Worn(kind, n)
+  if type(n) ~= "number" or n < 1 then return nil, nil end
+  if kind == "badge" and n > 4 then
+    if n - 4 <= #CC.PROJECTS then return nil, n - 4 end
+    return nil, nil
+  end
+  local base = CC.WIRE_BASE[kind]
+  local it = base and CC.ITEMS[base + n]
+  if it and it.kind == kind then return it, nil end
+  return nil, nil
 end
 
 function CC.Catalogue()
@@ -308,9 +324,9 @@ function CC.ParseBody(body, weekNow)
     b.gifts[k] = int(f[5 + k], 6, 0, CC.PROJECTS[k].goal)
     if not b.gifts[k] then return nil, "gift" end
   end
-  b.title = int(f[12], 2, 0, 6)
+  b.title = int(f[12], 2, 0, CC.WIRE_MAX_TITLE)
   b.colour = int(f[13], 2, 0, 6)
-  b.badge = int(f[14], 2, 0, 10)
+  b.badge = int(f[14], 2, 0, CC.WIRE_MAX_BADGE)
   if not (b.title and b.colour and b.badge) then return nil, "look" end
   -- The current and the previous ticket weeks are checked on their own (S14): count 0 with a previous week is the
   -- row of a key whose week's tickets moved to another character.

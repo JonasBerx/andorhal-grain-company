@@ -135,8 +135,8 @@ function GC.Sellable(row)
   return price and math.floor(price / SELL_DIVISOR)
 end
 
--- Gear stats. From a piece's row and temper, never an item id. Armor and Damage are shown only. The five +stats give Power
--- through GC.StatPower, by the follower's class kind; prices, repair, temper, sell values and the kit score never read them.
+-- Gear stats. From a piece's row, temper and roll, never an item id. Armor and Damage are shown only. The five +stats give
+-- Power through GC.StatPower, by the follower's class kind; prices, repair, temper, sell values and the kit score never read them.
 --   GC.STATS                                  the five +stat names, in the order the screens list them
 --   GC.PieceStats(piece) -> { armor = n|nil, low = n|nil, high = n|nil, stats = { { name = "Stamina", n = 3 }, ... } }
 --                                             a broken piece answers as if intact; an unknown row answers { stats = {} }
@@ -147,17 +147,50 @@ end
 --                                             0 for an unknown kind or no table of pieces
 GC.STATS = { "Strength", "Agility", "Intellect", "Stamina", "Spirit" }
 
+-- A rolled stat (issue 43, stage 2). A dropped plain green or blue carries piece.roll = 1..#GC.ROLLS: the roll names its
+-- +stats in place of the catalogue's, a green the first, a blue both; the amounts stay the rule's. Any other row, and any
+-- other value of roll, reads as no roll. The order is the wire's (Record.lua) and a saved piece's: append only, and the
+-- gear triple's third character has room for four.
+--   GC.ROLLS                                  { { name = "of the Bear", first stat, second stat }, ... }
+--   GC.CanRoll(row) -> boolean                a green or blue row with no set and no named
+--   GC.PieceName(piece) -> name | nil         the row's name, with the roll's name after it; nil for an unknown row
+GC.ROLLS = {
+  { name = "of the Bear", "Strength", "Stamina" },
+  { name = "of the Monkey", "Agility", "Stamina" },
+  { name = "of the Owl", "Intellect", "Spirit" },
+  { name = "of the Whale", "Stamina", "Spirit" },
+}
+
 local ARMOR = { chest = 8, legs = 7, head = 6, shoulder = 5, feet = 5, hands = 4, waist = 3, wrist = 3, back = 2 }
 local SHIELD_ARMOR = 10
 local OFFHAND = { p0 = "shield", p1 = "shield", p3 = "shield", p4 = "shield", p2 = "damage", p5 = "damage" } -- any other has no base line
 local SET_STATS = { ["Deathguard's Watch"] = { "Stamina", "Strength" }, ["Ambermill Warding"] = { "Intellect", "Spirit" } }
 
-local function statNames(row)
+function GC.CanRoll(row)
+  return type(row) == "table" and row.q >= GREEN and row.set == nil and row.named == nil
+end
+
+-- The roll a piece shows, or nil. A roll that is not a number never reaches the table: NaN is no key to read.
+local function rollOf(row, roll)
+  if type(roll) ~= "number" or roll ~= roll or not GC.CanRoll(row) then return nil end
+  return GC.ROLLS[roll]
+end
+
+local function statNames(row, roll)
+  local rolled = rollOf(row, roll)
+  if rolled then return rolled[1], rolled[2] end
   local set = SET_STATS[row.set]
   if set then return set[1], set[2] end
   local a, b = string.byte(row.code, 1, 2)
   local i = (a + b) % #GC.STATS
   return GC.STATS[i + 1], GC.STATS[(i + 1) % #GC.STATS + 1]
+end
+
+function GC.PieceName(piece)
+  local row = type(piece) == "table" and GD.Row(piece.row)
+  if not row then return nil end
+  local rolled = rollOf(row, piece.roll)
+  return rolled and (row.name .. " " .. rolled.name) or row.name
 end
 
 function GC.PieceStats(piece)
@@ -174,7 +207,7 @@ function GC.PieceStats(piece)
     out.low, out.high = v, 2 * v
   end
   if row.q >= GREEN then
-    local first, second = statNames(row)
+    local first, second = statNames(row, piece.roll)
     out.stats[1] = { name = first, n = math.max(1, math.floor(v / 3)) }
     if row.q >= BLUE then out.stats[2] = { name = second, n = math.max(1, math.floor(v / 4)) } end
   end

@@ -42,6 +42,11 @@ local function demoFollowers(now)
   return { next = 6, rows = rows }
 end
 
+-- Rolled stats (issue 43): Vesper, a Paladin, wears two pieces of the Bear; Storage holds legs of the Owl, which give
+-- her nothing; each guild row's first follower wears a head of the Monkey.
+local VESPER_ROLLS = { neck = 1, hands = 1 }
+local STORED_ROLL, CREW_ROLL = 3, 2
+
 -- Worn pieces are bag rows with no cell: ids 1..16, one per slot, the first two set pieces in their own slots.
 local function demoBag(vesper)
   local GD = ns.GearData
@@ -53,7 +58,8 @@ local function demoBag(vesper)
     end
   end
   for i, slot in ipairs(GD.SLOTS) do
-    rows[i] = { id = i, row = set[slot.key] or code(slot.key, 2, i % 3 == 1 and 3 or 2), temper = i % 4 == 0 and 2 or 0 }
+    rows[i] = { id = i, row = set[slot.key] or code(slot.key, 2, i % 3 == 1 and 3 or 2), temper = i % 4 == 0 and 2 or 0,
+      roll = VESPER_ROLLS[slot.key] }
     vesper.gear[slot.key] = i
   end
   local id, cell = #rows, 0
@@ -64,7 +70,7 @@ local function demoBag(vesper)
   end
   put({ row = code("feet", 2, 2), broken = true, temper = 0 })
   put({ row = code("hands", 1, 1), temper = 3 })
-  put({ row = code("legs", 2, 3), temper = 0 })
+  put({ row = code("legs", 2, 3), temper = 0, roll = STORED_ROLL })
   put({ kind = "salvage", key = 1, n = 24 })
   put({ kind = "salvage", key = 2, n = 9 })
   for _, s in ipairs({ { "rations", 6 }, { "bandage", 5 }, { "whetstone", 3 }, { "candle", 2 }, { "scoutchart", 2 }, { "gravemoss", 1 },
@@ -116,6 +122,7 @@ local function crewFollowers(spec)
   for i, c in ipairs(spec) do
     out[i] = { name = ns.LootData.NAMES[c[1]][c[2]], race = c[1], class = c[3], sex = c[4], level = c[5], state = c[6],
       wins = c[7], deadly = c[8], look = i == 1 and "g2" or nil, traits = {}, pieces = crewPieces(c[5]) }
+    if i == 1 then out[i].pieces.head.roll = CREW_ROLL end
   end
   return out
 end

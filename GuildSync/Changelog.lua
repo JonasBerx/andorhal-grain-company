@@ -8,6 +8,16 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.20.4", lines = {
+    "Reads later versions' data (followers above level 10, longer writ lists, new Company badges and titles), so no member's record is dropped. No change on screen.",
+  }, addons = {
+    { folder = "GuildSyncExpeditions", lines = {
+      "Uncommon and Rare drops roll stats: of the Bear, Monkey, Owl or Whale. Assaults lean to Strength, Scouting to Agility, Rituals to Intellect. Dungeons roll even.",
+    } },
+    { folder = "GuildSyncNoticeBoard", lines = {
+      "An event you may remove has a Cancel event button on the Events tab. It asks first, then takes the event off the guild calendar for everyone.",
+    } },
+  } },
   { version = "0.20.3", lines = {
     "A new install works on today's game client, which names no realm: GuildSync and Kill on Sight no longer wait for one.",
   }, addons = {

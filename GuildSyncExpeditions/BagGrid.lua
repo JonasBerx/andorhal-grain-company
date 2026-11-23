@@ -160,7 +160,7 @@ local function change(tip, d, text)
   if d ~= 0 then tip:AddLine(signed(d) .. text, tint(d)) end
 end
 
--- Both sides are read as { row, temper }, so a broken piece compares at the values its own tooltip shows.
+-- Both sides are read as { row, temper, roll }, so a broken piece compares at the values its own tooltip shows.
 local function compare(tip, entry)
   local GC, GD = ns.GearCore, ns.GearData
   local follower = ns.PickedFollower and ns.PickedFollower()
@@ -174,12 +174,12 @@ local function compare(tip, entry)
   local wornRow = worn and GD.Row(worn.row)
   local name = ns.Escape(follower.name)
   if wornRow then
-    tip:AddLine("If " .. name .. " wears this instead of " .. wornRow.name .. ":", 1, 0.82, 0)
+    tip:AddLine("If " .. name .. " wears this instead of " .. GC.PieceName(worn) .. ":", 1, 0.82, 0)
   else
     tip:AddLine("If " .. name .. " wears this (" .. SLOT_LABEL[GC.KIND[row.slot]] .. " empty):", 1, 0.82, 0)
   end
-  local new = { row = entry.row, temper = entry.temper }
-  local old = wornRow and { row = worn.row, temper = worn.temper }
+  local new = { row = entry.row, temper = entry.temper, roll = entry.roll }
+  local old = wornRow and { row = worn.row, temper = worn.temper, roll = worn.roll }
   local a, b = GC.PieceStats(new), old and GC.PieceStats(old) or { stats = {} }
   change(tip, GC.Value(new) - (old and GC.Value(old) or 0), " " .. ns.W.Name["piece value"])
   change(tip, (a.armor or 0) - (b.armor or 0), " Armor")
@@ -202,7 +202,7 @@ local function pieceTip(tip, owner, entry, level, readOnly)
   end
   local need = GC.WearLevel(row.tier)
   local r, g, b = rgb(GC.QUALITY_COLOUR[row.q])
-  tip:SetText(row.name, r, g, b)
+  tip:SetText(GC.PieceName(entry), r, g, b) -- with its rolled stat's name, "of the Bear" (issue 43)
   tip:AddLine(SLOT_LABEL[GC.KIND[row.slot]], 1, 1, 1)
   tip:AddLine(W.Name["piece value"] .. " " .. GC.Value({ row = entry.row, temper = entry.temper }), 1, 0.82, 0)
   statLines(tip, entry, readOnly)

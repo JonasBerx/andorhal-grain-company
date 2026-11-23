@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.4
+
+- Reads later versions' data (followers above level 10, longer writ lists, new Company badges and titles), so no member's record is dropped. No change on screen.
+
+### Expeditions
+
+- Uncommon and Rare drops roll stats: of the Bear, Monkey, Owl or Whale. Assaults lean to Strength, Scouting to Agility, Rituals to Intellect. Dungeons roll even.
+
+### Notice Board
+
+- An event you may remove has a Cancel event button on the Events tab. It asks first, then takes the event off the guild calendar for everyone.
+
 ## 0.20.3
 
 - A new install works on today's game client, which names no realm: GuildSync and Kill on Sight no longer wait for one.
