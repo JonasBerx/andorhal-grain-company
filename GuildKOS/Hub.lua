@@ -49,7 +49,7 @@ local APIS = { "GetServerTime", "UnitGUID", "UnitExists", "UnitNameUnmodified", 
   "UnitRace", "UnitClass", "UnitLevel", "GetZoneText", "GetSubZoneText", "GetRealmName",
   "GetNormalizedRealmName", "C_Sound.PlaySound", "InCombatLockdown", "IsInInstance",
   optional = { "PlaySound", "C_Secrets.ShouldUnitIdentityBeSecret", "GetGuildInfo",
-    "C_XMLUtil.GetTemplateInfo", "C_Texture.GetAtlasInfo" } }
+    "C_XMLUtil.GetTemplateInfo", "C_Texture.GetAtlasInfo", "UnitSex" } }
 -- What each optional client function turns off when it is missing (status).
 local OFF = {
   PlaySound = "the old sound fallback",
@@ -57,6 +57,7 @@ local OFF = {
   GetGuildInfo = "the guild name fallback",
   ["C_XMLUtil.GetTemplateInfo"] = "the page's template checks (plain frames and buttons)",
   ["C_Texture.GetAtlasInfo"] = "the painting crop",
+  UnitSex = "the targets' sex on the cards",
 }
 
 -- The argument each optional function is probed with in status (read-only calls).
@@ -77,11 +78,13 @@ local ok, answer = pcall(hub.RegisterModule, {
   title = TITLE,
   version = "0.7.0",
   -- API 9 brings the purse (M.Credit) and M.Toast for the kill grain (issue 8); an API 4-8 hub keeps 0.6's page and
-  -- gives no grain (ns.Hub.Credit answers "no purse")
-  needs = hub.API >= 9 and 9 or 4,
+  -- gives no grain (ns.Hub.Credit answers "no purse"). API 10 brings M.Kit.Button for the mark form (issue 44 s3); an
+  -- API 9 hub keeps the page's own buttons
+  needs = (hub.API >= 10 and 10) or (hub.API >= 9 and 9) or 4,
   apis = APIS,
+  -- PLAYER_REGEN_DISABLED and _ENABLED re-check Mark my target on the page (issue 44 s3)
   events = { "NAME_PLATE_UNIT_ADDED", "UPDATE_MOUSEOVER_UNIT", "PLAYER_TARGET_CHANGED",
-    "ZONE_CHANGED_NEW_AREA", "PARTY_KILL" },
+    "ZONE_CHANGED_NEW_AREA", "PARTY_KILL", "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" },
   onEvent = function(event, ...) ns.Core.OnEvent(event, ...) end,
   slash = function(rest) ns.Core.Slash(rest) end,
   page = {
@@ -112,7 +115,10 @@ local ok, answer = pcall(hub.RegisterModule, {
     if ns.Spot and ns.Spot.Status then line = line .. "; " .. ns.Spot.Status() end
     return line
   end,
-  onLogin = function() loggedIn = true end,
+  onLogin = function()
+    loggedIn = true
+    ns.Mark.Login(ns.Core.Now()) -- issue 44 s6: marks from before this login never ping
+  end,
   -- Esc > Options > AddOns > GuildSync > Kill on Sight. The hub makes the set inert under /gsync demo.
   settings = function(S)
     S.Checkbox("alerts", "Alerts on (banner and sound)", true,
@@ -172,6 +178,11 @@ ns.Hub = {
   Ready = function() return (ns.Store.Ready()) end, -- the one readiness gate (d792)
   Now = function() return M.Compat.call("GetServerTime") end,
   Call = function(...) return M.Compat.call(...) end,
+  -- fn(...) through M.Safe (a throw is recorded under the module), else pcall, as the page's handlers (issue 44 s9)
+  Safe = function(fn, ...)
+    if type(M.Safe) == "function" then return M.Safe(fn, ...) end
+    return pcall(fn, ...)
+  end,
   After = function(seconds, fn) M.After(seconds, fn) end,
   -- API 9 and 7 (the kill grain, issue 8); missing on an older handle, these answer as if there were no purse
   Credit = function(n)

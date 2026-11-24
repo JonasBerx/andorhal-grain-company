@@ -8,6 +8,22 @@
 local ADDON, ns = ...
 
 ns.CHANGELOG = {
+  { version = "0.20.5", lines = {}, addons = {
+    { folder = "GuildKOS", lines = {
+      "The Kill on Sight List has an Alerts box in place of the /kos off hint, and its count says how many targets were seen in the last 10 min.",
+      "The mark form has labelled boxes and two buttons, Mark my target (grey, with the reason, when it cannot) and Add by name; the answer shows under it.",
+      "The List shows this week's kill grain (paid, cap, grain a kill) and a \"paid this week\" pill; the paid toast says how many are left.",
+      "The List sorts by Recently seen (kept after /reload), Name or Added, has a search box, and shows \"Seen just now\" and \"Seen today\".",
+      "Officers see \"Waiting (N)\" and get one line and one toast when a member's mark starts waiting, at most one a minute; members no longer see Waiting.",
+      "A member hears once, in chat and a toast, when an officer approves or rejects their mark; Mine keeps it for 7 days with an Approved or Rejected tag.",
+      "The officers' kill grain confirm names only what changed, for example \"Grain a kill: 100 \226\134\146 250\", and asks nothing when nothing changed.",
+      "Esc > Options > Keybindings has \"Kill on Sight: Mark my target\": the key does what /kos mark does, with the same lines.",
+      "The List shows its targets as cards, two a row, beside a details panel; clicking a card fills the panel (Last seen, Why, Marked, Kills).",
+      "A guildmate's kill of an open target is shared: cards say \"Last killed by <name>, <ago>\" and the details panel lists the recent kills.",
+      "Cards have a bigger portrait (the female face once you have seen her), the class colour, the race's start-zone art and a level coloured by danger.",
+      "Every member's sighting carries the target's level, so cards show the newest level anyone in the guild saw.",
+    } },
+  } },
   { version = "0.20.4", lines = {
     "Reads later versions' data (followers above level 10, longer writ lists, new Company badges and titles), so no member's record is dropped. No change on screen.",
   }, addons = {

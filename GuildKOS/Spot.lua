@@ -139,7 +139,8 @@ end
 
 -- ---------- the own sighting (AC22) ----------
 
-local function share(guid, t, zone, subzone)
+-- level: the target's level when the game gave a number >= 1, else nil (-1 is ??); issue 44 d83
+local function share(guid, t, zone, subzone, level)
   local here = shard ~= "" and shard or nil
   ns.Store.WriteOwn(function(r)
     local keep = {}
@@ -147,7 +148,7 @@ local function share(guid, t, zone, subzone)
       local at = tonumber(s.time)
       if s.target ~= guid and at and t - at < KEEP then keep[#keep + 1] = s end
     end
-    keep[#keep + 1] = { target = guid, time = t, zone = zone, subzone = subzone, shard = here }
+    keep[#keep + 1] = { target = guid, time = t, zone = zone, subzone = subzone, shard = here, level = level }
     table.sort(keep, function(a, b)
       if a.time ~= b.time then return a.time > b.time end
       return tostring(a.target) < tostring(b.target)
@@ -229,6 +230,8 @@ function Spot.OnUnit(_, unit, guid)
   end
   if type(rec) ~= "table" or rec.status ~= "open" then return end
   if call("UnitIsEnemy", "player", unit) == false then return end -- a plain false is a friendly unit (f8581)
+  -- the target's sex and level for this account (issue 44 d81), each time it is seen, before the alert's throttle
+  if ns.Seen then ns.Seen.Note(guid, unit) end
   local t = now()
   prune(spotSeen, t, R().WINDOW)
   if not R().Throttle(spotSeen, guid, t, R().WINDOW) then return end
@@ -238,7 +241,10 @@ function Spot.OnUnit(_, unit, guid)
   local zone, subzone = text(call("GetZoneText"), caps.zone), text(call("GetSubZoneText"), caps.subzone)
   if not ns.Core.DB().muted then alert(rec, zone, subzone) end
   -- before the roster is whole the sighting is neither held nor written (AC7a, f5426); the alert above still shows
-  if ns.Store.Ready() then share(guid, t, zone, subzone) end
+  if ns.Store.Ready() then
+    local level = call("UnitLevel", unit)
+    share(guid, t, zone, subzone, type(level) == "number" and level >= 1 and math.floor(level) or nil)
+  end
   if setLastSeen(rec.name, t, zone, subzone, memberName(myKey()), true, t) and ns.Hub then ns.Hub.Refresh() end
   -- an officer's sighting links the entry to the player; "decided" or "full" leaves all as is, with no line (gate A 2)
   if realGuid and ns.Store.CanWriteOfficer() then

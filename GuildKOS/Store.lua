@@ -21,7 +21,7 @@ local HELD_MAX = 20      -- held own edits, oldest out (f5439)
 local polling = false
 local listener          -- OnHunterMerged's one listener
 local targetListener    -- OnTargetMerged's one listener
-local memberListener    -- OnMemberMerged's one listener
+local memberListeners = {} -- OnMemberMerged's listeners, in order (Spot's sightings, Mark's waiting ping; issue 44 s6)
 
 local function Records() return ns.RulesRecords end
 local function comm() return type(GuildSync) == "table" and GuildSync.Comm or nil end
@@ -269,7 +269,12 @@ local function newStore(id)
     tidy(id, t)
     if id == "kos_h" and listener and r[msg.key] and msg.key ~= SETTINGS then listener(msg.key, rec) end
     if id == "kos" and targetListener and r[msg.key] then targetListener(msg.key, rec) end
-    if id == "kos_m" and memberListener and r[msg.key] then memberListener(msg.key, rec) end
+    if id == "kos_m" and r[msg.key] then
+      -- each in its own M.Safe (the error recorded under the module's title), so one failing listener stops no other
+      for _, fn in ipairs(memberListeners) do
+        if M and type(M.Safe) == "function" then M.Safe(fn, msg.key, rec) else pcall(fn, msg.key, rec) end
+      end
+    end
     return true
   end
   function store.round(t)
@@ -366,6 +371,16 @@ end
 function Store.Target(guid) return read("kos", type(guid) == "string" and "t" .. guid or nil) end
 function Store.Hunter(key) return read("kos_h", type(key) == "string" and "h" .. key or nil) end
 function Store.Member(key) return read("kos_m", key) end
+
+-- Store.Members() -> { [member key] = kos_m record } for every member record held (own and learned; issue 44 d78,
+-- Kill.Recent). A new table; the records are the held ones, not copies.
+function Store.Members()
+  local out = {}
+  for k, e in pairs(recs("kos_m") or {}) do
+    if type(k) == "string" and type(e) == "table" and type(e.rec) == "table" then out[k] = e.rec end
+  end
+  return out
+end
 
 -- ---------- writes ----------
 
@@ -536,8 +551,8 @@ function Store.OnTargetMerged(fn)
   targetListener = type(fn) == "function" and fn or nil
 end
 
--- One listener, called with the record key and record after every merged (not own) kos_m record (Task E: heard
--- sightings, ns.Spot).
+-- Adds a listener, called with the record key and record after every merged (not own) kos_m record (Task E: heard
+-- sightings, ns.Spot; issue 44 s6: the officers' waiting ping, ns.Mark). Every listener runs, in the order added.
 function Store.OnMemberMerged(fn)
-  memberListener = type(fn) == "function" and fn or nil
+  if type(fn) == "function" then memberListeners[#memberListeners + 1] = fn end
 end

@@ -102,12 +102,123 @@ function Kills.Line(why, name, cfg)
   return head .. "The grain could not be paid right now."
 end
 
+-- ---------- the week on the page (issue 44 s5) ----------
+
+local DOT = " \194\183 "
+local RESETS = "resets Monday 00:00 UTC"   -- RulesBoard.Week
+
+-- Kills.Week(paid, week, cfg) -> { paid, left, capped = { [victim] = true } }: paid is every paid entry of the account
+-- (any guild, as Judge's all), counted for week alone as Judge counts it; left is cfg.weekCap less paid, never below 0;
+-- capped holds the victims paid cfg.perTarget times this week (the card's "paid this week").
+function Kills.Week(paid, week, cfg)
+  cfg = cfg or Kills.Settings(nil)
+  local n, per, capped = 0, {}, {}
+  for _, e in pairs(type(paid) == "table" and paid or {}) do
+    if type(e) == "table" and e.week == week then
+      n = n + 1
+      if type(e.victim) == "string" then
+        per[e.victim] = (per[e.victim] or 0) + 1
+        if per[e.victim] >= cfg.perTarget then capped[e.victim] = true end
+      end
+    end
+  end
+  return { paid = n, left = math.max(0, cfg.weekCap - n), capped = capped }
+end
+
+-- Kills.Strip(sum, cfg) -> the List's kill grain line from Kills.Week's sum.
+function Kills.Strip(sum, cfg)
+  cfg = cfg or Kills.Settings(nil)
+  if cfg.reward <= 0 or cfg.weekCap <= 0 then return "Kill grain is off" end
+  return "Kill grain: " .. sum.paid .. " of " .. cfg.weekCap .. " paid kills this week" .. DOT .. cfg.reward
+    .. " a kill" .. DOT .. RESETS
+end
+
+-- Kills.CapToast(cfg) -> the toast for the first weekly-cap refusal of a week.
+function Kills.CapToast(cfg)
+  cfg = cfg or Kills.Settings(nil)
+  return "No more kill grain this week: " .. cfg.weekCap .. " of " .. cfg.weekCap .. " paid kills" .. DOT .. RESETS
+end
+
 -- Kills.SettingsLine(cfg) -> one line naming the guild's kill grain numbers (Kill.SetSetting's confirm and its line).
 function Kills.SettingsLine(cfg)
   cfg = cfg or Kills.Settings(nil)
   if cfg.reward <= 0 or cfg.weekCap <= 0 then return "Kill grain is off." end
   return "Kill grain: " .. cfg.reward .. " a kill, " .. cfg.weekCap .. " paid kill" .. (cfg.weekCap == 1 and "" or "s")
     .. " a week per account, " .. cfg.perTarget .. " of each target a week."
+end
+
+-- ---------- shared kills (issue 44, d78) ----------
+-- Every own kill of an open target is a claim { time, victim, zone } in the killer's own kos_m record (Kill.lua), so the
+-- hub's sync carries it to the guild; no officer step, no grain (the ledger above is separate).
+
+local WEEK = 604800
+Kills.CLAIMS = 6   -- claims a kos_m record holds (RulesRecords SPEC m.claims max)
+
+-- Kills.AddClaim(claims, claim) -> a new list: claim added (the same victim and time once), the CLAIMS newest kept,
+-- newest first. claims is not changed.
+function Kills.AddClaim(claims, claim)
+  local out = {}
+  for _, c in ipairs(type(claims) == "table" and claims or {}) do
+    if type(c) == "table" and not (c.victim == claim.victim and tonumber(c.time) == tonumber(claim.time)) then
+      out[#out + 1] = c
+    end
+  end
+  out[#out + 1] = claim
+  table.sort(out, function(a, b)
+    local ta, tb = tonumber(a.time) or 0, tonumber(b.time) or 0
+    if ta ~= tb then return ta > tb end
+    return tostring(a.victim) < tostring(b.victim)
+  end)
+  for i = #out, Kills.CLAIMS + 1, -1 do out[i] = nil end
+  return out
+end
+
+-- Kills.Recent(members, victim, now) -> { { hunter, at }, ... } newest first (then by hunter): every claim on victim in
+-- members (a map member key -> kos_m record, or an array of records carrying key), at most RulesRecords.FUTURE ahead
+-- of now and younger than KEEP_WEEKS weeks; the same hunter and time once.
+function Kills.Recent(members, victim, now)
+  local out, seen = {}, {}
+  if type(members) ~= "table" or type(victim) ~= "string" or type(now) ~= "number" then return out end
+  local ahead = now + ((ns.RulesRecords and ns.RulesRecords.FUTURE) or 300)
+  local oldest = now - Kills.KEEP_WEEKS * WEEK
+  for k, rec in pairs(members) do
+    local hunter = type(k) == "string" and k or (type(rec) == "table" and rec.key) or nil
+    if type(rec) == "table" and type(hunter) == "string" and type(rec.claims) == "table" then
+      for _, c in ipairs(rec.claims) do
+        local at = type(c) == "table" and c.victim == victim and tonumber(c.time) or nil
+        local id = at and hunter .. "/" .. at
+        if at and at <= ahead and at > oldest and not seen[id] then
+          seen[id] = true
+          out[#out + 1] = { hunter = hunter, at = at }
+        end
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.at ~= b.at then return a.at > b.at end
+    return a.hunter < b.hunter
+  end)
+  return out
+end
+
+-- ---------- the officers' confirm (issue 44 s8) ----------
+
+local ARROW = " \226\134\146 "
+local LABELS = { { "reward", "Grain a kill" }, { "weekCap", "Paid kills a week" },
+  { "perTarget", "Paid kills of one target a week" } }
+
+-- Kills.Changes(old, new) -> "Label: old → new" for each number that differs, joined by the dot, in a fixed order;
+-- nil when nothing changed. A reward or weekly cap of 0 reads Off, as the Options dropdowns show it (Hub.lua).
+function Kills.Changes(old, new)
+  old, new = old or Kills.Settings(nil), new or Kills.Settings(nil)
+  local function say(name, n) return (n == 0 and name ~= "perTarget") and "Off" or tostring(n) end
+  local out = {}
+  for _, l in ipairs(LABELS) do
+    local name = l[1]
+    if old[name] ~= new[name] then out[#out + 1] = l[2] .. ": " .. say(name, old[name]) .. ARROW .. say(name, new[name]) end
+  end
+  if #out == 0 then return nil end
+  return table.concat(out, DOT)
 end
 
 return Kills

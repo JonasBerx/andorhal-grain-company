@@ -18,7 +18,8 @@ Core.Plain = hubCompat and hubCompat.Plain or function() return nil end
 
 -- ---------- saved data ----------
 
--- GuildKOSDB = { schema = 6, guilds = { [guild name .. ".." .. realm] = { ... } }, muted = bool }. Any other shape
+-- GuildKOSDB = { schema = 6, guilds = { [guild name .. ".." .. realm] = { ... } }, muted = bool, sort = the List's
+-- sort (Core.Sort, issue 44 s4) }. Any other shape
 -- (0.5's list, lastSeen, sightings, demo, minimap) is discarded. Re-read on every call: GuildKOSDB is nil at load and
 -- replaced when the saved variables arrive.
 local SCHEMA = 6
@@ -96,6 +97,16 @@ function Core.Guild()
   return guilds[key]
 end
 
+-- This guild's decided list (issue 44 s7, ns.Mark): { { guid, name, race, class, level, outcome = "approved" |
+-- "rejected", marked, at, told }, ... }, one per own mark an officer decided, kept on this client only (never synced);
+-- nil while the guild name is unread.
+function Core.Decided()
+  local g = Core.Guild()
+  if not g then return nil end
+  if type(g.decided) ~= "table" then g.decided = {} end
+  return g.decided
+end
+
 do
   local f = CreateFrame("Frame")
   f:RegisterEvent("ADDON_LOADED")
@@ -139,6 +150,11 @@ function Core.OnEvent(event, a1, a2)
     if type(unit) ~= "string" then return end
     local guid = ns.Hub and ns.Hub.Call("UnitGUID", unit) or nil
     route("Spot", "OnUnit", event, unit, guid)
+    if event == "PLAYER_TARGET_CHANGED" then route("Page", "Recheck") end
+  elseif event == "PLAYER_REGEN_DISABLED" then
+    route("Page", "Recheck", true)   -- the lockdown starts after this event (issue 44 s3)
+  elseif event == "PLAYER_REGEN_ENABLED" then
+    route("Page", "Recheck")
   elseif event == "PARTY_KILL" then
     -- the killing blow's attacker and victim GUIDs (issue 8): grain for your own kill of an open target (ns.Kill)
     route("Kill", "OnPartyKill", Core.Plain(a1), Core.Plain(a2))
@@ -146,6 +162,10 @@ function Core.OnEvent(event, a1, a2)
 end
 
 -- ---------- actions shared by /kos, the page and the settings ----------
+
+-- The List's sort (issue 44 s4): GuildKOSDB.sort, one of List.SORTS, kept across /reload; "seen" when unset (q1).
+function Core.Sort() return ns.List.SortBy(Core.DB().sort) end
+function Core.SetSort(by) Core.DB().sort = ns.List.SortBy(by) end
 
 function Core.SetMuted(muted)
   local db = Core.DB()
@@ -205,10 +225,11 @@ local function slash(msg)
   elseif cmd == "off" then
     Core.SetMuted(true)
   elseif cmd == "mark" then
-    -- Mark as bounty on the current target (ns.Mark, Task D); inert under /gsync demo (AC36)
+    -- Mark as bounty on the current target (ns.Mark, Task D); inert under /gsync demo (AC36). The Mark my target key
+    -- (Bindings.xml, issue 44 s9) runs this branch; the mark runs through the module's M.Safe (ns.Hub.Safe).
     if ns.Hub and ns.Hub.InDemo() then print("KOS: " .. ns.List.RefusalLine("demo"))
-    elseif rest == "" then route("Mark", "FromTarget")
-    else route("Mark", "FromTarget", rest) end
+    elseif not ns.Hub then route("Mark", "FromTarget", rest ~= "" and rest or nil)
+    else ns.Hub.Safe(route, "Mark", "FromTarget", rest ~= "" and rest or nil) end
   elseif cmd == "add" then
     -- Mark a player by the typed First Surname (ns.Mark.FromName); inert under /gsync demo, as /kos mark
     if ns.Hub and ns.Hub.InDemo() then print("KOS: " .. ns.List.RefusalLine("demo"))
@@ -229,6 +250,10 @@ local function slash(msg)
     print("KOS: /kos prints the list, /kos ui opens the Kill on Sight page, /kos mark [why] marks your target as a bounty, /kos add First Surname [why] marks a player by name, /kos on and /kos off turn alerts on and off, /kos demo shows a demo (as /gsync demo).")
   end
 end
+
+-- the Mark my target key's names in Esc > Options > Keybindings (GuildKOS/Bindings.xml, issue 44 s9)
+BINDING_HEADER_GUILDKOS = "Kill on Sight"
+BINDING_NAME_GUILDKOS_MARK = "Mark my target"
 
 SLASH_KOS1 = "/kos"
 SlashCmdList.KOS = slash

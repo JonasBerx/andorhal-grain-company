@@ -7,8 +7,8 @@
 -- The enemies are 0.3's two-part Alliance names (the demo guild is Horde): five open targets and two waiting marks.
 -- Markers, claimers, witnesses and spotters are members below the top three ranks (rankIndex >= 3, o857); confirming
 -- officers are the top three (rankIndex <= 2). Both are read from guild.members in sorted key order, never by name.
--- Build(guild, now, kills): the kos_h board, the target kills, the claims and the witness only when kills is true
--- (d1822, o2310; the hub passes ns.Probe.kills). Otherwise only the open targets, the waiting marks and the sightings.
+-- Build(guild, now, kills): the kos_h board, the target kills and the witness only when kills is true (d1822, o2310; the
+-- hub passes ns.Probe.kills). Otherwise the open targets, the waiting marks, the claims (issue 44 d78) and the sightings.
 local _, ns = ...
 local Demo = {}
 ns.RulesDemo = Demo
@@ -123,14 +123,15 @@ function Demo.Build(guild, now, kills)
       subzone = "", why = WHY[i], time = now - j * 3600 }
   end
 
-  -- three waiting claims; the third is witnessed by another member's PARTY_KILL line
+  -- three claims, always (issue 44 d78: shared kills, the cards' "Last killed by"); with kills the third is witnessed
+  -- by another member's PARTY_KILL line
   local w = holder(low[4])
+  local claims = { { low[1], 4, 9000 }, { low[2], 5, 9600 }, { low[3], 4, 7200 } }
+  for _, c in ipairs(claims) do
+    local m = holder(c[1])
+    m.claims[#m.claims + 1] = { time = now - c[3], victim = guid(c[2]), zone = ZONES[c[2]] }
+  end
   if kills == true then
-    local claims = { { low[1], 4, 9000 }, { low[2], 5, 9600 }, { low[3], 4, 7200 } }
-    for _, c in ipairs(claims) do
-      local m = holder(c[1])
-      m.claims[#m.claims + 1] = { time = now - c[3], victim = guid(c[2]), zone = ZONES[c[2]] }
-    end
     w.witness[#w.witness + 1] = { killer = low[3].id, victim = guid(4), time = now - 7200 + 2 }
   end
 

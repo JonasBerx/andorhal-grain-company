@@ -16,17 +16,33 @@ local function myKey()
 end
 local function now() return ns.Core and ns.Core.Now() or 0 end
 
--- One "KOS: ..." line for a refusal; answers nil, reason.
+-- One "KOS: ..." line for a refusal; answers nil, reason, line (the line without "KOS: ", for the page; issue 44 s3).
 local function refuse(reason, line)
-  print("KOS: " .. (line or Marks().Refusal(reason) or ("Not marked (" .. tostring(reason) .. ").")))
-  return nil, reason
+  line = line or Marks().Refusal(reason) or ("Not marked (" .. tostring(reason) .. ").")
+  print("KOS: " .. line)
+  return nil, reason, line
 end
 
-local function inCombat() return call("InCombatLockdown") == true and not ns.Probe.combatMark end
+-- One "KOS: ..." line for a mark that landed, after the page refresh as before; answers true, line.
+local function landed(line)
+  print("KOS: " .. line)
+  if ns.Hub then ns.Hub.Refresh() end
+  return true, line
+end
 
--- Mark.Available() -> true | false, line: the button's state.
-function Mark.Available()
-  if inCombat() then return false, Marks().Refusal("combat") end
+-- In combat by InCombatLockdown, or fighting true (PLAYER_REGEN_DISABLED fires before the lockdown starts).
+local function inCombat(fighting)
+  return (fighting == true or call("InCombatLockdown") == true) and not ns.Probe.combatMark
+end
+
+local readTarget
+
+-- Mark.Available(fighting) -> true | false, line: Mark my target's state (issue 44 s3): off in combat, and off with no
+-- target that can be marked (no target, not a player, not an enemy, ...), with the refusal FromTarget would print.
+function Mark.Available(fighting)
+  if inCombat(fighting) then return false, Marks().Refusal("combat") end
+  local unit, reason = readTarget()
+  if not unit then return false, Marks().Refusal(reason) end
   return true
 end
 
@@ -102,6 +118,8 @@ function Mark.ReadUnit(unit)
   if not name or not name:find(" ", 1, true) then return nil, "name" end
   local R = ns.RulesRecords
   local race, class, level = call("UnitRace", unit), call("UnitClass", unit), call("UnitLevel", unit)
+  -- an open target read from a unit notes its sex and level for this account (issue 44 d81; Seen checks open)
+  if ns.Seen then ns.Seen.Note(guid, unit) end
   return {
     guid = guid,
     name = R.Safe(name),
@@ -110,7 +128,7 @@ function Mark.ReadUnit(unit)
     level = type(level) == "number" and level >= 1 and math.floor(level) or nil,
   }
 end
-local function readTarget() return Mark.ReadUnit("target") end
+readTarget = function() return Mark.ReadUnit("target") end
 
 local function text(s, cap)
   if type(s) ~= "string" then return nil end
@@ -165,8 +183,8 @@ local function openEntry(name)
   return nil
 end
 
--- Mark.FromTarget(why) -> true | nil, reason. The button and /kos mark [why] call it; a refusal prints one line and
--- writes nothing.
+-- Mark.FromTarget(why) -> true, line | nil, reason, line. Mark my target and /kos mark [why] call it; a refusal prints
+-- one line and writes nothing. line is the printed line without "KOS: ", for the page's answer line (issue 44 s3).
 function Mark.FromTarget(why)
   if ns.Hub and ns.Hub.InDemo() then return refuse("demo", ns.List.RefusalLine("demo")) end
   if inCombat() then return refuse("combat") end
@@ -192,17 +210,16 @@ function Mark.FromTarget(why)
       if not done then
         return refuse(bad, ns.List.RefusalLine((bad == "full" or bad == "open") and "open" or bad))
       end
-      print("KOS: " .. ns.Hub.Escape(mark.name) .. " is on the list.")
-      return true
+      local line = ns.Hub.Escape(mark.name) .. " is on the list."
+      print("KOS: " .. line)
+      return true, line   -- Mark.Link refreshed the page
     end
     local rec = { status = "open", name = mark.name, race = mark.race, class = mark.class, level = mark.level,
       zone = mark.zone, why = mark.why, markedBy = myKey(), markedAt = t,
       kills = type(held) == "table" and held.kills or {}, rejected = type(held) == "table" and held.rejected or {} }
     local done, bad = ns.Store.WriteTarget(mark.guid, rec, t)
     if not done then return refuse(bad == "open" and "full" or bad, ns.List.RefusalLine(bad)) end
-    print("KOS: " .. ns.Hub.Escape(mark.name) .. " is on the list.")
-    if ns.Hub then ns.Hub.Refresh() end
-    return true
+    return landed(ns.Hub.Escape(mark.name) .. " is on the list.")
   end
 
   -- a member's mark waits in the own kos_m record; the cap refuses before any write (d796)
@@ -217,9 +234,7 @@ function Mark.FromTarget(why)
     r.marks = keep
   end, t)
   if not done then return refuse(bad, ns.List.RefusalLine(bad)) end
-  print("KOS: " .. ns.Hub.Escape(mark.name) .. " waits for an officer.")
-  if ns.Hub then ns.Hub.Refresh() end
-  return true
+  return landed(ns.Hub.Escape(mark.name) .. " waits for an officer.")
 end
 
 -- The held mark from markerKey on guid, when it still waits.
@@ -259,7 +274,7 @@ end
 function Mark.Approve(markerKey, guid, t) return decide("open", markerKey, guid, t) end
 function Mark.Reject(markerKey, guid, t) return decide("rejected", markerKey, guid, t) end
 
--- Mark.FromName(name, why) -> true | nil, reason: /kos add and the Name box. An officer's name entry is open at once;
+-- Mark.FromName(name, why) -> true, line | nil, reason, line (as FromTarget): /kos add and Add by name. An officer's name entry is open at once;
 -- a member's name mark waits. Typing the targeted enemy's own name marks the target (d2002). A refusal prints one line.
 function Mark.FromName(name, why)
   if ns.Hub and ns.Hub.InDemo() then return refuse("demo", ns.List.RefusalLine("demo")) end
@@ -284,9 +299,7 @@ function Mark.FromName(name, why)
       kills = type(held) == "table" and held.kills or {}, rejected = type(held) == "table" and held.rejected or {} }
     local done, bad = ns.Store.WriteTarget(nk, rec, t)
     if not done then return refuse(bad == "open" and "full" or bad, ns.List.RefusalLine(bad)) end
-    print("KOS: " .. ns.Hub.Escape(display) .. " is on the list.")
-    if ns.Hub then ns.Hub.Refresh() end
-    return true
+    return landed(ns.Hub.Escape(display) .. " is on the list.")
   end
 
   local target = function(m) return Mark.TargetFor(m, open) end
@@ -301,9 +314,7 @@ function Mark.FromName(name, why)
     r.marks = keep
   end, t)
   if not done then return refuse(bad, ns.List.RefusalLine(bad)) end
-  print("KOS: " .. ns.Hub.Escape(display) .. " waits for an officer.")
-  if ns.Hub then ns.Hub.Refresh() end
-  return true
+  return landed(ns.Hub.Escape(display) .. " waits for an officer.")
 end
 
 -- Mark.Withdraw(guid, now) -> true | nil, why: drops my own mark on guid.
@@ -351,13 +362,63 @@ function Mark.Waiting()
   return out
 end
 
+-- ---------- issue 44 s7 (q4): the member hears the decision ----------
+-- Before cleanup drops a mark an officer approved or rejected, it is noted in this guild's local decided list
+-- (Core.Decided; kos_m is not changed and nothing is sent). A new entry prints one "KOS: Your mark on <A> was ..."
+-- line and one hub toast, none under /gsync demo; told = true is saved, so a /reload never tells it again. Mine lists
+-- the entries of the last DECIDED_KEEP seconds; older ones are dropped.
+Mark.DECIDED_KEEP = 7 * 86400
+local SKULL = "Interface\\Icons\\INV_Misc_Bone_HumanSkull_01"
+
+-- Mark.Decided(now) -> this client's decided entries newer than DECIDED_KEEP (older ones leave the saved list).
+function Mark.Decided(t)
+  local list = ns.Core and ns.Core.Decided()
+  if type(list) ~= "table" then return {} end
+  t = tonumber(t) or now()
+  local keep = {}
+  for _, e in ipairs(list) do
+    if type(e) == "table" and type(e.at) == "number" and t - e.at <= Mark.DECIDED_KEEP then keep[#keep + 1] = e end
+  end
+  for i = #list, 1, -1 do list[i] = nil end
+  for i, e in ipairs(keep) do list[i] = e end
+  return keep
+end
+
+local function noteDecided(marks, target)
+  local list = ns.Core and ns.Core.Decided()
+  if type(list) ~= "table" then return end
+  local t = now()
+  Mark.Decided(t) -- drops the old entries in place
+  for _, m in ipairs(marks) do
+    local outcome = type(m) == "table" and not forged(m) and Marks().State(m, target(m)) or nil
+    if outcome == "approved" or outcome == "rejected" then
+      local known = false
+      for _, e in ipairs(list) do
+        if type(e) == "table" and e.guid == m.guid and e.marked == m.time then known = true break end
+      end
+      if not known then
+        local demo = not ns.Hub or ns.Hub.InDemo()
+        list[#list + 1] = { guid = m.guid, name = m.name, race = m.race, class = m.class, level = m.level,
+          outcome = outcome, marked = m.time, at = t, told = true }
+        if not demo then
+          local name = ns.Hub.Escape(tostring(m.name or "?"))
+          print("KOS: Your mark on " .. name .. " was " .. outcome .. ".")
+          ns.Hub.Toast({ title = "Kill on Sight", text = "Your mark on " .. name .. " was " .. outcome, icon = SKULL })
+        end
+      end
+    end
+  end
+end
+
 -- The marker's cleanup: once a held target record decides one of my marks, the mark leaves my kos_m record (AC19).
--- Runs after every merged kos record, so also after logging in when the decision came while offline.
+-- Runs after every merged kos record, so also after logging in when the decision came while offline. An approved or
+-- rejected mark is noted first (s7).
 local function cleanup()
   local me = myKey()
   local rec = me and ns.Store.Member(me)
   if type(rec) ~= "table" or type(rec.marks) ~= "table" then return end
   if #waitingOf(rec) == #rec.marks then return end
+  noteDecided(rec.marks, judge())
   ns.Store.WriteOwn(function(r)
     r.marks = stillWaiting(r.marks, judge())
   end, now())
@@ -365,5 +426,52 @@ end
 Mark.Cleanup = cleanup
 
 ns.Store.OnTargetMerged(function() cleanup() end)
+
+-- ---------- issue 44 s6 (q3): an officer hears a member's new waiting mark ----------
+-- One "KOS: ..." line and one hub toast when a merged kos_m record from a member on the roster brings a waiting mark
+-- this session has not counted yet; at most one ping per PING_GAP (the marks inside the gap are counted, never pinged
+-- later), none under /gsync demo, none on a member's client. A mark timed before this session's login is backlog: it
+-- shows in the Waiting count, it never pings. Nothing is saved or sent.
+local PING_GAP = 60 -- seconds between two pings on this client
+local pingSince   -- this session's login time (Mark.Login), else the first merge's
+local lastPing    -- the time of the last ping
+local counted = {} -- markerKey .. "/" .. guid .. "/" .. time -> true: marks this session has counted
+
+-- Mark.PingLine(n) -> the ping's chat line naming n waiting marks.
+function Mark.PingLine(n)
+  return "KOS: A new mark waits for an officer (" .. tostring(n) .. " waiting on the Kill on Sight page)."
+end
+
+-- Hub.lua's onLogin: marks timed before t are backlog.
+function Mark.Login(t) if type(t) == "number" and t > 0 then pingSince = t end end
+
+ns.Store.OnMemberMerged(function(key, rec)
+  local me = myKey()
+  if type(key) ~= "string" or key == me or type(rec) ~= "table" then return end
+  if not ns.Hub or ns.Hub.InDemo() then return end
+  local c = type(GuildSync) == "table" and GuildSync.Comm or nil
+  if not (me and c and c.IsOfficer(me) == true) then return end
+  local roster = c.Roster()
+  if type(roster) ~= "table" or roster[key] == nil then return end
+  local t = now()
+  pingSince = pingSince or t
+  local fresh = 0
+  for _, m in ipairs(waitingOf(rec)) do
+    local at = tonumber(m.time)
+    local id = key .. "/" .. tostring(m.guid) .. "/" .. tostring(m.time)
+    if at and at >= pingSince and not counted[id] then
+      counted[id] = true
+      fresh = fresh + 1
+    end
+  end
+  if fresh == 0 then return end
+  ns.Hub.Refresh() -- the officer's Waiting (N) follows
+  if lastPing and t - lastPing < PING_GAP then return end
+  lastPing = t
+  local n = #Mark.Waiting()
+  print(Mark.PingLine(n))
+  ns.Hub.Toast({ title = "Kill on Sight", text = n == 1 and "1 mark waits for an officer"
+    or (n .. " marks wait for an officer"), icon = SKULL })
+end)
 
 return Mark

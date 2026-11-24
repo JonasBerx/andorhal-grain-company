@@ -4,7 +4,8 @@
 -- The ledger is GuildKOSDB.guilds[guild].paid = { [RulesKills.Id] = { victim, week, at, hunter, amount } }: GuildKOSDB is
 -- account-wide, so every character on the account shares the caps. Pay-once (as the Games lottery, S13): the entry
 -- is written before the credit and removed when the credit does not answer true, so a payout can be lost, never paid
--- twice. Nothing is sent: the kill and the pay stay on this client.
+-- twice. The pay stays on this client. The kill is shared (issue 44, d78): every own kill of an open target, paid or
+-- not, becomes a claim in the own kos_m record (Store.WriteOwn), which the hub's sync rounds carry; nothing is sent here.
 local _, ns = ...
 local Kill = {}
 ns.Kill = Kill
@@ -34,6 +35,27 @@ local function myKeys()
   return me, set
 end
 
+-- Every guild's ledger on this account, for the caps (review f2: the purse is the account's), pruned when prune.
+local function accountPaid(week, prune)
+  local all = {}
+  local guilds = ns.Core.DB().guilds
+  for gk, gg in pairs(type(guilds) == "table" and guilds or {}) do
+    if type(gg) == "table" and type(gg.paid) == "table" then
+      if prune then ns.RulesKills.Prune(gg.paid, week) end
+      for pid, e in pairs(gg.paid) do all[tostring(gk) .. "|" .. pid] = e end
+    end
+  end
+  return all
+end
+
+-- The kill as a claim in the own kos_m record (d78): { time, victim, zone }, the newest RulesKills.CLAIMS kept.
+local function share(victim, t)
+  local zone = call("GetZoneText")
+  zone = type(zone) == "string" and ns.RulesRecords.Safe(zone, ns.RulesRecords.CAPS.zone) or ""
+  local claim = { time = t, victim = victim, zone = zone ~= "" and zone or nil }
+  ns.Store.WriteOwn(function(r) r.claims = ns.RulesKills.AddClaim(r.claims, claim) end, t)
+end
+
 function Kill.OnPartyKill(attacker, victim)
   if not ns.Hub or ns.Hub.InDemo() then return end
   if type(attacker) ~= "string" or type(victim) ~= "string" then return end
@@ -43,20 +65,15 @@ function Kill.OnPartyKill(attacker, victim)
   -- most killing blows are on mobs and unlisted players: nothing more is read or written for them
   local target = ns.Store.Target(victim)
   if type(target) ~= "table" or target.status ~= "open" then return end
+  local t = math.floor(ns.Core.Now())
+  -- shared whether or not it pays (a cap refusal still shares); a failed write never stops the pay
+  pcall(share, victim, t)
   local g = ns.Core.Guild()
   if not g then return end
   if type(g.paid) ~= "table" then g.paid = {} end
-  local t = math.floor(ns.Core.Now())
   local K = ns.RulesKills
   local week = ns.RulesBoard.Week(t)
-  -- every guild's ledger on this account, pruned, for the caps (review f2: the purse is the account's)
-  local all = {}
-  for gk, gg in pairs(ns.Core.DB().guilds) do
-    if type(gg) == "table" and type(gg.paid) == "table" then
-      K.Prune(gg.paid, week)
-      for pid, e in pairs(gg.paid) do all[tostring(gk) .. "|" .. pid] = e end
-    end
-  end
+  local all = accountPaid(week, true)
   local me, set = myKeys()
   -- the officers' numbers for the guild, read at the kill (d23-d24); the defaults while no settings record is held
   local cfg = K.Settings(ns.Store.Settings())
@@ -64,7 +81,17 @@ function Kill.OnPartyKill(attacker, victim)
     victim = victim, t = t, week = week, me = set, paid = g.paid, cfg = cfg, all = all })
   if verdict == "skip" then return end
   local shown = ns.Hub.Escape(target.name or "?")
-  if verdict ~= "pay" then print(K.Line(why, shown, cfg)) return end
+  if verdict ~= "pay" then
+    print(K.Line(why, shown, cfg))
+    -- issue 44 s5: the weekly cap's refusal also toasts, once a week for the account (GuildKOSDB is account-wide)
+    local db = ns.Core.DB()
+    if why == "week" and db.capToastWeek ~= week then
+      db.capToastWeek = week
+      ns.Hub.Toast({ title = "Kill on Sight", text = K.CapToast(cfg), icon = SKULL })
+    end
+    return
+  end
+  local left = math.max(0, K.Week(all, week, cfg).left - 1)   -- after this kill
   local id = K.Id(victim, t)
   g.paid[id] = { victim = victim, week = week, at = t, hunter = me, amount = cfg.reward }
   local good, refused = ns.Hub.Credit(cfg.reward)
@@ -74,8 +101,26 @@ function Kill.OnPartyKill(attacker, victim)
     return
   end
   print(K.Line("paid", shown, cfg))
-  ns.Hub.Toast({ title = "Kill on Sight", text = tostring(target.name or "?") .. ": +" .. cfg.reward .. " grain",
-    icon = SKULL })
+  ns.Hub.Toast({ title = "Kill on Sight", text = tostring(target.name or "?") .. ": +" .. cfg.reward .. " grain"
+    .. " \194\183 " .. left .. " left this week", icon = SKULL })
+end
+
+-- Kill.Week() -> RulesKills.Week's sum for this week over every guild's ledger on this account, and the guild's
+-- settings (issue 44 s5, the List's strip). Reads only: nothing is pruned, written or sent.
+function Kill.Week()
+  local week = ns.RulesBoard.Week(math.floor(ns.Core.Now()))
+  local cfg = Kill.Settings()
+  return ns.RulesKills.Week(accountPaid(week, false), week, cfg), cfg
+end
+
+-- Kill.Recent(victim) -> RulesKills.Recent over every kos_m record held, now = Core.Now(): { { hunter, at }, ... }
+-- newest first (issue 44, d78; the List's cards). {} before the store is ready, and on any error.
+function Kill.Recent(victim)
+  local good, out = pcall(function()
+    if not (ns.Store and ns.Store.Ready()) then return {} end
+    return ns.RulesKills.Recent(ns.Store.Members(), victim, ns.Core.Now())
+  end)
+  return good and type(out) == "table" and out or {}
 end
 
 -- ---------- the officers' settings (d23-d25) ----------
@@ -89,8 +134,6 @@ end
 -- review f1) are asked about in one confirm; a refusal line prints at most once per QUIET seconds.
 local WINDOW, QUIET = 2, 5
 local pending, pendingAt, refusedAt = nil, nil, nil
-
-local function same(a, b) return a.reward == b.reward and a.weekCap == b.weekCap and a.perTarget == b.perTarget end
 
 -- Writes want for the guild after the officer's OK; the officer gate is checked again at the click.
 local function apply(want)
@@ -108,7 +151,8 @@ local function apply(want)
 end
 
 -- Kill.SetSetting(name, value): an officer asks to change one number for the guild (the others stay). Nothing is
--- written until the officer confirms; the confirm names all three numbers, so a Defaults reset can be cancelled.
+-- written until the officer confirms; the confirm names only what changed (issue 44 s8, RulesKills.Changes), so a
+-- Defaults reset can be cancelled; no change asks nothing.
 -- Anyone else gets one line saying why not. -> true, "asked" | true (no change) | nil, why
 function Kill.SetSetting(name, value)
   local range = ns.RulesRecords.SETTINGS_RANGE[name]
@@ -129,8 +173,9 @@ function Kill.SetSetting(name, value)
   local cfg = Kill.Settings()
   local want = { reward = cfg.reward, weekCap = cfg.weekCap, perTarget = cfg.perTarget }
   for k, v in pairs(pending) do want[k] = v end
-  if same(want, cfg) then return true end
-  local text = "Change the kill grain for the whole guild?\n" .. ns.RulesKills.SettingsLine(want)
+  local changes = ns.RulesKills.Changes(cfg, want)
+  if not changes then return true end
+  local text = "Change the kill grain for the whole guild?\n" .. changes
   local asked = ns.Hub.Confirm("killgrain", text, "Change", function()
     pending = nil
     apply(want)

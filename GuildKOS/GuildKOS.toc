@@ -18,6 +18,7 @@ List.lua
 Mark.lua
 Spot.lua
 Kill.lua
+Seen.lua
 Confirm.lua
 Core.lua
 Page.lua

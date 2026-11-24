@@ -1,0 +1,7 @@
+<Bindings>
+  <!-- issue 44 s9: Esc > Options > Keybindings, "Kill on Sight: Mark my target". The names are set in Core.lua
+       (BINDING_HEADER_GUILDKOS, BINDING_NAME_GUILDKOS_MARK); the key runs /kos mark, the same lines. -->
+  <Binding name="GUILDKOS_MARK" header="GUILDKOS">
+    SlashCmdList.KOS("mark")
+  </Binding>
+</Bindings>

@@ -1,14 +1,25 @@
 -- GuildKOS Page: the Kill on Sight page inside the GuildSync window (Hub.lua calls Build and Refresh).
 -- What ships (ns.Probe.kills false, 0.6, d1821): a tab strip (M.Kit.Tabs: List, Waiting, Mine) over one scroll frame
 -- whose scroll child is swapped per tab, and no kill count anywhere. List: the header (count, alerts line), the fixed
--- Mark as bounty card (Name and Why boxes: a typed name goes to ns.Mark.FromName, else ns.Mark.FromTarget), then
--- one card per open target on M.Kit.Card (start-zone painting, portrait, name, level line or "Added by name", last
--- seen, why). Clicking a card opens it in its row's place, 252 tall (Last seen, Why, Marked; Edit why and Remove
--- for officers, Close for all; Edit why opens an input box with Save and Cancel, d791). Waiting: ns.Mark.Waiting()'s
+-- Mark as bounty card (labelled Name and Why boxes; Add by name runs ns.Mark.FromName, Mark my target
+-- ns.Mark.FromTarget, off with its refusal as the tooltip while ns.Mark.Available says no; the answer line under the
+-- boxes for 10 s; issue 44 s3), the kill grain strip under it (RulesKills.Strip over Kill.Week, from the local ledger;
+-- a card whose target is paid out this week wears "paid this week"; neither under /gsync demo; issue 44 s5), then
+-- the open targets as a grid of compact M.Kit.Card cards, always 2 a row (issue 44 d79, d80: portrait, the red name
+-- and level line or "Added by name" beside it, the pills at the top right; then the seen line, why and "Last killed by
+-- <name>, <ago>" from ns.Kill.Recent (d78; ns.RulesKills.Recent over the demo's members under /gsync demo)), filtered
+-- by the header row's search box and ordered by its sort dropdown (List.Filter, List.Sort, Core.Sort), each wearing
+-- List.SeenPill's "Seen just now" or "Seen today" left of any paid pill (issue 44 s4); a refresh never moves the
+-- scroll offset. Right of the grid the details panel always keeps its place (290 wide, narrower on a small page, never
+-- under 220; full height), saying "Click a target to see its details." until a card is clicked; a click selects the
+-- card and fills it: start-zone painting, portrait, name, level line, Last seen, Why, Marked, Kills (up to 5, or "No
+-- kills yet"); Edit why and Remove for officers, Close for all; Edit why opens an input box with Save and Cancel, d791.
+-- Clicking the selected card again or Close empties it. Waiting: ns.Mark.Waiting()'s
 -- marks, Approve and Reject for officers (kos-3), read-only for a member (kos-3b). Mine: "Your marks", each with
--- ns.RulesMarks.State as its pill and Withdraw while it waits (kos-6).
+-- ns.RulesMarks.State as its pill and Withdraw while it waits (kos-6), then ns.Mark.Decided's marks of the last 7
+-- days with an "Approved" or "Rejected" pill (issue 44 s7).
 -- What ns.Probe.kills true adds (batch 4): the Kills and Hunters tabs (Hunters: the board, RulesBoard.Rows, and the
--- line for me), the closed card's kill count and the opened card's Kills row (272 tall). Kills and Mine's claims wait
+-- line for me) and the card's confirmed-kill count. Kills and Mine's claims wait
 -- (d794).
 -- Under /gsync demo (d793 c) every tab draws the hub's demo state (src.demo) and no button writes.
 -- Creates nothing at load; atlases go through M.Kit.Atlas (src.kit), template and atlas reads through the local info()
@@ -26,21 +37,44 @@ local CARD_BG = { 0, 0, 0, 0.3 }         -- only on a plain card (M.Kit.Card ans
 local SHADE_A = 0.78                     -- the opened painting's shade: 0 at its middle to .78 at its bottom
 local ALERTS_GREY = { 0xb8 / 255, 0xb8 / 255, 0xb8 / 255 }
 local GOLD = "|cffffd100"
-local CARD_HEIGHT, OPEN_HEIGHT, CARD_GAP = 84, 272, 8
+local CARD_HEIGHT, CARD_GAP = 84, 8      -- the Waiting and Mine mark cards
 local PAINT_W, PAINT_H, PORTRAIT = 112, 68, 30
-local OPEN_PAINT_H, OPEN_PORTRAIT = 140, 56
-local TEXT_X, OPEN_TEXT_X = 130, 80
+local TEXT_X = 130
 local TEXT_RIGHT = -8   -- the card text's right inset: each line ends 8 px inside the card
-local NAME_RIGHT = -70  -- the name line stops short of the kill count
+-- issue 44 d77/d79/d80/d81: the List's open targets as a grid of cards, always 2 a row GRID_GAP apart, each GRID_H
+-- tall: the 48 portrait at (8,-8) in a class-coloured frame over a dimmed strip of the race's start-zone painting
+-- (BACK_H tall), the red name, the level line and the seen line beside it; Why (left out with none) and Last killed by
+-- (left out with none; it stops short of the pills) across the card under it; the pills at the bottom right; a
+-- class-coloured 1 px ring round the card (none with no class: the Kit card's own border stays).
+-- The details panel always keeps its place right of the scroll box on List (opening it never reflows the grid):
+-- PANEL_W where that leaves both cards CARD_MIN_W, else narrower, never under PANEL_MIN_W.
+local GRID_H, GRID_GAP, GRID_TEXT_X, GRID_PORTRAIT = 100, 8, 64, 48
+local WHY_Y, KILLED_Y = 62, 78          -- the full-width lines under the portrait
+local BACK_H, BACK_A = 58, 0.35         -- the backdrop strip: 2 px inside the card's top, its alpha
+local SELECT_TINT = { 1, 0.82, 0, 0.18 } -- the selected card's gold wash over the whole card
+local CARD_MIN_W = 160
+local PANEL_W, PANEL_MIN_W, PANEL_PAINT_H, PANEL_PORTRAIT = 290, 220, 46, 32
+local PANEL_HINT = "Click a target to see its details."
+local PANEL_X, PANEL_VALUE_X = 10, 76   -- a panel row's label and value
+local PANEL_KILLS, KILL_STEP = 5, 12    -- the Kills section's lines, from y -128
+local PANEL_BTN_Y = 190                 -- Close, Remove and Edit why (Save and Cancel), 22 tall: fits a 216-tall panel
+local NO_KILLS = "No kills yet"
 local PAGE_W = 726      -- the page width until the page frame reports its own (View.SHELL.page)
 local BOX_RIGHT = 16    -- the scroll box ends 16 px inside the page; its bar sits 4 px right of it (as M.Kit.List)
 local CLASSIC_RIGHT = 24 -- UIPanelScrollFrameTemplate's wider classic bar, kept inside the page (R-n2)
 local TOP = 40          -- the 32-tall tab row and 8 px (o859)
-local MARK_Y, MARK_H = 66, 66            -- the fixed Mark as bounty card (o851)
+-- the fixed Mark as bounty card (o851): 82 tall since issue 44 s3 (labels over the boxes, the answer line under them)
+local MARK_Y, MARK_H = 66, 82
 local NAME_BOX_W = 150                   -- the Name box, left of the Why box with 8 px between (add by name)
--- the Why box: 420, or less so it ends 8 px before the button (f8600), right of the Name box
-local MARK_BOX_W, MARK_BOX_LESS = 420, 14 + 16 + 120 + 8 + NAME_BOX_W + 8
-local LIST_TOP = MARK_Y + MARK_H + 8     -- the List tab's scroll frame
+local MARK_BTN_W = 110                   -- Add by name and Mark my target, 8 px apart, the second 16 px from the right
+-- the Why box: 420, or less so it ends 8 px before Add by name (f8600), right of the Name box
+local MARK_BOX_W, MARK_BOX_LESS = 420, 14 + 16 + MARK_BTN_W + 8 + MARK_BTN_W + 8 + NAME_BOX_W + 8
+local NAME_LABEL, WHY_LABEL = "Name (first and surname)", "Why (optional)"
+local ANSWER_Y, ANSWER_S = -64, 10       -- the answer line under the boxes, shown for 10 s
+-- issue 44 s5: the kill grain strip (RulesKills.Strip over Kill.Week) 6 px under the Mark card, 18 tall
+local GRAIN_Y, GRAIN_H = MARK_Y + MARK_H + 6, 18
+local PAID_PILL = "paid this week"       -- a List card whose target reached the per-target cap this week
+local LIST_TOP = GRAIN_Y + GRAIN_H       -- the List tab's scroll frame
 local ROW_H, ROW_STEP, ROWS_Y = 34, 38, 50  -- the Hunters board rows
 local COLS = { { "", 42 }, { "Hunter", 180 }, { "Confirmed kills", 252 }, { "Streak", 80 }, { "Best", 70 },
   { "Last kill", 86 } }
@@ -52,8 +86,14 @@ local DOT = " \194\183 "
 local DASH = "\226\128\147"
 local ALERTS_ON = "Alerts on \194\183 /kos off turns them off"
 local ALERTS_OFF = "Alerts off \194\183 /kos on turns them on"
-local MARK_HINT = "Type a name (first and surname) in the first box, or target an enemy. An officer approves a "
-  .. "member's mark."
+-- The header row (issue 44 step s2): an Alerts checkbox in place of the sentence above (kept for a client with no
+-- checkbox template), and the count line's "N seen in the last 10 min" from lastSeen.
+local ALERTS_LABEL, ALERTS_LABEL_W = "Alerts", 44   -- the box sits this far left of the scroll box's edge for its label
+local RECENT = 600                                  -- "in the last 10 min"
+-- issue 44 s4: the header row's search box and sort dropdown, right to left from the Alerts box, 8 px apart
+local SEARCH_W, SORT_W, SEARCH_HINT = 120, 110, "Search"
+local SORT_TEXTS = { seen = "Recently seen", name = "Name", added = "Added" }
+local SEEN_TONES = { ["Seen just now"] = "gold", ["Seen today"] = "grey" }
 local HUNTERS_INTRO = "Top 10 by confirmed kills. A kill counts once an officer confirms it. Streak: weeks in a row "
   .. "with a confirmed kill."
 local MARK_H2, STRIP_Y = 116, 89       -- a mark card with buttons: the 84 block, a divider at 84, the strip at y 89
@@ -61,22 +101,23 @@ local WAIT_TOP, MINE_TOP = 30, 34        -- the first mark card under Waiting's 
 local OFFICER_NOTE = "Members see only their own marks here."
 local MEMBER_NOTE = "Only your own marks show here."
 -- The empty and not-ready lines (issue 44 step s1): each tab says what an empty view means.
-local EMPTY_LIST = "No one is on the list yet. Target an enemy player and click Mark as bounty, or type a name in the "
-  .. "first box."
+local EMPTY_LIST = "No one is on the list yet. Target an enemy player and click Mark my target, or type a name and "
+  .. "click Add by name."
 local WAIT_EMPTY = { officer = "No marks wait. When a member marks a player, it shows here.",
   member = "You have no marks waiting for an officer." }
 local MINE_EMPTY = { officer = "Your marks go straight on the list, so none wait here.",
   member = "You have no marks. A mark you make shows here until an officer decides." }
 local NOTE_H = 28                        -- an empty or not-ready line and the gap under it
-local TONES = { waiting = "gold", approved = "green", rejected = "red", removed = "grey" }
+local TONES = { waiting = "gold", approved = "green", rejected = "red", removed = "grey",
+  Approved = "green", Rejected = "red" }
+local DECIDED_TAGS = { approved = "Approved", rejected = "Rejected" } -- s7: Mine's decided marks (ns.Mark.Decided)
 local TABS = { { key = "list", text = "List" }, { key = "waiting", text = "Waiting" }, { key = "kills", text = "Kills" },
   { key = "hunters", text = "Hunters" }, { key = "mine", text = "Mine" } }
 local TABS_OFF = { TABS[1], TABS[2], TABS[5] }
-local OPEN_HEIGHT_OFF = OPEN_HEIGHT - 20  -- the opened card with no Kills row (gate A correction 3)
 
--- ns.Probe.kills (RulesMarks, d1821), read at call time: false = no Kills or Hunters tab and no kill texts.
+-- ns.Probe.kills (RulesMarks, d1821), read at call time: false = no Kills or Hunters tab and no confirmed-kill texts
+-- (the shared kills of d78, "Last killed by" and the panel's Kills section, show either way).
 local function killsOn() return type(ns.Probe) == "table" and ns.Probe.kills == true end
-local function openHeight() return killsOn() and OPEN_HEIGHT or OPEN_HEIGHT_OFF end
 
 local pages = setmetatable({}, { __mode = "k" })   -- frame -> the page's parts
 
@@ -97,10 +138,12 @@ function Page.RaceKey(race)
   return key and (RACE_ALIAS[key] or key)
 end
 
--- The portrait atlases to try in order, then the file to fall back to. Every face is the male icon: 0.3 keeps no sex.
-function Page.Portrait(race, class)
+-- The portrait atlases to try in order, then the file to fall back to. The male icon, unless sex is 3 (a female face
+-- seen by ns.Seen, d81): then the female icon first. The records keep no sex.
+function Page.Portrait(race, class, sex)
   local out = { file = SKULL }
   local r, c = Page.RaceKey(race), atlasKey(class)
+  if r and sex == 3 then out[#out + 1] = "raceicon128-" .. r .. "-female" end   -- d81: a seen female face first
   if r then out[#out + 1] = "raceicon128-" .. r .. "-male" end
   if c then out[#out + 1] = "classicon-" .. c end
   return out
@@ -191,16 +234,60 @@ local function capital(s)
   return (s:gsub("^%l", string.upper))
 end
 
--- "|cffRRGGBB" for a class name in its class colour (RAID_CLASS_COLORS), or nil.
-local function classCode(class)
-  local all = RAID_CLASS_COLORS
+-- The classic class colours, for a client with no RAID_CLASS_COLORS (d81).
+local CLASS_FALLBACK = {
+  WARRIOR = { 0.78, 0.61, 0.43 }, PALADIN = { 0.96, 0.55, 0.73 }, HUNTER = { 0.67, 0.83, 0.45 },
+  ROGUE = { 1, 0.96, 0.41 }, PRIEST = { 1, 1, 1 }, SHAMAN = { 0, 0.44, 0.87 }, MAGE = { 0.41, 0.8, 0.94 },
+  WARLOCK = { 0.58, 0.51, 0.79 }, DRUID = { 1, 0.49, 0.04 }, DEATHKNIGHT = { 0.77, 0.12, 0.23 },
+}
+
+-- A class name's colour as r, g, b: RAID_CLASS_COLORS, else CLASS_FALLBACK; nil for none or an unknown class.
+local function classColour(class)
   local token = type(class) == "string" and class:upper():gsub("[%s']", "") or nil
-  local col = type(all) == "table" and token and all[token] or nil
-  if type(col) ~= "table" then return nil end
-  local r, g, b = tonumber(col.r), tonumber(col.g), tonumber(col.b)
-  if not (r and g and b) then return nil end
+  if not token or token == "" then return nil end
+  local all = RAID_CLASS_COLORS
+  local col = type(all) == "table" and all[token] or nil
+  if type(col) == "table" then
+    local r, g, b = tonumber(col.r), tonumber(col.g), tonumber(col.b)
+    if r and g and b then return r, g, b end
+  end
+  local f = CLASS_FALLBACK[token]
+  if f then return f[1], f[2], f[3] end
+  return nil
+end
+
+local function hexCode(r, g, b)
   local function byte(x) return math.max(0, math.min(255, math.floor(x * 255 + 0.5))) end
   return string.format("|cff%02x%02x%02x", byte(r), byte(g), byte(b))
+end
+
+-- "|cffRRGGBB" for a class name in its class colour, or nil.
+local function classCode(class)
+  local r, g, b = classColour(class)
+  if not r then return nil end
+  return hexCode(r, g, b)
+end
+
+-- d81: a level's danger colour against mine, as the game colours a mob's level (the classic rule; the client has no
+-- GetQuestDifficultyColor in the dataset): red 5 and more above, orange 3 to 4, yellow within 2, green, grey at or
+-- under the grey level (the classic table: none to 5, then me - floor(me / 10) - 5 to 39, me - floor(me / 5) - 1 to
+-- 59, me - 9 after).
+local DANGER = { red = { 1, 0.1, 0.1 }, orange = { 1, 0.5, 0.25 }, yellow = { 1, 1, 0 }, green = { 0.25, 0.75, 0.25 },
+  grey = { 0.5, 0.5, 0.5 } }
+local SKULL_ICON = "|TInterface\\TargetingFrame\\UI-TargetingFrame-Skull:0|t"
+local SKULL_OVER = 10   -- more than this many levels above me: the skull in place of the number
+function Page.Danger(level, me)
+  if type(level) ~= "number" or type(me) ~= "number" or me < 1 then return nil end
+  local diff = level - me
+  if diff >= 5 then return "red" end
+  if diff >= 3 then return "orange" end
+  if diff >= -2 then return "yellow" end
+  local grey = 0
+  if me > 59 then grey = me - 9
+  elseif me > 39 then grey = me - math.floor(me / 5) - 1
+  elseif me > 5 then grey = me - math.floor(me / 10) - 5 end
+  if level <= grey then return "grey" end
+  return "green"
 end
 
 local function nonEmpty(s) return type(s) == "string" and s ~= "" end
@@ -342,9 +429,9 @@ local function setNote(fs, text)
   return text and NOTE_H or 0
 end
 
--- The content height of the active tab and the plain frame's clamp.
-local function setContentHeight(page, child, h)
-  child:SetSize((page.width or PAGE_W) - page.boxRight, math.max(1, h))
+-- The content height of the active tab and the plain frame's clamp; w, the child's width, defaults to the full box.
+local function setContentHeight(page, child, h, w)
+  child:SetSize(w or ((page.width or PAGE_W) - page.boxRight), math.max(1, h))
   if child ~= page.children[page.tab] then return end
   page.contentHeight = h
   if page.plain then
@@ -354,96 +441,120 @@ local function setContentHeight(page, child, h)
   end
 end
 
--- ---------- List: the cards ----------
+-- ---------- List: the grid and the details panel (issue 44 d77, d79, d80) ----------
 
--- Card heights, places and open parts from page.open; the content height. No data read.
-local function layout(page)
+-- The panel's width (d79): PANEL_W where the box then still holds two CARD_MIN_W cards, else what leaves them that,
+-- never under PANEL_MIN_W. 290 at page width 726, 226 at 586 (the 760x480 window).
+local function panelWidth(page)
+  local free = (page.width or PAGE_W) - page.boxRight - BOX_RIGHT - (2 * CARD_MIN_W + GRID_GAP)
+  return math.max(PANEL_MIN_W, math.min(PANEL_W, free))
+end
+
+-- The scroll box's width: the page less the bar's room; on List also less the panel and the 16 px between the panel's
+-- right edge and the page's (the panel ends where the Mark card ends; the bar keeps its room between box and panel).
+local function boxWidth(page)
   local w = (page.width or PAGE_W) - page.boxRight
+  if page.tab == "list" then w = w - panelWidth(page) - BOX_RIGHT end
+  return w
+end
+
+-- The scroll frame's place for the shown tab (under the List's fixed parts, else under the tab row); on List its right
+-- edge is left of the panel, which shows there only. Moving the box leaves its scroll offset as it is.
+local function placeScroll(page)
+  local list = page.tab == "list"
+  local scroll = page.scroll
+  scroll:ClearAllPoints()
+  scroll:SetPoint("TOPLEFT", 0, list and -LIST_TOP or -TOP)
+  scroll:SetPoint("BOTTOMRIGHT", -(page.boxRight + (list and (panelWidth(page) + BOX_RIGHT) or 0)), 0)
+  if page.panel then page.panel.frame:SetShown(list) end
+end
+
+-- The drawn card whose target the panel shows, or nil.
+local function openCard(page)
+  if page.open == nil then return nil end
+  for i = 1, page.n do
+    local cd = page.cards[i]
+    if cd.key == page.open then return cd end
+  end
+  return nil
+end
+
+-- The grid (always 2 a row, d79), the selected card, the panel's width, its details or hint, its buttons for
+-- page.editing; the content height. No data read.
+local function layout(page)
   local markW = (page.width or PAGE_W) - BOX_RIGHT
   if page.mark then page.mark:SetWidth(markW) end
   if page.markBox then page.markBox:SetWidth(math.min(MARK_BOX_W, markW - MARK_BOX_LESS)) end
-  local y = page.noteH or 0   -- the empty or not-ready line above the cards (s1)
+  placeScroll(page)
+  local w = boxWidth(page)
+  local cw = math.floor((w - GRID_GAP) / 2)
+  local top = page.noteH or 0   -- the empty or not-ready line above the cards (s1)
   for i = 1, page.n do
     local cd = page.cards[i]
     local f = cd.frame
-    local open = page.open ~= nil and cd.key == page.open
-    local h = open and openHeight() or CARD_HEIGHT
-    f:SetSize(w, h)
+    local col, row = (i - 1) % 2, math.floor((i - 1) / 2)
+    f:SetSize(cw, GRID_H)
     f:ClearAllPoints()
-    f:SetPoint("TOPLEFT", page.content, "TOPLEFT", 0, -y)
-    y = y + h + CARD_GAP
-
-    local pw, ph = PAINT_W, PAINT_H
-    if open then pw, ph = w - 6, OPEN_PAINT_H end
-    cd.paintBorder:ClearAllPoints()
-    if open then cd.paintBorder:SetPoint("TOPLEFT", 2, -2) else cd.paintBorder:SetPoint("TOPLEFT", 7, -7) end
-    cd.paintBorder:SetSize(pw + 2, ph + 2)
-    cd.painting:SetSize(pw, ph)
+    f:SetPoint("TOPLEFT", page.content, "TOPLEFT", col * (cw + GRID_GAP), -(top + row * (GRID_H + GRID_GAP)))
+    cd.selected:SetShown(page.open ~= nil and cd.key == page.open)
+    -- d81: the backdrop strip across the card's top, cropped to its size (the panel's painting rule)
+    cd.painting:SetSize(cw - 4, BACK_H)
     if cd.zone then
-      local l, r, t, b = Page.Crop(atlasInfo(cd.zone), pw, ph)
+      local l, r, t, b = Page.Crop(atlasInfo(cd.zone), cw - 4, BACK_H)
       if l then cd.painting:SetTexCoord(l, r, t, b) end
-      cd.painting:Show()
-      cd.paintBorder:Show()
-    else
-      cd.painting:Hide()
-      cd.paintBorder:Hide()
     end
-    cd.shade:SetShown(open and cd.zone ~= nil)
-
-    local size = open and OPEN_PORTRAIT or PORTRAIT
-    cd.portraitBorder:ClearAllPoints()
-    if open then cd.portraitBorder:SetPoint("TOPLEFT", 13, -76) else cd.portraitBorder:SetPoint("TOPLEFT", 7, -45) end
-    cd.portraitBorder:SetSize(size + 2, size + 2)
-    cd.portrait:SetSize(size, size)
-
-    if cd.kills then
-      cd.kills:ClearAllPoints()
-      if open then cd.kills:SetPoint("TOPRIGHT", -12, -124) else cd.kills:SetPoint("TOPRIGHT", -10, -11) end
-    end
-
-    cd.who:SetShown(not open and cd.hasWho)
-    cd.bigWho:SetShown(open and cd.hasWho)
-    cd.name:SetShown(not open)
-    cd.status:SetShown(not open)
-    cd.why:SetShown(not open and cd.hasWhy)
-    cd.bigName:SetShown(open)
-    local editing = open and page.canWrite and cd.box ~= nil and page.editing == cd.key
-    for _, fs in ipairs(cd.rows) do fs:SetShown(open) end
-    cd.whyValue:SetShown(open and not editing)   -- the box takes the Why row's place while editing (d791)
-    if cd.divider then cd.divider:SetShown(open) end
-    cd.close:SetShown(open)
-    cd.edit:SetShown(open and page.canWrite and not editing)
-    cd.remove:SetShown(open and page.canWrite and not editing)
-    if cd.box then cd.box:SetShown(editing) end
-    cd.save:SetShown(editing)
-    cd.cancel:SetShown(editing)
-    cd.catcher:SetShown(not open)
-    -- f4698: the catcher above the card, the buttons above the catcher (the sim and InsetFrameTemplate share levels)
-    local base = tonumber(f:GetFrameLevel()) or 1
-    cd.catcher:SetFrameLevel(base + 1)
-    for _, b in ipairs({ cd.close, cd.edit, cd.remove, cd.save, cd.cancel }) do b:SetFrameLevel(base + 2) end
+    -- f4698: the catcher above the card (the sim and InsetFrameTemplate share levels)
+    cd.catcher:SetFrameLevel((tonumber(f:GetFrameLevel()) or 1) + 1)
   end
-  setContentHeight(page, page.content, y)
+  local rows = math.floor((page.n + 1) / 2)
+  setContentHeight(page, page.content, top + rows * (GRID_H + GRID_GAP), w)
+
+  local p = page.panel
+  if not p then return end
+  local pw = panelWidth(page)
+  p.frame:SetWidth(pw)
+  p.painting:SetSize(pw - 6, PANEL_PAINT_H)
+  p.paintBorder:SetSize(pw - 4, PANEL_PAINT_H + 2)
+  if p.zone then
+    local l, r, t, b = Page.Crop(atlasInfo(p.zone), pw - 6, PANEL_PAINT_H)
+    if l then p.painting:SetTexCoord(l, r, t, b) end
+  end
+  if p.box then p.box:SetWidth(pw - PANEL_VALUE_X - 8) end
+  local open = page.open ~= nil
+  p.body:SetShown(open)
+  p.hint:SetShown(not open)
+  local editing = open and page.canWrite == true and p.box ~= nil and page.editing == page.open
+  p.whyValue:SetShown(not editing)   -- the box takes the Why value's place while editing (d791)
+  p.edit:SetShown(page.canWrite == true and not editing)
+  p.remove:SetShown(page.canWrite == true and not editing)
+  if p.box then p.box:SetShown(editing) end
+  p.save:SetShown(editing)
+  p.cancel:SetShown(editing)
+  local base = tonumber(p.frame:GetFrameLevel()) or 1
+  for _, b in ipairs({ p.close, p.edit, p.remove, p.save, p.cancel }) do b:SetFrameLevel(base + 2) end
 end
 
+-- Opens the panel on key (nil closes it), then redraws: the panel's contents are drawn by refreshList.
 local function setOpen(page, key)
   page.open = key
   page.editing = nil
-  safe(page.src, layout, page)
+  Page.Refresh(page.frame, page.src)
 end
 
--- Edit why (d791): the box on the opened card holds the stored why; Save writes it through ns.List.EditWhy, Cancel
--- writes nothing.
-local function editWhy(page, cd)
-  if not cd.box then return end
+-- Edit why (d791): the panel's box holds the stored why; Save writes it through ns.List.EditWhy, Cancel writes
+-- nothing.
+local function editWhy(page)
+  local cd, box = openCard(page), page.panel.box
+  if not (cd and box) then return end
   page.editing = cd.key
-  cd.box:SetText(cd.rawWhy or "")
+  box:SetText(cd.rawWhy or "")
   layout(page)
 end
 
-local function saveWhy(page, cd)
-  if demoRefused() or not cd.box then return end
-  local done, why = ns.List.EditWhy(cd.guid, cd.box:GetText() or "", ns.Core.Now())
+local function saveWhy(page)
+  local cd, box = openCard(page), page.panel.box
+  if demoRefused() or not (cd and box) then return end
+  local done, why = ns.List.EditWhy(cd.guid, box:GetText() or "", ns.Core.Now())
   if done then page.editing = nil else refused(why) end
   Page.Refresh(page.frame, page.src)
 end
@@ -453,8 +564,10 @@ local function cancelWhy(page)
   layout(page)
 end
 
--- Remove the opened target (after the kit's confirm when there is one), then redraw.
-local function removeTarget(page, cd)
+-- Remove the open target (after the kit's confirm when there is one), then redraw.
+local function removeTarget(page)
+  local cd = openCard(page)
+  if not cd then return end
   local guid, frame = cd.guid, page.frame
   local function go()
     if demoRefused() then return end
@@ -470,109 +583,168 @@ local function removeTarget(page, cd)
   end
 end
 
--- An opened card's row: a label and its value.
-local function openRow(cd, f, label, y)
+-- A panel row: its label at PANEL_X, its value from PANEL_VALUE_X to 8 px inside the panel's right edge.
+local function panelRow(f, label, y)
   local l = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  l:SetPoint("TOPLEFT", 14, y)
+  l:SetPoint("TOPLEFT", PANEL_X, y)
   l:SetText(label)
-  local v = textLine(f, "GameFontHighlight", 96, y + 2)
-  cd.rows[#cd.rows + 1] = l
-  cd.rows[#cd.rows + 1] = v
-  return l, v
+  return l, textLine(f, "GameFontHighlightSmall", PANEL_VALUE_X, y)
 end
 
--- One card: M.Kit.Card (or a plain frame when it answers nil), then its regions on the layers of f4699 (no Page.lua
--- region on BACKGROUND on a Kit card), the click catcher, then Edit why, Remove and Close (f4698).
+-- The details panel (d77, d79), on the page frame right of the scroll box, as tall as the scroll area (216 at the
+-- 760x480 window) and panelWidth wide; shown on List whether or not a card is selected. With none, one centred line
+-- (PANEL_HINT). With one, its body: the start-zone painting with its shade, the portrait, the name (gold) and level
+-- line over it; Last seen, Why (two lines), Marked; Kills (up to PANEL_KILLS lines); Edit why and Remove for officers
+-- and Close for all on one row (216 px with the gaps, so it fits PANEL_MIN_W); Edit why's box over the Why value,
+-- Save and Cancel in Edit why's and Remove's place.
+local function buildPanel(page, frame)
+  local kit = page.src.kit
+  local f = makeCard(kit, frame, PANEL_W, 216)
+  f:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -BOX_RIGHT, -LIST_TOP)
+  f:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -BOX_RIGHT, 0)
+  local p = { frame = f, killLines = {} }
+  p.hint = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  p.hint:SetPoint("LEFT", 12, 0)
+  p.hint:SetPoint("RIGHT", -12, 0)
+  p.hint:SetJustifyH("CENTER")
+  p.hint:SetTextColor(DIM[1], DIM[2], DIM[3])
+  p.hint:SetText(PANEL_HINT)
+  local body = CreateFrame("Frame", nil, f)
+  body:SetAllPoints(f)
+  body:Hide()
+  p.body = body
+  p.painting, p.paintBorder = framed(body, PANEL_W - 6, PANEL_PAINT_H)
+  p.painting:SetDrawLayer("ARTWORK", 0)
+  p.paintBorder:SetPoint("TOPLEFT", 2, -2)
+  p.shade = colourTexture(body, "ARTWORK", { 0, 0, 0, 1 })
+  p.shade:SetDrawLayer("ARTWORK", 1)
+  p.shade:SetPoint("BOTTOMLEFT", p.painting, "BOTTOMLEFT", 0, 0)   -- the painting's lower half
+  p.shade:SetPoint("BOTTOMRIGHT", p.painting, "BOTTOMRIGHT", 0, 0)
+  p.shade:SetHeight(PANEL_PAINT_H * 0.5)
+  shadeFade(p.shade)
+  p.portrait, p.portraitBorder = framed(body, PANEL_PORTRAIT, PANEL_PORTRAIT)
+  p.portraitBorder:SetDrawLayer("ARTWORK", 2)   -- the portrait sits over the painting's left
+  p.portrait:SetDrawLayer("ARTWORK", 3)
+  p.portraitBorder:SetPoint("TOPLEFT", 8, -14)
+  p.name = textLine(body, "GameFontNormalLarge", 48, -16)   -- the font's own gold (kos-2, f8561)
+  p.who = textLine(body, "GameFontHighlightSmall", 48, -36)
+  local _
+  _, p.seen = panelRow(body, "Last seen", -56)
+  _, p.whyValue = panelRow(body, "Why", -70)
+  p.whyValue:SetWordWrap(true)
+  p.whyValue:SetHeight(24)
+  _, p.marked = panelRow(body, "Marked", -96)
+  local kills = body:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  kills:SetPoint("TOPLEFT", PANEL_X, -114)
+  kills:SetText("Kills")
+  for k = 1, PANEL_KILLS do
+    p.killLines[k] = textLine(body, "GameFontHighlightSmall", PANEL_X + 8, -128 - (k - 1) * KILL_STEP)
+  end
+
+  p.close = button(body, "Close", 56)
+  p.close:SetPoint("TOPRIGHT", -8, -PANEL_BTN_Y)
+  p.close:SetScript("OnClick", function() safe(page.src, setOpen, page, nil) end)
+  p.remove = button(body, "Remove", 64)
+  p.remove:SetPoint("RIGHT", p.close, "LEFT", -4, 0)
+  p.remove:SetScript("OnClick", function() safe(page.src, removeTarget, page) end)
+  p.edit = button(body, "Edit why", 80)
+  p.edit:SetPoint("RIGHT", p.remove, "LEFT", -4, 0)
+  p.edit:SetScript("OnClick", function() safe(page.src, editWhy, page) end)
+  p.box = kitCall(kit, "InputBox", body, PANEL_W - PANEL_VALUE_X - 8, 200)
+  if p.box then
+    p.box:SetPoint("TOPLEFT", PANEL_VALUE_X, -66)
+    p.box:Hide()
+  end
+  p.cancel = button(body, "Cancel", 64)
+  p.cancel:SetPoint("RIGHT", p.close, "LEFT", -4, 0)
+  p.cancel:SetScript("OnClick", function() safe(page.src, cancelWhy, page) end)
+  p.save = button(body, "Save", 56)
+  p.save:SetPoint("RIGHT", p.cancel, "LEFT", -4, 0)
+  p.save:SetScript("OnClick", function() safe(page.src, saveWhy, page) end)
+  page.panel = p
+end
+
+-- One grid card (d80, d81): M.Kit.Card (or a plain frame when it answers nil), then its regions on the layers of f4699
+-- (no Page.lua region on BACKGROUND on a Kit card): the selected wash (ARTWORK -8), the backdrop strip (0) and its
+-- shade (1), the portrait's frame (2) and face (3), the class ring (OVERLAY); the click catcher (f4698). A click opens
+-- the panel on the card's target, or closes it when the card is the selected one.
 local function card(page, i)
   local cd = page.cards[i]
   if cd then return cd end
   local kit = page.src.kit
-  local w = (page.width or PAGE_W) - page.boxRight
-  local f = makeCard(kit, page.content, w, CARD_HEIGHT)
+  local f = makeCard(kit, page.content, 100, GRID_H)
 
-  cd = { frame = f, rows = {} }
-  cd.painting, cd.paintBorder = framed(f, PAINT_W, PAINT_H)
+  cd = { frame = f }
+  cd.selected = colourTexture(f, "ARTWORK", SELECT_TINT)   -- the selected card's gold wash
+  cd.selected:SetDrawLayer("ARTWORK", -8)
+  cd.selected:SetAllPoints(f)
+  cd.selected:Hide()
+  cd.painting = f:CreateTexture(nil, "ARTWORK")             -- d81: the race's start-zone strip, sized in layout()
   cd.painting:SetDrawLayer("ARTWORK", 0)
+  cd.painting:SetPoint("TOPLEFT", 2, -2)
+  cd.painting:SetAlpha(BACK_A)
   cd.shade = colourTexture(f, "ARTWORK", { 0, 0, 0, 1 })
   cd.shade:SetDrawLayer("ARTWORK", 1)
-  cd.shade:SetPoint("BOTTOMLEFT", cd.painting, "BOTTOMLEFT", 0, 0)   -- the painting's lower half
+  cd.shade:SetPoint("BOTTOMLEFT", cd.painting, "BOTTOMLEFT", 0, 0)   -- the strip's lower half fades into the card
   cd.shade:SetPoint("BOTTOMRIGHT", cd.painting, "BOTTOMRIGHT", 0, 0)
-  cd.shade:SetHeight(OPEN_PAINT_H * 0.5)
+  cd.shade:SetHeight(BACK_H * 0.5)
   shadeFade(cd.shade)
-  cd.shade:Hide()
-  cd.portrait, cd.portraitBorder = framed(f, PORTRAIT, PORTRAIT)
-  cd.portraitBorder:SetDrawLayer("ARTWORK", 2)   -- the portrait sits over the painting's lower left
+  cd.portrait, cd.portraitBorder = framed(f, GRID_PORTRAIT, GRID_PORTRAIT)
+  cd.portraitBorder:SetDrawLayer("ARTWORK", 2)
   cd.portrait:SetDrawLayer("ARTWORK", 3)
+  cd.portraitBorder:SetPoint("TOPLEFT", 7, -7)
+  -- d81: the class ring, 1 px inside the card's edge on every side
+  cd.ring = {}
+  for k, pts in ipairs({ { "TOPLEFT", "TOPRIGHT" }, { "BOTTOMLEFT", "BOTTOMRIGHT" }, { "TOPLEFT", "BOTTOMLEFT" },
+      { "TOPRIGHT", "BOTTOMRIGHT" } }) do
+    local edge = colourTexture(f, "OVERLAY", BORDER)
+    edge:SetPoint(pts[1], 0, 0)
+    edge:SetPoint(pts[2], 0, 0)
+    if k <= 2 then edge:SetHeight(1) else edge:SetWidth(1) end
+    edge:Hide()
+    cd.ring[k] = edge
+  end
 
-  -- the closed card (o850): name, level line, seen line, Why line, the kill count at the top right (kills on)
-  cd.name = textLine(f, "GameFontHighlight", TEXT_X, -10, NAME_RIGHT)
+  cd.name = textLine(f, "GameFontHighlight", GRID_TEXT_X, -9)   -- the whole width beside the portrait
   cd.name:SetTextColor(RED[1], RED[2], RED[3])
-  cd.who = textLine(f, "GameFontHighlight", TEXT_X, -28)
-  cd.status = textLine(f, "GameFontHighlightSmall", TEXT_X, -46)
+  cd.who = textLine(f, "GameFontHighlightSmall", GRID_TEXT_X, -27)
+  cd.status = textLine(f, "GameFontHighlightSmall", GRID_TEXT_X, -43)
   cd.status:SetTextColor(DIM[1], DIM[2], DIM[3])
-  cd.why = textLine(f, "GameFontHighlightSmall", TEXT_X, -64)
-  local kills = killsOn()
-  if kills then
+  cd.why = textLine(f, "GameFontHighlightSmall", 8, -WHY_Y)
+  cd.killed = textLine(f, "GameFontHighlightSmall", 8, -KILLED_Y)   -- d78: "Last killed by <name>, <ago>"
+  if killsOn() then
     cd.kills = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     cd.kills:SetJustifyH("RIGHT")
+    cd.kills:SetPoint("BOTTOMRIGHT", -8, 9)
   end
-
-  -- the opened card (kos-2): name and level line over the painting, four rows (no Kills row with kills off), a
-  -- divider, the buttons
-  cd.bigName = textLine(f, "GameFontNormalLarge", OPEN_TEXT_X, -96)   -- the font's own gold (kos-2, f8561)
-  cd.bigWho = textLine(f, "GameFontHighlight", OPEN_TEXT_X, -118)
-  local _
-  _, cd.seen = openRow(cd, f, "Last seen", -154)
-  _, cd.whyValue = openRow(cd, f, "Why", -174)
-  _, cd.marked = openRow(cd, f, "Marked", -194)
-  if kills then cd.killsLabel, cd.killList = openRow(cd, f, "Kills", -214) end
-  local dy = kills and -236 or -216
-  cd.divider = kitCall(kit, "Divider", f)
-  if cd.divider then
-    cd.divider:SetPoint("TOPLEFT", 3, dy)
-    cd.divider:SetPoint("TOPRIGHT", -3, dy)
-  end
+  cd.paid = kitCall(kit, "Pill", f, PAID_PILL, "grey")   -- s5, placed in drawCard
+  cd.seenPill = kitCall(kit, "Pill", f, "", "grey")      -- s4: "Seen just now" or "Seen today", placed in drawCard
 
   cd.catcher = CreateFrame("Button", nil, f)
   cd.catcher:SetAllPoints(f)
   cd.catcher:RegisterForClicks("LeftButtonUp")
-  cd.catcher:SetScript("OnClick", function() safe(page.src, setOpen, page, cd.key) end)
-  cd.edit = button(f, "Edit why", 90)
-  cd.edit:SetScript("OnClick", function() safe(page.src, editWhy, page, cd) end)
-  cd.remove = button(f, "Remove", 74)
-  cd.remove:SetScript("OnClick", function() safe(page.src, removeTarget, page, cd) end)
-  cd.close = button(f, "Close", 64)
-  cd.close:SetPoint("BOTTOMRIGHT", -16, 6)
-  cd.close:SetScript("OnClick", function() safe(page.src, setOpen, page, nil) end)
-  cd.remove:SetPoint("RIGHT", cd.close, "LEFT", -6, 0)
-  cd.edit:SetPoint("RIGHT", cd.remove, "LEFT", -6, 0)
-  -- Edit why's box over the Why row, Save and Cancel in Edit why's and Remove's place (d791; DIFF.md draws none)
-  cd.box = kitCall(kit, "InputBox", f, 420, 400)
-  if cd.box then
-    cd.box:SetPoint("TOPLEFT", 100, -170)
-    cd.box:Hide()
-  end
-  cd.cancel = button(f, "Cancel", 74)
-  cd.cancel:SetPoint("RIGHT", cd.close, "LEFT", -6, 0)
-  cd.cancel:SetScript("OnClick", function() safe(page.src, cancelWhy, page) end)
-  cd.save = button(f, "Save", 64)
-  cd.save:SetPoint("RIGHT", cd.cancel, "LEFT", -6, 0)
-  cd.save:SetScript("OnClick", function() safe(page.src, saveWhy, page, cd) end)
+  cd.catcher:SetScript("OnClick", function()
+    safe(page.src, setOpen, page, page.open ~= cd.key and cd.key or nil)
+  end)
   page.cards[i] = cd
   return cd
 end
 
-local function setArt(cd, rec, kit)
-  local race = Page.RaceKey(rec.race)
-  local zone = race and "charactercreate-startingzone-" .. race
-  cd.zone = (zone and atlas(kit, cd.painting, zone, nil)) and zone or nil
+-- The portrait (race, then class atlas, else the skull file; sex 3 tries the female face first, d81) and the start-zone
+-- painting (the panel's, and the card's backdrop strip, d81): holder.zone is the painting's atlas, or nil.
+local function setArt(holder, rec, kit, sex)
+  if holder.painting then
+    local race = Page.RaceKey(rec.race)
+    local zone = race and "charactercreate-startingzone-" .. race
+    holder.zone = (zone and atlas(kit, holder.painting, zone, nil)) and zone or nil
+  end
 
-  local tries = Page.Portrait(rec.race, rec.class)
+  local tries = Page.Portrait(rec.race, rec.class, sex)
   local drawn = false
   for _, name in ipairs(tries) do
-    if atlas(kit, cd.portrait, name, nil) then drawn = true break end
+    if atlas(kit, holder.portrait, name, nil) then drawn = true break end
   end
-  if not drawn then atlas(kit, cd.portrait, nil, tries.file) end
+  if not drawn then atlas(kit, holder.portrait, nil, tries.file) end
 end
 
 -- A member key drawn as the roster's display name, else the key itself, else "?"; each through RulesRecords.Safe
@@ -603,9 +775,21 @@ end
 
 -- "Level 60 Human Rogue" (the class in its class colour). When the record holds none of them: RulesMarks.NAME_WHO
 -- under a name key guid, else "".
-local function whoText(src, rec, guid)
+-- d81: level (Seen's when there is one, else the record's) in its danger colour against me (Page.Danger), the skull
+-- icon in place of the number when it is more than SKULL_OVER above me or unknown (while the race or class is known).
+-- With me nil (the Waiting and Mine cards) the record's level shows plain, and none shows nothing, as before.
+local function whoText(src, rec, guid, level, me)
   local parts = {}
-  if type(rec.level) == "number" and rec.level > 0 then parts[#parts + 1] = "Level " .. math.floor(rec.level) end
+  if level == nil then level = rec.level end
+  level = type(level) == "number" and level > 0 and math.floor(level) or nil
+  local mine = type(me) == "number" and me > 0
+  if level and mine and level - me > SKULL_OVER then level = nil end
+  if level then
+    local d = DANGER[Page.Danger(level, me) or ""]
+    parts[#parts + 1] = d and (hexCode(d[1], d[2], d[3]) .. "Level " .. level .. "|r") or ("Level " .. level)
+  elseif mine and (nonEmpty(rec.race) or nonEmpty(rec.class)) then
+    parts[#parts + 1] = "Level " .. SKULL_ICON
+  end
   if nonEmpty(rec.race) then parts[#parts + 1] = shown(src, rec.race) end
   if nonEmpty(rec.class) then
     local class = shown(src, rec.class)
@@ -624,43 +808,146 @@ local function placeText(src, rec)
   return at ~= "" and (" at " .. at) or ""
 end
 
-local function drawCard(page, cd, rec, seen, roster, now)
+-- The shared kills of target guid (d78), newest first: ns.Kill.Recent over the store, or under /gsync demo
+-- ns.RulesKills.Recent over the demo's members; {} when the function is not there, throws (recorded through src.safe)
+-- or answers no list.
+local function recentKills(src, guid)
+  if type(guid) ~= "string" then return {} end
+  local demo = demoOf(src)
+  local good, list
+  if demo then
+    local rules = ns.RulesKills
+    if type(rules) ~= "table" or type(rules.Recent) ~= "function" then return {} end
+    good, list = safe(src, rules.Recent, type(demo.kos_m) == "table" and demo.kos_m or {}, guid, ns.Core.Now())
+  else
+    if type(ns.Kill) ~= "table" or type(ns.Kill.Recent) ~= "function" then return {} end
+    good, list = safe(src, ns.Kill.Recent, guid)
+  end
+  if not good or type(list) ~= "table" then return {} end
+  local out = {}
+  for _, k in ipairs(list) do
+    if type(k) == "table" and type(k.at) == "number" then out[#out + 1] = k end
+  end
+  return out
+end
+
+-- The "Marked" text: "by <marker> <ago>[ · approved by <officer>]".
+local function markedText(src, rec, roster, now)
+  local marked = "by " .. memberName(src, roster, rec.markedBy)
+  if type(rec.markedAt) == "number" then marked = marked .. " " .. ago(now - rec.markedAt) end
+  if nonEmpty(rec.decidedBy) then marked = marked .. DOT .. "approved by " .. memberName(src, roster, rec.decidedBy) end
+  return marked
+end
+
+-- d81: what ns.Seen last saw of guid ({ sex, level, at }), or nil: guarded (another file, written alongside) and
+-- through src.safe.
+local function seenFace(src, guid)
+  local sightings = ns.Seen
+  if type(guid) ~= "string" or type(sightings) ~= "table" or type(sightings.Get) ~= "function" then return nil end
+  local good, v = safe(src, sightings.Get, guid)
+  if good and type(v) == "table" then return v end
+  return nil
+end
+
+-- d81: my level through the hub (UnitLevel("player")), or nil.
+local function myLevel()
+  if not (ns.Hub and type(ns.Hub.Call) == "function") then return nil end
+  local lv = tonumber((ns.Hub.Call("UnitLevel", "player")))
+  return lv and lv > 0 and lv or nil
+end
+
+-- The level to draw: Seen's when it has one, else the record's.
+local function levelOf(rec, face)
+  local lv = face and tonumber(face.level)
+  if lv and lv > 0 then return lv end
+  return rec.level
+end
+
+-- d81: the class colour on the card's ring and the portrait's frame; with no class colour the ring hides (the Kit
+-- card's own border shows) and the portrait frame keeps its gold.
+local function classFrame(cd, class)
+  local r, g, b = classColour(class)
+  for _, edge in ipairs(cd.ring) do
+    if r then edge:SetColorTexture(r, g, b, 1) end
+    edge:SetShown(r ~= nil)
+  end
+  if r then cd.portraitBorder:SetColorTexture(r, g, b, 1)
+  else cd.portraitBorder:SetColorTexture(BORDER[1], BORDER[2], BORDER[3], BORDER[4]) end
+end
+
+local function drawCard(page, cd, rec, seen, roster, now, kills, face, me)
   local src = page.src
   local name = shown(src, rec.name)
   cd.shownName = name
   cd.name:SetText(name)
-  cd.bigName:SetText(name)
-  local who = whoText(src, rec, cd.guid)
+  local who = whoText(src, rec, cd.guid, levelOf(rec, face), me)
   cd.who:SetText(who)
-  cd.bigWho:SetText(who)
-  cd.hasWho = who ~= ""
-
+  cd.who:SetShown(who ~= "")
   local seenLine = seenText(src, seen, now)
   cd.status:SetText(seenLine and ("Seen " .. seenLine) or "Never seen")
-  cd.seen:SetText(seenLine and capital(seenLine) or "Never")
+  classFrame(cd, rec.class)
 
+  -- the full-width lines under the portrait: Why, then Last killed by (each left out with none, closing up)
   cd.rawWhy = type(rec.why) == "string" and rec.why or ""
   local why = shown(src, rec.why)
-  cd.hasWhy = why ~= ""
   cd.why:SetText(GOLD .. "Why:|r " .. why)
-  cd.whyValue:SetText(why ~= "" and why or "-")
+  cd.why:SetShown(why ~= "")
+  local last = kills[1]
+  cd.killed:SetText(last and ("Last killed by " .. memberName(src, roster, last.hunter) .. ", " .. ago(now - last.at)) or "")
+  cd.killed:SetShown(last ~= nil)
 
-  local marked = "by " .. memberName(src, roster, rec.markedBy)
-  if type(rec.markedAt) == "number" then marked = marked .. " " .. ago(now - rec.markedAt) end
-  if nonEmpty(rec.decidedBy) then marked = marked .. DOT .. "approved by " .. memberName(src, roster, rec.decidedBy) end
-  cd.marked:SetText(marked)
-
-  if not cd.kills then return end
-  local kills = {}
-  for _, k in ipairs(type(rec.kills) == "table" and rec.kills or {}) do
-    if type(k) == "table" and type(k.time) == "number" then kills[#kills + 1] = k end
+  -- the confirmed-kill count (ns.Probe.kills true only) at the bottom right
+  if cd.kills then
+    local n = 0
+    for _, k in ipairs(type(rec.kills) == "table" and rec.kills or {}) do
+      if type(k) == "table" and type(k.time) == "number" then n = n + 1 end
+    end
+    cd.kills:SetText(plural(n, "kill"))
   end
-  table.sort(kills, function(a, b) return a.time > b.time end)
-  cd.kills:SetText(plural(#kills, "kill"))
-  cd.killsLabel:SetText("Kills (" .. #kills .. ")")
-  local list = {}
-  for _, k in ipairs(kills) do list[#list + 1] = memberName(src, roster, k.hunter) .. " " .. ago(now - k.time) end
-  cd.killList:SetText(#list > 0 and table.concat(list, DOT) or "None yet")
+  -- the pills right to left at the bottom right: paid this week (s5), then the seen pill (s4), each left of the last
+  -- one shown (or of the kill count)
+  local right = cd.kills
+  for _, pill in ipairs({ cd.paid or false, cd.seenPill or false }) do
+    if pill then
+      local on = pill == cd.paid and cd.isPaid == true or pill == cd.seenPill and cd.seenText ~= nil
+      pill:ClearAllPoints()
+      if right then pill:SetPoint("RIGHT", right, "LEFT", -6, 0) else pill:SetPoint("BOTTOMRIGHT", -6, 5) end
+      pill:SetShown(on)
+      if on then right = pill end
+    end
+  end
+  -- Last killed by takes the Why line's place with no why; under a why it shares the pills' row and stops 6 px short
+  cd.killed:ClearAllPoints()
+  local y = why ~= "" and -KILLED_Y or -WHY_Y
+  cd.killed:SetPoint("TOPLEFT", 8, y)
+  if right and why ~= "" then cd.killed:SetPoint("RIGHT", right, "LEFT", -6, 0)
+  else cd.killed:SetPoint("TOPRIGHT", TEXT_RIGHT, y) end
+end
+
+-- The panel's contents for the open card cd: art (the female face first when Seen saw one, d81), name, level line,
+-- Last seen, Why, Marked and up to PANEL_KILLS kills ("<name> <ago>"), or "No kills yet". The painting's crop follows
+-- the panel's width in layout().
+local function drawPanel(page, cd, rec, seen, roster, now, kills, face, me)
+  local src, p = page.src, page.panel
+  setArt(p, rec, src.kit, face and face.sex)
+  p.painting:SetShown(p.zone ~= nil)
+  p.paintBorder:SetShown(p.zone ~= nil)
+  p.shade:SetShown(p.zone ~= nil)
+  p.name:SetText(cd.shownName)
+  local who = whoText(src, rec, cd.guid, levelOf(rec, face), me)
+  p.who:SetText(who)
+  p.who:SetShown(who ~= "")
+  local seenLine = seenText(src, seen, now)
+  p.seen:SetText(seenLine and capital(seenLine) or "Never")
+  local why = shown(src, rec.why)
+  p.whyValue:SetText(why ~= "" and why or "-")
+  p.marked:SetText(markedText(src, rec, roster, now))
+  for k = 1, PANEL_KILLS do
+    local line, kill = p.killLines[k], kills[k]
+    if kill then line:SetText(memberName(src, roster, kill.hunter) .. " " .. ago(now - kill.at))
+    elseif k == 1 then line:SetText(NO_KILLS) end
+    line:SetShown(kill ~= nil or k == 1)
+  end
 end
 
 -- The open targets to draw: src.data()'s entries (the real list or the hub demo's), each with its stored record
@@ -685,27 +972,53 @@ local function refreshList(page, roster, now)
   local src = page.src
   local Rules = ns.Rules
   local targets, lastSeen = targetsOf(src)
+  local total = #targets
+  local recent = 0
+  for _, t in ipairs(targets) do
+    local seen = lastSeen[Rules.Key(t.rec.name) or ""]
+    t.seen = type(seen) == "table" and seen or nil
+    local at = t.seen and tonumber(t.seen.at) or nil
+    if at and type(now) == "number" and now - at < RECENT then recent = recent + 1 end
+  end
+  page.count:SetText(Page.Targets(total) .. (recent > 0 and (DOT .. recent .. " seen in the last 10 min") or ""))
+  -- s4: the search, then the remembered sort (ns.Core.Sort); the scroll offset is left as it is
+  targets = ns.List.Sort(ns.List.Filter(targets, page.query), ns.Core.Sort())
   local n = #targets
-  page.count:SetText(Page.Targets(n))
-  page.alerts:SetText(ns.Core.DB().muted and ALERTS_OFF or ALERTS_ON)
+  local muted = ns.Core.DB().muted == true
+  if page.alertsBox then page.alertsBox:SetChecked(not muted) else page.alerts:SetText(muted and ALERTS_OFF or ALERTS_ON) end
   page.canWrite = ns.List.CanWrite() == true
   -- s1: while the stores are not ready (roster or guild name unread) the List says so, else an empty List says what
   -- to do; the demo draws made-up targets and needs neither
   local ready, why = true, nil
   if not demoOf(src) then ready, why = ns.Store.Ready() end
   local note
-  if not ready then note = ns.List.RefusalLine(why) elseif n == 0 then note = EMPTY_LIST end
+  if not ready then note = ns.List.RefusalLine(why) elseif total == 0 then note = EMPTY_LIST end
   page.noteH = setNote(page.note, note)
+  -- s5: this week's kill grain from the local ledger; under the demo neither the strip nor a pill (demo data only)
+  local sum, cfg
+  if not demoOf(src) and ns.Kill and type(ns.Kill.Week) == "function" then sum, cfg = ns.Kill.Week() end
+  page.grain:SetText(sum and ns.RulesKills.Strip(sum, cfg) or "")
+  page.grain:SetShown(sum ~= nil and page.tab == "list")
 
   local openFound = false
+  local me = myLevel()   -- d81: the level lines' danger colour
   for i, t in ipairs(targets) do
     local cd = card(page, i)
     cd.guid = t.guid
     cd.key = t.guid or ("#" .. i)
-    if cd.key == page.open then openFound = true end
-    local key = Rules.Key(t.rec.name)
-    drawCard(page, cd, t.rec, key and lastSeen[key] or nil, roster, now)
-    setArt(cd, t.rec, src.kit)
+    cd.isPaid = sum ~= nil and t.guid ~= nil and sum.capped[t.guid] == true
+    cd.seenText = ns.List.SeenPill(t.seen and tonumber(t.seen.at), now)
+    if cd.seenPill and cd.seenText then kitCall(src.kit, "SetPill", cd.seenPill, cd.seenText, SEEN_TONES[cd.seenText]) end
+    local kills = recentKills(src, t.guid)
+    local face = seenFace(src, t.guid)   -- d81: the seen sex and level (ns.Seen), or nil
+    drawCard(page, cd, t.rec, t.seen, roster, now, kills, face, me)
+    setArt(cd, t.rec, src.kit, face and face.sex)
+    cd.painting:SetShown(cd.zone ~= nil)
+    cd.shade:SetShown(cd.zone ~= nil)
+    if cd.key == page.open then
+      openFound = true
+      drawPanel(page, cd, t.rec, t.seen, roster, now, kills, face, me)
+    end
     cd.frame:Show()
   end
   for i = n + 1, #page.cards do page.cards[i].frame:Hide() end
@@ -716,6 +1029,38 @@ end
 
 -- ---------- List: the Mark as bounty card (o851) ----------
 
+-- The answer line under the form (issue 44 s3, p9): line (nil hides it), cleared ANSWER_S seconds later unless a newer
+-- answer took its place.
+local function showAnswer(page, line)
+  page.answerToken = (page.answerToken or 0) + 1
+  local mine = page.answerToken
+  page.answer:SetText(line or "")
+  page.answer:SetShown(line ~= nil)
+  if line and ns.Hub then
+    ns.Hub.After(ANSWER_S, function()
+      if page.answerToken == mine then page.answer:SetText("") page.answer:Hide() end
+    end)
+  end
+end
+
+-- Mark my target on or off by ns.Mark.Available(fighting); off keeps the refusal for the tooltip.
+local function recheck(page, fighting)
+  local b = page.markTarget
+  if not b or type(ns.Mark) ~= "table" or type(ns.Mark.Available) ~= "function" then return end
+  local on, line = ns.Mark.Available(fighting)
+  page.markRefusal = on ~= true and line or nil
+  if on == true then b:Enable() else b:Disable() end
+end
+
+-- A form button MARK_BTN_W wide: M.Kit.Button from API 10, else the page's own button (an API 9 hub).
+local function markButton(page, parent, text, onClick)
+  local b = kitCall(page.src.kit, "Button", parent, text, MARK_BTN_W, onClick)
+  if b then return b end
+  b = button(parent, text, MARK_BTN_W)
+  b:SetScript("OnClick", onClick)
+  return b
+end
+
 local function buildMark(page, frame)
   local kit = page.src.kit
   local w = (page.width or PAGE_W) - BOX_RIGHT
@@ -724,32 +1069,81 @@ local function buildMark(page, frame)
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   title:SetPoint("TOPLEFT", 12, -8)
   title:SetText("Mark as bounty")
-  local hint = textLine(f, "GameFontHighlightSmall", 12, -24)
-  hint:SetText(MARK_HINT)
+  -- issue 44 s3 (a8): a label over each box in place of the old hint line
+  textLine(f, "GameFontHighlightSmall", 14, -24):SetText(NAME_LABEL)
+  textLine(f, "GameFontHighlightSmall", 14 + NAME_BOX_W + 8, -24):SetText(WHY_LABEL)
   local nameBox = kitCall(kit, "InputBox", f, NAME_BOX_W, NAME_BOX_W)
   if nameBox then nameBox:SetPoint("TOPLEFT", 14, -40) end
   local whyW = math.min(MARK_BOX_W, w - MARK_BOX_LESS)
   local box = kitCall(kit, "InputBox", f, whyW, math.min(400, whyW))
   if box then box:SetPoint("TOPLEFT", 14 + NAME_BOX_W + 8, -40) end
-  page.markBox = box
-  local b = button(f, "Mark as bounty", 120)
-  b:SetPoint("TOPRIGHT", -16, -39)
-  b:SetScript("OnClick", function()
+  page.markBox, page.nameBox = box, nameBox
+  page.answer = textLine(f, "GameFontHighlightSmall", 12, ANSWER_Y)
+  page.answer:Hide()
+
+  -- One action (p7, p9, a10): FromName or FromTarget; its line shows under the form, and a good mark clears both boxes.
+  local function run(byName)
     safe(page.src, function()
-      if demoRefused() then return end
+      if demoRefused() then return showAnswer(page, ns.List.RefusalLine("demo")) end
       local mark = ns.Mark
+      if type(mark) ~= "table" then return end
       local name = nameBox and nameBox:GetText() or ""
       local why = box and box:GetText() or ""
-      if type(mark) ~= "table" then return end
-      if type(name) == "string" and name:find("%S") then
-        -- a marked name clears the Name box, so the next click marks the target again (review f7)
-        if type(mark.FromName) == "function" and mark.FromName(name, why) == true then nameBox:SetText("") end
-      elseif type(mark.FromTarget) == "function" then
-        mark.FromTarget(why)
+      local done, a, b
+      if byName then
+        if type(mark.FromName) ~= "function" then return end
+        done, a, b = mark.FromName(name, why)
+      else
+        if type(mark.FromTarget) ~= "function" then return end
+        done, a, b = mark.FromTarget(why)
       end
+      if done == true then
+        if nameBox then nameBox:SetText("") end
+        if box then box:SetText("") end
+        showAnswer(page, a)
+      else
+        showAnswer(page, b)
+      end
+      recheck(page)
+    end)
+  end
+  local function hasName() return nameBox ~= nil and (nameBox:GetText() or ""):find("%S") ~= nil end
+  -- Enter (p7): in the Name box Add by name; in the Why box Add by name with a name typed, else Mark my target
+  if nameBox then
+    nameBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() run(true) end)
+  end
+  if box then
+    box:SetScript("OnEnterPressed", function(self) self:ClearFocus() run(hasName()) end)
+  end
+  page.markTarget = markButton(page, f, "Mark my target", function() run(false) end)
+  page.markTarget:SetPoint("TOPRIGHT", -16, -39)
+  local byName = markButton(page, f, "Add by name", function() run(true) end)
+  byName:SetPoint("TOPRIGHT", -16 - MARK_BTN_W - 8, -39)
+  -- a disabled Mark my target says why (Mark.Available's line) on hover
+  local target = page.markTarget
+  if type(target.SetMotionScriptsWhileDisabled) == "function" then target:SetMotionScriptsWhileDisabled(true) end
+  target:SetScript("OnEnter", function(self)
+    safe(page.src, function()
+      local tip = type(compat) == "table" and type(compat.Tooltip) == "function" and compat.Tooltip() or nil
+      if not tip or not page.markRefusal then return end
+      tip:SetOwner(self, "ANCHOR_TOP")
+      tip:SetText(page.markRefusal)
+      tip:Show()
     end)
   end)
+  target:SetScript("OnLeave", function()
+    local tip = type(compat) == "table" and type(compat.Tooltip) == "function" and compat.Tooltip() or nil
+    if tip then tip:Hide() end
+  end)
   page.mark = f
+end
+
+-- Page.Recheck(fighting): Mark my target's state on every shown page (PLAYER_TARGET_CHANGED, PLAYER_REGEN_DISABLED
+-- with fighting true, PLAYER_REGEN_ENABLED; Core.OnEvent).
+function Page.Recheck(fighting)
+  for frame, page in pairs(pages) do
+    if frame:IsVisible() then safe(page.src, recheck, page, fighting) end
+  end
 end
 
 -- ---------- Hunters (kos-5) ----------
@@ -1094,9 +1488,22 @@ end
 local function refreshMine(page, roster, now)
   local src, set = page.src, page.mine
   if set.head then set.head:SetWidth((page.width or PAGE_W) - page.boxRight) end
-  local list = mineEntries(demoOf(src))
+  local demo = demoOf(src)
+  local list = mineEntries(demo)
+  -- s7: under the own marks, the decided ones of the last 7 days (ns.Mark.Decided), each once
+  local decided = {}
+  if not demo then
+    local held = {}
+    for _, e in ipairs(list) do held[tostring(e.mark.guid) .. "/" .. tostring(e.mark.time)] = true end
+    local got = ns.Mark.Decided(now)
+    for _, d in ipairs(type(got) == "table" and got or {}) do
+      if type(d) == "table" and type(d.guid) == "string" and DECIDED_TAGS[d.outcome]
+        and not held[d.guid .. "/" .. tostring(d.marked)] then decided[#decided + 1] = d end
+    end
+  end
   -- s1: an officer's marks go straight on the list, so the officer line says why Mine stays empty
-  local empty = #list == 0 and (ns.List.CanWrite() == true and MINE_EMPTY.officer or MINE_EMPTY.member) or nil
+  local empty = #list + #decided == 0
+    and (ns.List.CanWrite() == true and MINE_EMPTY.officer or MINE_EMPTY.member) or nil
   local y = MINE_TOP + setNote(set.empty, empty)
   for i, e in ipairs(list) do
     local m = e.mark
@@ -1109,7 +1516,13 @@ local function refreshMine(page, roster, now)
     if waiting then line = line .. DOT .. "waits for an officer" end
     y = y + drawMark(page, set, cd, m, line, state, waiting, y) + CARD_GAP
   end
-  hideFrom(set, #list)
+  for i, d in ipairs(decided) do
+    local tag = DECIDED_TAGS[d.outcome]
+    local cd = markCard(page, set, #list + i)
+    cd.entry = nil
+    y = y + drawMark(page, set, cd, d, tag .. " " .. ago(now - d.at), tag, false, y) + CARD_GAP
+  end
+  hideFrom(set, #list + #decided)
   setContentHeight(page, set.child, y)
 end
 
@@ -1137,17 +1550,50 @@ local function showTab(page, key)
   if page.tabs then page.tabs:Select(key) end
   local onList = key == "list"
   page.count:SetShown(onList)
-  page.alerts:SetShown(onList)
+  page.alerts:SetShown(onList and not page.alertsBox)
+  if page.alertsBox then page.alertsBox:SetShown(onList) end
   if page.mark then page.mark:SetShown(onList) end
+  if page.sort then page.sort:SetShown(onList) end
+  if page.search then page.search:SetShown(onList) end
   for k, child in pairs(page.children) do child:SetShown(k == key) end
   local scroll = page.scroll
-  scroll:ClearAllPoints()
-  scroll:SetPoint("TOPLEFT", 0, onList and -LIST_TOP or -TOP)
-  scroll:SetPoint("BOTTOMRIGHT", -page.boxRight, 0)
+  placeScroll(page)   -- the panel shows on List only (d77)
   scroll:SetScrollChild(page.children[key])
   scroll:SetVerticalScroll(0)
   page.contentHeight = 0
   Page.Refresh(page.frame, page.src)
+end
+
+-- Issue 44 s6 (q2): Waiting shows only in the officer view (an officer, or anyone under /gsync demo), labelled
+-- "Waiting (N)"; for a member it is hidden and the tabs after it close up (each LEFT on the previous shown tab's
+-- RIGHT +2, as Kit.Tabs places them). k4: the template sizes a tab on SetText only at build, so a new label is set
+-- while the tab is hidden and its Show re-runs the template's resize (its OnShow). Answers true when the page left
+-- a Waiting tab it may no longer show (the caller then shows List).
+local function layoutTabs(page, demo)
+  local tabs = page.tabs
+  if not tabs or not tabs.waiting then return false end
+  local list, officer = waitingEntries(demo)
+  officer = officer or demo ~= nil
+  local tab = tabs.waiting
+  local label = "Waiting (" .. #list .. ")"
+  if officer and page.waitingLabel ~= label then
+    page.waitingLabel = label
+    tab:Hide()
+    tab:SetText(label)
+  end
+  tab:SetShown(officer)
+  local prev
+  for _, k in ipairs(tabs.keys) do
+    local b = tabs[k]
+    if b:IsShown() then
+      if prev then
+        b:ClearAllPoints()
+        b:SetPoint("LEFT", prev, "RIGHT", 2, 0)
+      end
+      prev = b
+    end
+  end
+  return not officer and page.tab == "waiting"
 end
 
 function Page.Build(frame, src)
@@ -1167,8 +1613,48 @@ function Page.Build(frame, src)
   page.alerts:SetPoint("RIGHT", frame, "TOPRIGHT", -BOX_RIGHT, -(TOP + 12))  -- the vertical centre of the header row
   page.alerts:SetJustifyH("RIGHT")
   page.alerts:SetTextColor(ALERTS_GREY[1], ALERTS_GREY[2], ALERTS_GREY[3])
+  -- s2: the Alerts box does what /kos on and /kos off do (Core.SetMuted: the same chat line, the Options box follows);
+  -- with no checkbox template the sentence above stays
+  local box = kitCall(src.kit, "Checkbox", frame, ALERTS_LABEL)
+  if box then
+    box:SetPoint("RIGHT", frame, "TOPRIGHT", -BOX_RIGHT - ALERTS_LABEL_W, -(TOP + 12))
+    box:SetScript("OnClick", function(self)
+      safe(page.src, function() ns.Core.SetMuted(not self:GetChecked()) end)
+    end)
+    page.alertsBox = box
+    page.alerts:Hide()
+  end
+  -- s4: the sort dropdown left of the Alerts box (or sentence), the search box left of it; each refreshes the List
+  local left = page.alertsBox or page.alerts
+  local leftGap = page.alertsBox and -8 or -12
+  page.sort = kitCall(src.kit, "Dropdown", frame, SORT_W, function(_, root)
+    for _, by in ipairs(ns.List.SORTS) do
+      root:CreateRadio(SORT_TEXTS[by], function(d) return ns.Core.Sort() == d end,
+        function(d) safe(page.src, function() ns.Core.SetSort(d) Page.Refresh(page.frame, page.src) end) end, by)
+    end
+  end)
+  if page.sort then
+    page.sort:SetPoint("RIGHT", left, "LEFT", leftGap, 0)
+    left, leftGap = page.sort, -8
+  end
+  page.search = kitCall(src.kit, "SearchBox", frame, SEARCH_W, SEARCH_HINT)
+    or kitCall(src.kit, "InputBox", frame, SEARCH_W, SEARCH_W)
+  if page.search then
+    page.search:SetPoint("RIGHT", left, "LEFT", leftGap, 0)
+    -- HookScript: SearchBoxTemplate owns OnTextChanged (its hint and clear button)
+    page.search:HookScript("OnTextChanged", function(self)
+      safe(page.src, function()
+        page.query = self:GetText() or ""
+        Page.Refresh(page.frame, page.src)
+      end)
+    end)
+  end
 
   buildMark(page, frame)
+  page.grain = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  page.grain:SetPoint("TOPLEFT", 4, -GRAIN_Y)
+  page.grain:SetJustifyH("LEFT")
+  page.grain:SetTextColor(ALERTS_GREY[1], ALERTS_GREY[2], ALERTS_GREY[3])
 
   local scroll, plain, right = scrollFrame(frame)
   page.boxRight = right
@@ -1183,6 +1669,7 @@ function Page.Build(frame, src)
     page.children.hunters = buildHunters(page)
   end
   page.children.mine = buildMine(page)
+  buildPanel(page, frame)   -- d77: the open target's details, right of the scroll box
 
   frame:SetScript("OnSizeChanged", function(_, w)
     if type(w) == "number" and w > 0 then
@@ -1216,7 +1703,9 @@ function Page.Refresh(frame, src)
     roster = {}
     for k, name in pairs(demo.names) do roster[k] = { name = name } end
   end
+  if layoutTabs(page, demo) then return showTab(page, "list") end
   local now = ns.Core.Now()
+  recheck(page)
   refreshList(page, roster, now)
   if page.tab == "hunters" and page.hunters then refreshHunters(page, roster, now)
   elseif page.tab == "waiting" then refreshWaiting(page, roster, now)

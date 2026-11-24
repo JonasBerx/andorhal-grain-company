@@ -35,8 +35,10 @@ local SPEC = {
                     max = 3, who = "marker" },
                   { name = "claims", fields = { "time", "victim", "zone" }, max = 6, who = "claimer" },
                   { name = "witness", fields = { "killer", "victim", "time" }, max = 6, who = "witness" },
-                  { name = "sightings", fields = { "target", "time", "zone", "subzone", "shard" }, max = 3,
-                    who = "spotter" } } },
+                  -- level (issue 44 d83) is optional: need = the 5 fields every reader knows, so a sighting with no
+                  -- level packs as the 5-field format did and old 5-field sightings still read
+                  { name = "sightings", fields = { "target", "time", "zone", "subzone", "shard", "level" }, max = 3,
+                    who = "spotter", need = 5 } } },
   c = { fixed = { "reward", "weekCap", "perTarget", "setAt" }, lists = {} },
 }
 local NUMBER = { level = true, markedAt = true, decidedAt = true, time = true, total = true, best = true, since = true,
@@ -160,7 +162,9 @@ end
 
 -- ---------- pack ----------
 
--- Records.Pack(kind, rec) -> body. A plain serialiser: no counts or caps (Trim and Parse own those).
+-- Records.Pack(kind, rec) -> body. A plain serialiser: no counts or caps (Trim and Parse own those). Empty trailing
+-- fields past a list's need are left out (issue 44 d83), so a record using no newer field packs byte for byte as the
+-- older format did and old and new clients hash it the same.
 function Records.Pack(kind, rec)
   local spec = SPEC[kind]
   if not spec or type(rec) ~= "table" then return nil end
@@ -169,10 +173,13 @@ function Records.Pack(kind, rec)
   local sections = { table.concat(fixed, ";") }
   for _, list in ipairs(spec.lists) do
     local entries = {}
+    local need = list.need or #list.fields
     for _, e in ipairs(rec[list.name] or {}) do
       local fields = {}
       for i, f in ipairs(list.fields) do fields[i] = escape(e[f]) end
-      entries[#entries + 1] = table.concat(fields, ";")
+      local n = #list.fields
+      while n > need and fields[n] == "" do n = n - 1 end
+      entries[#entries + 1] = table.concat(fields, ";", 1, n)
     end
     sections[#sections + 1] = table.concat(entries, ",")
   end
@@ -235,11 +242,13 @@ function Records.Parse(kind, key, body, now)
   if kind == "t" and (not isPlayer(key:sub(2)) or Records.TargetKey(key:sub(2)) ~= key) then return nil, "key" end
   if kind == "h" and (key:sub(1, 1) ~= "h" or #key < 2) then return nil, "key" end
   if kind == "c" and key ~= Records.SETTINGS_KEY then return nil, "key" end
+  -- tolerant of a newer writer (issue 44 d83): more sections, fixed fields or entry fields than known are accepted
+  -- and ignored; fewer are refused (an entry may stop at its list's need)
   local sections = splitOn(body, "=")
-  if #sections ~= 1 + #spec.lists then return nil, "shape" end
+  if #sections < 1 + #spec.lists then return nil, "shape" end
   local rec = {}
   local fixed = splitOn(sections[1], ";")
-  if #fixed ~= #spec.fixed then return nil, "shape" end
+  if #fixed < #spec.fixed then return nil, "shape" end
   for i, name in ipairs(spec.fixed) do
     local v, why = field(name, fixed[i], now, kind == "m" and name == "guid", kind == "t" and name == "status")
     if why then return nil, why end
@@ -252,11 +261,11 @@ function Records.Parse(kind, key, body, now)
     local out = {}
     for ei, entry in ipairs(entries) do
       local fields = splitOn(entry, ";")
-      if #fields ~= #list.fields then return nil, "shape" end
+      if #fields < (list.need or #list.fields) then return nil, "shape" end
       local e = {}
       for i, name in ipairs(list.fields) do
         local isGuid = GUID[name] or (list.name == "marks" and name == "guid")
-        local v, why = field(name, fields[i], now, isGuid, isGuid or name == "time")
+        local v, why = field(name, fields[i] or "", now, isGuid, isGuid or name == "time")
         if why then return nil, why end
         e[name] = v
       end
