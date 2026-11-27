@@ -2,9 +2,10 @@ local _, ns = ...
 if not ns.M then return end
 
 -- The "raids" domain (officer rule) over the SavedVariable: the store the engine syncs, its logical codec, the
--- officer's share, the view, the selftest and the status line. Records live in ns.DB().records, read at every call
--- (the SavedVariable is set only after the files ran). Every function that gets t or reads the time prunes expired
--- records into gone[key] = { at, rev } first (plan "Expiry, gone, compare").
+-- officer's share, the view (ns.Lineups and ns.Lineup read the rosters, g keys, from it), the selftest and the
+-- status line. Records live in ns.DB().records, read at every call (the SavedVariable is set only after the files
+-- ran). Every function that gets t or reads the time prunes expired records into gone[key] = { at, rev } first (plan
+-- "Expiry, gone, compare").
 -- Attach copies the store at the call (CommSync.lua:577-591): everything is defined above, and the file ends with the
 -- domain's registration and the attach.
 
@@ -121,16 +122,20 @@ function store.build(key, t)
   return { t = "P", key = key, rev = r.rev, hash = r.hash, by = r.by, body = r.body }
 end
 
--- A refused body (too big, undecodable) or an expired one is not stored: its key goes to gone with its rev, so a
--- digest offering that rev is not asked again. A live record clears its gone entry. A rev at or below the gone rev is
--- dropped (f1492); a gen or at above t + FUTURE counts as refused (f1491).
+-- The body kind each key letter takes besides X (ROSTER-FORMAT.md "Where it lives").
+local KEY_KIND = { e = "E", t = "L", g = "G" }
+
+-- A refused body (too big, undecodable, a kind its key letter does not take) or an expired one is not stored: its key
+-- goes to gone with its rev, so a digest offering that rev is not asked again. A live record clears its gone entry. A
+-- rev at or below the gone rev is dropped (f1492); a gen or at above t + FUTURE counts as refused (f1491).
 function store.merge(msg, t)
   local d = prune(t)
   local g = d.gone[msg.key]
   if g and (tonumber(msg.rev) or 0) <= (tonumber(g.rev) or 0) then return true end
   local body = msg.body
   local rec = type(body) == "string" and #body <= RECV_MAX and Codec.Decode(body)
-  if not rec or Codec.Expired(body, t) or rec.gen > t + Rules.FUTURE or (rec.at or 0) > t + Rules.FUTURE then
+  local kindOk = rec and (rec.kind == "X" or rec.kind == KEY_KIND[string.sub(tostring(msg.key), 1, 1)])
+  if not kindOk or Codec.Expired(body, t) or rec.gen > t + Rules.FUTURE or (rec.at or 0) > t + Rules.FUTURE then
     d.records[msg.key] = nil
     d.gone[msg.key] = { at = t, rev = msg.rev }
   else
@@ -202,11 +207,35 @@ function ns.Share(cal)
   return true, plan.readback
 end
 
+-- The demo calendar plus the made-up rosters, built once and kept in the demo state (memory only). With no
+-- made-up guild (Tools.lua's shared empty state) it answers the records as they are and writes nothing.
+local function demoRecords(d)
+  if d.withRosters and d.rostersOver == d.records then return d.withRosters end
+  if type(d.rows) ~= "table" or next(d.rows) == nil or not ns.RosterRules then return d.records end
+  local keys, people = {}, {}
+  for k in pairs(d.rows) do keys[#keys + 1] = k end
+  table.sort(keys)
+  for _, k in ipairs(keys) do people[#people + 1] = d.rows[k] end
+  local t = now()
+  local link = Rules.View(d.records, t, ns.Key).events[1]
+  local me = M.Compat.call("UnitName", "player")
+  if type(me) ~= "string" or me == "" then me = nil end
+  local out = {}
+  for key, r in pairs(d.records) do out[key] = r end
+  for key, r in pairs(ns.RosterRules.DemoRecords(people, link, t, me)) do out[key] = r end
+  d.withRosters, d.rostersOver = out, d.records
+  return out
+end
+
 -- In demo the view is the made-up calendar (ns.DemoData, Tools.lua); the store is neither read nor written.
 function ns.View()
   local d = ns.DemoData and ns.DemoData()
-  return Rules.View(d and d.records or db().records, now(), ns.Key)
+  return Rules.View(d and demoRecords(d) or db().records, now(), ns.Key)
 end
+
+-- The rosters (g keys, ROSTER-FORMAT.md) over a fresh ns.View(); a reader that holds a view uses view.lineupOf.
+function ns.Lineups() return ns.View().lineups end
+function ns.Lineup(key) return ns.View().lineupOf[key] end
 
 function ns.Selftest()
   return Rules.SelfCheck({ attached = okAttach, why = whyRegister or whyAttach, known = select(4, ns.Roster()),

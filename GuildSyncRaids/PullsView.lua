@@ -9,9 +9,10 @@ if not ns.M then return end
 
 local M = ns.M
 local K = M.Kit
+local C, T = K.Tokens.colour, K.Tokens.text -- a text role is read in a function only (made on the first read)
 local SB = 22 -- the scrollbar's room on the right (ns.ScrollArea)
 local CHIP_H, CHIP_GAP, CHIP_ROWS = 30, 4, 2
-local GREEN = { 0.1, 1, 0.1 }
+local GREEN = C.green
 local KEPT = " Kept up to 300 pulls or 35 days on this character."
 local NOTE = "Recorded by this client: the raid group as it was just before each pull."
 local RECAP = "Mark no-shows in /recap on Discord: the bot's attendance counts them."
@@ -36,10 +37,10 @@ local function build(card)
   V.pane = CreateFrame("Frame", nil, body)
   V.fill = V.pane:CreateTexture(nil, "ARTWORK")
   V.fill:SetAllPoints(V.pane)
-  V.fill:SetColorTexture(0, 0, 0, 0.35)
+  V.fill:SetColorTexture(C.panel[1], C.panel[2], C.panel[3], C.panel[4])
   V.scroll, V.child = ns.ScrollArea(V.pane)
   V.barDiv = K.Divider and K.Divider(body)
-  V.bar = ns.Label(body, "GameFontHighlightSmall")
+  V.bar = ns.Label(body, T.highlightSmall)
   V.bar:SetWordWrap(false)
   color(V.bar, ns.GREY)
   return V
@@ -52,11 +53,11 @@ local function chip(V, i)
   ch = CreateFrame("Frame", nil, V.pane)
   ch.bg = ch:CreateTexture(nil, "ARTWORK")
   ch.bg:SetAllPoints(ch)
-  ch.bg:SetColorTexture(0, 0, 0, 0.5)
-  ch.boss = ns.Label(ch, "GameFontHighlightSmall")
+  ch.bg:SetColorTexture(C.pillBg[1], C.pillBg[2], C.pillBg[3], C.pillBg[4])
+  ch.boss = ns.Label(ch, T.highlightSmall)
   ch.boss:SetWordWrap(false)
   at(ch.boss, 6, -2)
-  ch.res = ns.Label(ch, "GameFontHighlightSmall")
+  ch.res = ns.Label(ch, T.highlightSmall)
   ch.res:SetWordWrap(false)
   at(ch.res, 6, -16)
   V.chips[i] = ch
@@ -68,8 +69,7 @@ local function line(V, pool, font, text, c, x, y, w)
   pool.n = pool.n + 1
   local fs = pool[pool.n]
   if not fs then
-    fs = V.child:CreateFontString(nil, "OVERLAY", font)
-    fs:SetJustifyH("LEFT")
+    fs = ns.Label(V.child, font)
     fs:SetWordWrap(true)
     pool[pool.n] = fs
   end
@@ -125,8 +125,8 @@ end
 -- The lists in the scroll child, top-down; answers the child's height.
 local function drawLists(V, pulls, R, PW)
   local y = 6
-  local function head(text) y = line(V, V.heads, "GameFontNormalSmall", text, nil, 4, y, PW - 8) end
-  local function body(text, c) y = line(V, V.lines, "GameFontHighlightSmall", text, c, 12, y, PW - 16) + 4 end
+  local function head(text) y = line(V, V.heads, T.small, text, nil, 4, y, PW - 8) end
+  local function body(text, c) y = line(V, V.lines, T.highlightSmall, text, c, 12, y, PW - 16) + 4 end
   if #pulls == 0 then
     body("No pulls recorded for this raid on this character.", ns.GREY)
     return y

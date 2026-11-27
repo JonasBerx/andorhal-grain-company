@@ -1,17 +1,21 @@
 local _, ns = ...
 if not ns.M then return end
+local addonName = ... -- this addon's folder name, matched by ns.OnBlockedEvent
 
--- The officers' tools' logic (the invite plan and click, the Tonight lists, the whisper; Signups.lua draws them), the
--- soft-reserve Share rules, the raid-day reminder, the invite batch and ns.Demo. Nothing here invites, converts,
--- whispers or shares without a click: InviteClick, ShareClick and Whisper run only from OnClick. A whisper only fills
--- the chat box (GuildSync.OpenWhisper sends nothing); Share only fills the chat box too (ns.OpenChat): the module sends
--- nothing, the player presses Enter. In demo every action is inert. The reminder is one local chat line.
+-- The officers' tools' logic (the invite plan and click, the invite lists' acting side, the Tonight lists, the whisper;
+-- Signups.lua and InvitesView.lua draw them), the soft-reserve Share rules, the raid-day reminder, the invite batch and
+-- ns.Demo. Nothing here invites, converts, whispers or shares without a click: InviteClick, ShareClick and Whisper run
+-- only from OnClick. A whisper only fills the chat box (GuildSync.OpenWhisper sends nothing); Share only fills the chat
+-- box too (ns.OpenChat): the module sends nothing, the player presses Enter. In demo every action is inert. The
+-- reminder is one local chat line.
 
 local M, Rules = ns.M, ns.Rules
 local DAY, INVITE_PENDING, BATCH_MAX = 86400, 60, 40
 local INVITE_KINDS = { primary = true, late = true }
 local SHARE_HOLD, CHAT_MAX = 10, 255
 local DEMO_LINE = "demo: nothing happens here (demo data)"
+local COMBAT_LINE = "In combat: try again after the fight."
+local SOURCES = { roster = true, signups = true }
 local NOT_IN_GROUP = "Join the raid group to share"
 local MEMBER_WHY = "Only the raid leader, an assistant or an officer can share this."
 
@@ -85,15 +89,23 @@ function ns.InvitePlan(inp)
 end
 
 local pending = {} -- key -> time of the invite, this session only
+-- The blocked-action guard (ADDON_ACTION_BLOCKED / _FORBIDDEN): clicking is true only while the invite loop runs,
+-- blocked holds what the game blocked during it, lastClick the keys the last click marked and when.
+local clicking, blocked, lastClick = false, nil, nil
 
 -- One click: read the group, plan, act. With signup (a row's Invite) it plans over that one sign-up with a batch
--- of 1. Returns the result line.
-function ns.InviteClick(ev, signup)
+-- of 1; with st (ns.InviteState) over its wanted rows in order (InviteRules.AsSignups). Nothing in combat.
+-- Returns the result line.
+function ns.InviteClick(ev, signup, st)
   if demo() then return DEMO_LINE end
+  local lock = call("InCombatLockdown")
+  if lock ~= false then return COMBAT_LINE end -- no answer counts as combat (Group.lua's rule)
   local g = groupState()
   local t = now()
+  local R = ns.InviteRules
+  local list = signup and { signup } or (st and type(R) == "table" and type(R.AsSignups) == "function" and R.AsSignups(st)) or ev.signups
   local action = ns.InvitePlan({
-    complete = ev.complete, signups = signup and { signup } or ev.signups, me = ns.MyKey(),
+    complete = ev.complete, signups = list, me = ns.MyKey(),
     batch = signup and 1 or (ns.DB().batch or 5), now = t, pending = pending,
     member = function(name) return ns.Member(name) end,
     inGroupOf = inGroupOf,
@@ -101,27 +113,167 @@ function ns.InviteClick(ev, signup)
   })
   if action.kind == "convert" then
     -- Report conversion only when the call ran (f1496): ConvertToRaid may be missing or throw.
-    if not M.Compat.Try("C_PartyInfo.ConvertToRaid") then
+    -- The same blocked guard as the invite loop: a block during the call is reported, not claimed.
+    blocked, clicking, lastClick = nil, true, nil -- a later block must not clear an earlier click's marks
+    local good, ran = pcall(M.Compat.Try, "C_PartyInfo.ConvertToRaid")
+    clicking = false
+    if not good then error(ran, 0) end
+    if blocked then return "The game blocked " .. blocked .. ": convert by hand." end
+    if not ran then
       return "Converting to a raid is not available on this client: convert by hand."
     end
     return "The party is full: converted to a raid. Click again to invite."
   end
   if action.kind ~= "invite" then return action.why end
   -- Only names the client took count as invited (f1473): InviteUnit is optional and may be missing or throw.
+  -- A block the game reports during the loop means nobody may be counted invited: marks are set only after it.
   local invited = {}
-  for _, name in ipairs(action.names) do
-    if M.Compat.Try("C_PartyInfo.InviteUnit", name) then
-      invited[#invited + 1] = name
-      pending[keyOf(name)] = t
+  blocked, clicking = nil, true
+  local good, err = pcall(function()
+    for _, name in ipairs(action.names) do
+      if M.Compat.Try("C_PartyInfo.InviteUnit", name) then invited[#invited + 1] = name end
+    end
+  end)
+  clicking = false
+  if not good then error(err, 0) end
+  local keys = {}
+  if not blocked then
+    for _, name in ipairs(invited) do
+      local k = keyOf(name)
+      pending[k] = t
+      keys[#keys + 1] = k
     end
   end
+  lastClick = { keys = keys, t = t }
+  if blocked then return "The game blocked " .. blocked .. ": invite by hand." end
   if #invited == 0 then return "The invite is not available on this client: invite by hand." end
   return "Invited " .. #invited .. ": " .. ns.Escape(table.concat(invited, ", "))
     .. ". The party count cannot see members who did not sign up: if the game refuses invites, click again to"
     .. " convert to a raid."
 end
 
--- ---------- the Tonight lists (pure; Signups.lua draws them for officers) ----------
+-- ---------- ticket 57: the invite lists' acting side (InviteRules.lua holds the rules) ----------
+
+-- Who sees the invite lists: an officer, or the player leads the group (ns.Leads; missing means officers only).
+function ns.SeesInvites()
+  local me = ns.MyKey()
+  if me and ns.IsOfficer(me) then return true end
+  local leads = ns.Leads
+  return type(leads) == "function" and leads("player") == true or false
+end
+
+local function hasLineup(ev)
+  return type(ev) == "table" and type(ev.lineup) == "table" and type(ev.lineup.groups) == "table"
+end
+
+-- The saved source when valid, default "roster"; "signups" when ev has no lineup. A read creates nothing.
+local demoSource -- the demo's source switch, this session only; never saved
+
+function ns.InviteSource(ev)
+  if not hasLineup(ev) then return "signups" end
+  if demo() then return demoSource or "roster" end
+  local inv = ns.DB().invite
+  local s = type(inv) == "table" and inv.source or nil
+  return SOURCES[s] and s or "roster"
+end
+
+function ns.SetInviteSource(source)
+  if not SOURCES[source] then return nil, "the invite source is \"roster\" or \"signups\"" end
+  if demo() then
+    demoSource = source
+    return true
+  end
+  local db = ns.DB()
+  if type(db.invite) ~= "table" then db.invite = {} end
+  db.invite.source = source
+  return true
+end
+
+local lastState = {} -- ev key -> the last state read out of combat, this session only
+local staleShown = false -- InviteState answered a stale state since the last fight ended
+local function emptyState(source)
+  return { source = source, list = {}, standins = {}, extras = {}, stale = true, none = true,
+    counts = { total = 0, ["in"] = 0, wrong = 0, invited = 0, online = 0, offline = 0, unknown = 0, extras = 0 } }
+end
+
+-- The wanted list against the group at t. In combat the last read for ev (stale), never a fresh one.
+function ns.InviteState(ev, t)
+  local source = ns.InviteSource(ev)
+  local R = ns.InviteRules
+  if type(R) ~= "table" then return emptyState(source) end
+  local id = ev.key or ev.id or ""
+  local roster, kindOf = ns.RaidRoster, ns.GroupKind
+  local list, why
+  if type(roster) == "function" then list, why = roster() end
+  if why == "combat" then
+    staleShown = true -- the fight's end redraws with a fresh read
+    local last = lastState[id]
+    if not last then return emptyState(source) end
+    return { source = last.source, list = last.list, standins = last.standins, extras = last.extras,
+      counts = last.counts, stale = true }
+  end
+  local kind
+  if type(kindOf) == "function" then kind = kindOf() end
+  local st = R.Compare(R.Wanted(ev, source, keyOf), {
+    raid = type(list) == "table" and list or nil, kind = kind, me = ns.MyKey(), now = t or now(), pending = pending,
+    member = function(name) return ns.Member(name) end, inGroupOf = inGroupOf,
+  })
+  lastState[id] = st
+  return st
+end
+
+-- ADDON_ACTION_BLOCKED / _FORBIDDEN (Raids.lua routes them here). Only this addon or the hub counts. During an invite
+-- click it is recorded (the click then marks nobody); up to INVITE_PENDING after one it clears that click's marks.
+function ns.OnBlockedEvent(event, addon, func)
+  local a = GuildSync.Compat.Plain(addon)
+  local f = GuildSync.Compat.Plain(func)
+  a = tostring(a or "")
+  if a ~= addonName and a ~= "GuildSync" then return end
+  if clicking then
+    blocked = noPipes(f)
+    return
+  end
+  if lastClick and now() - lastClick.t < INVITE_PENDING then
+    for _, k in ipairs(lastClick.keys) do pending[k] = nil end
+    lastClick = nil
+    ns.Say("Raids: the game blocked " .. noPipes(f) .. ": invite by hand.") -- one local line, never sent
+    M.RefreshPage()
+  end
+end
+
+-- One click: fills the chat box with the missing names ("/raid " or "/p "); never sends. nil when the box opened,
+-- else a line for the caller.
+function ns.CopyMissing(ev)
+  if demo() then return DEMO_LINE end
+  local kindOf = ns.GroupKind
+  local kind
+  if type(kindOf) == "function" then kind = kindOf() end
+  if kind ~= "raid" and kind ~= "party" then return "Join a group to copy the missing list." end
+  local R = ns.InviteRules
+  if type(R) ~= "table" then return "Nobody is missing." end
+  local prefix = kind == "raid" and "/raid " or "/p "
+  local text = R.MissingText(ns.InviteState(ev, now()), CHAT_MAX - #prefix)
+  if not text then return "Nobody is missing." end
+  if ns.OpenChat(prefix .. text) then return nil end
+  return "copy this into " .. (kind == "raid" and "raid" or "party") .. " chat: " .. ns.Escape(text)
+end
+
+local lastGroupRedraw -- when OnGroupEvent last asked for a redraw
+-- GROUP_ROSTER_UPDATE: one page redraw at most once a second, out of combat, on the Sign-ups or Groups tab. Reads no
+-- group data, sends nothing.
+function ns.OnGroupEvent(event)
+  local lock = call("InCombatLockdown")
+  if lock ~= false then return end
+  local ps = ns.PageState
+  local tab = type(ps) == "table" and ps.tab or nil
+  if tab ~= nil and tab ~= "signups" and tab ~= "groups" then return end
+  local t = now()
+  if lastGroupRedraw and t - lastGroupRedraw < 1 then return end
+  lastGroupRedraw = t
+  M.RefreshPage()
+end
+
+-- ---------- the Tonight lists (InvitesView.lua draws notSigned; notIn is no longer drawn) ----------
 
 ns.Tonight = tonight
 
@@ -375,3 +527,14 @@ end
 
 -- The hub's demo switch redraws the page (demo data on, the real store off).
 M.On("demo", function() M.RefreshPage() end)
+
+-- A fight's end redraws the page only when the invite lists answered a stale state during it (Raids.lua runs the
+-- listeners).
+local afterCombat = ns.AfterCombat
+if type(afterCombat) == "function" then
+  afterCombat(function()
+    if not staleShown then return end
+    staleShown = false
+    M.RefreshPage()
+  end)
+end

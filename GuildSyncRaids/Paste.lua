@@ -2,7 +2,7 @@ local _, ns = ...
 if not ns.M then return end
 
 -- Load raid data (right card, plan Task 6): the title with a grey "officers", the three steps, the paste box (a
--- M.Kit.Inset one frame level above the card, black .6 fill, its ScrollFrame from ns.ScrollArea), under it either the
+-- M.Kit.Inset one frame level above the card, the kit's pillBg fill, its ScrollFrame from ns.ScrollArea), under it either the
 -- read-back (a M.Kit.Card one level up, grown to its lines) or the refusal (orange, 0.2's readPaste words), a divider,
 -- then Share with the guild and Cancel. place() stacks them (f4763): the box starts under the steps and gives up
 -- height (150 down to 40) so the read-back or refusal ends above the divider. Everything is drawn on card.body. ns.Decode, ns.Rules.Plan and ns.Share are looked up at call
@@ -10,6 +10,7 @@ if not ns.M then return end
 
 local M = ns.M
 local K = M.Kit
+local C, T = K.Tokens.colour, K.Tokens.text -- a text role is read in a function only (made on the first read)
 local STEPS = "1. On the website's /officers/ page press \"Copy for the game\".\n2. Paste it below (Ctrl+V).\n"
   .. "3. Check what was read, then press Share with the guild."
 local SHARING = "Sharing sends it to every guildmate with the addon. Stay online until it has gone out."
@@ -118,8 +119,14 @@ local function readPaste(text)
     text2 = "Held now: data from " .. ns.When("%H:%M", h.at or h.gen or 0) .. " by " .. ns.Who(rows, h.by)
       .. ". This paste is not newer, so nothing is shared."
   elseif whyPlan == "records" then
+    local n, m = tonumber(info.rosters) or 0, tonumber(info.rosterRecords) or 0
+    local held = ""
+    if n > 0 then
+      held = "; " .. n .. (n == 1 and " roster holds " or " rosters hold ") .. m .. (m == 1 and " record" or " records")
+    end
     text2 = "Too many records to share (" .. tostring(info.xCount or 0) .. " cancelled raids still held"
-      .. (info.oldestExpiry and (", the oldest goes " .. ns.When("%a %d %b %H:%M", info.oldestExpiry)) or "") .. ")."
+      .. (info.oldestExpiry and (", the oldest goes " .. ns.When("%a %d %b %H:%M", info.oldestExpiry)) or "")
+      .. held .. ")."
   elseif whyPlan == "parts" then
     text2 = esc(info.name) .. " is too big to share."
   elseif whyPlan == "teams" then
@@ -154,9 +161,7 @@ local function share()
 end
 
 local function button(parent, text, w, fn)
-  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  b:SetSize(w, 22)
-  b:SetText(text)
+  local b = K.Button(parent, text, w)
   b:SetScript("OnClick", function() M.Safe(fn) end)
   return b
 end
@@ -164,10 +169,10 @@ end
 function ns.BuildPaste(card)
   local body = card.body
   local level = card:GetFrameLevel() + 1
-  P.title = ns.Label(body, "GameFontNormal")
+  P.title = ns.Label(body, T.normal)
   P.title:SetPoint("TOPLEFT", 12, -26)
   P.title:SetText("Load raid data")
-  P.officers = ns.Label(body, "GameFontHighlightSmall")
+  P.officers = ns.Label(body, T.highlightSmall)
   P.officers:SetJustifyH("RIGHT")
   P.officers:SetPoint("TOPRIGHT", -12, -27)
   P.officers:SetText("officers")
@@ -177,12 +182,13 @@ function ns.BuildPaste(card)
   P.steps:SetWordWrap(true)
   P.steps:SetPoint("TOPLEFT", 12, -48)
   P.steps:SetText(STEPS)
-  -- The paste box (d636): the Inset one level up with a black .6 fill, 0.2's multi-line EditBox as the scroll child.
+  -- The paste box (d636): the Inset one level up with the kit's pillBg fill, 0.2's multi-line EditBox as the scroll
+  -- child.
   P.inset = K.Inset(body) or CreateFrame("Frame", nil, body)
   P.inset:SetFrameLevel(level)
   local fill = P.inset:CreateTexture(nil, "ARTWORK")
   fill:SetAllPoints(P.inset)
-  fill:SetColorTexture(0, 0, 0, 0.6)
+  fill:SetColorTexture(C.pillBg[1], C.pillBg[2], C.pillBg[3], C.pillBg[4])
   local scroll, spare = ns.ScrollArea(P.inset)
   scroll:SetPoint("TOPLEFT", 8, -7)
   scroll:SetPoint("BOTTOMRIGHT", -22, 7)
@@ -203,7 +209,7 @@ function ns.BuildPaste(card)
   P.read = ns.Label(P.readback)
   P.read:SetPoint("TOPLEFT", 12, -12)
   P.held = ns.Label(P.readback)
-  P.sharing = ns.Label(P.readback, "GameFontHighlightSmall")
+  P.sharing = ns.Label(P.readback, T.highlightSmall)
   P.sharing:SetText(SHARING)
   P.readback:Hide()
   P.result = ns.Label(body)

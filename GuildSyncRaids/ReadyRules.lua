@@ -8,9 +8,15 @@ if not ns.M then return end
 --   report: Y ~ key ~ at ~ leader ~ flask ids ~ elixir ids ~ food ids ~ world ids ~ fire
 --   ask:    A ~ by ~ at ~ leader
 -- A key, by or leader holding either separator is never packed and never accepted.
+-- O, W and B (and later L) are packed by their ns.RaidsR owners (WIRE.md), never here. The raids_r domain allows
+-- DOMAINCHUNKS; Y and A stay at MAXCHUNKS (Within).
 
-local ReadyRules = { CATS = { "flask", "elixir", "food", "world" }, MAXIDS = 8, MAXCHUNKS = 4, FIREMAX = 1000,
-  KEYMAX = 48, SINCE = 60, ASKHOLD = 10, CHATMAX = 255, FSEP = "~", LSEP = "," }
+local ReadyRules = { CATS = { "flask", "elixir", "food", "world" }, MAXIDS = 8, MAXCHUNKS = 4, DOMAINCHUNKS = 16,
+  FIREMAX = 1000, KEYMAX = 48, SINCE = 60, ASKHOLD = 10, CHATMAX = 255, FSEP = "~", LSEP = "," }
+-- The longest Y or A text the router reads, whatever the header kind (o69): the worst-case report Pack makes is 371
+-- bytes (keys of KEYMAX, a 10-digit at, MAXIDS ids of 7 digits per category, fire FIREMAX), and 4 chunks with the
+-- longest header carry 612. A longer text is not a ready-check message and is never counted as bad.
+ReadyRules.MAXTEXT = 400
 ns.ReadyRules = ReadyRules
 local R = ReadyRules
 
@@ -113,6 +119,17 @@ function R.Unpack(logical, key)
     return msg
   end
   return nil
+end
+
+-- The kind letter a wire text starts with: one capital followed by FSEP or the end of the text, or nil.
+function R.Kind(logical)
+  if type(logical) ~= "string" then return nil end
+  return string.match(logical, "^(%u)" .. R.FSEP) or string.match(logical, "^(%u)$")
+end
+
+-- false only for a Y or an A of more than MAXCHUNKS chunks (the domain's receive limit).
+function R.Within(kind, n)
+  return not ((kind == "Y" or kind == "A") and type(n) == "number" and n > R.MAXCHUNKS)
 end
 
 -- The leader's table: one row per roster entry ({ guid, name }, PullRules.Snapshot's people) in roster order. A

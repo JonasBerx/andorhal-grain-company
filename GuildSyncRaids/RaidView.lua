@@ -9,6 +9,7 @@ if not ns.M then return end
 
 local M = ns.M
 local K = M.Kit
+local C, T = K.Tokens.colour, K.Tokens.text -- a text role is read in a function only (made on the first read)
 local LINK = "https://raid-helper.dev/event/%s" -- confirm in beta
 local DISCORD_SENTENCE = "Sign-ups are on Discord (Raid-Helper)."
 local SHADE_H = 56
@@ -17,12 +18,20 @@ local KINDS = { "primary", "late", "tentative", "bench", "absence" }
 local CELLS = { { "T", "Tanks", "tank" }, { "H", "Healers", "heal" }, { "M", "Melee", "dps" }, { "R", "Ranged", "dps" } }
 -- The tabs under the team line (S9 L1, plan Task 3): key and label (a string, or a function of the chosen raid). The
 -- chosen key is ns.PageState.tab, kept across raids and redraws. Ready (S9 L2) is last and shows only on a raid that is
--- tonight (ns.Tonight); a chosen "ready" draws as Sign-ups on any other raid.
+-- tonight (ns.Tonight); a chosen "ready" draws as Sign-ups on any other raid. Groups, Loot and Notes (F1, o50) come
+-- after Ready, each shown only when ns[show](ev) answers exactly true and drawn by ns[draw] (the ns.DrawPulls shape,
+-- the whole view fifth, o53); every owner delegate is looked up at call time and runs under M.Safe on its own. A chosen
+-- tab that is not shown draws as Sign-ups.
 local TABS = {
   { key = "signups", text = function(ev) return "Sign-ups (" .. #(ev and ev.signups or {}) .. ")" end },
   { key = "pulls", text = "Pulls" },
   { key = "ready", text = "Ready", tonight = true },
+  { key = "groups", text = "Groups", show = "ShowGroups", draw = "DrawGroups" },
+  { key = "loot", text = "Loot", show = "ShowLoot", draw = "DrawLoot" },
+  { key = "notes", text = "Notes", show = "ShowNotes", draw = "DrawNotes" },
 }
+-- The "You tonight" line's cells, in this order; each owner answers a string, or nil when the raid is not relevant.
+local YOU = { "YouGroup", "YouJobs", "YouReserves", "YouWish" }
 local TAB_H = 32 -- Kit.Tabs' holder height; the plain-button row takes the same room
 -- The Sign-ups tab's own parts on the card, hidden while the Pulls tab is chosen.
 local SIGNUP_PARTS = { "linkLabel", "link", "srLabel", "sr", "share", "strip", "kinds" }
@@ -40,6 +49,22 @@ local function at(f, x, y, point)
   f:SetPoint(point or "TOPLEFT", x, y)
 end
 
+-- One owner delegate call under M.Safe: fn's first result when it ran, nil when it threw (recorded under Raids) or is
+-- not a function.
+local function safe(fn, ...)
+  if type(fn) ~= "function" then return nil end
+  local good, v = M.Safe(fn, ...)
+  if good then return v end
+  return nil
+end
+
+-- Hides every delegate tab's body: ns[draw](card, nil).
+local function hideDelegates(card)
+  for _, tab in ipairs(TABS) do
+    if tab.draw then safe(ns[tab.draw], card, nil) end
+  end
+end
+
 -- GameTooltip is FrameXML (not in the API dataset, no M.Compat call): read guarded, as 0.2 did.
 local function tooltip() return type(GameTooltip) == "table" and GameTooltip or nil end
 
@@ -55,9 +80,8 @@ local function urlBox(parent)
 end
 
 local function shareButton(parent)
-  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  b:SetSize(70, 22)
-  b:SetText("Share")
+  local b = K.Button(parent, "Share", 70)
+  if not b then return nil end
   if b.SetMotionScriptsWhileDisabled then b:SetMotionScriptsWhileDisabled(true) end
   b:SetScript("OnEnter", function(self)
     local tip = self.tip and tooltip()
@@ -84,21 +108,22 @@ local function buildStrip(V, body)
   V.strip:SetHeight(46)
   V.stripBg = V.strip:CreateTexture(nil, "ARTWORK")
   V.stripBg:SetAllPoints(V.strip)
-  K.Atlas(V.stripBg, "groupfinder-Stat-StoneBG", { 0, 0, 0, 0.35 })
+  K.Atlas(V.stripBg, "groupfinder-Stat-StoneBG", C.panel)
   V.cells = {}
   for i, c in ipairs(CELLS) do
     local cell = {}
     cell.icon = V.strip:CreateTexture(nil, "ARTWORK", nil, 2)
     cell.icon:SetSize(27, 27)
     K.Atlas(cell.icon, "groupfinder-icon-role-large-" .. c[3])
-    cell.num = ns.Label(V.strip, "GameFontHighlightLarge")
-    cell.lab = ns.Label(V.strip, "GameFontHighlightSmall")
+    cell.num = ns.Label(V.strip, T.large)
+    cell.num:SetTextColor(ns.WHITE[1], ns.WHITE[2], ns.WHITE[3])
+    cell.lab = ns.Label(V.strip, T.highlightSmall)
     grey(cell.lab)
     cell.lab:SetText(c[2])
     if i > 1 then
       cell.div = V.strip:CreateTexture(nil, "ARTWORK", nil, 2)
       cell.div:SetSize(11, 40)
-      K.Atlas(cell.div, "common-framedivider", { 1, 1, 1, 0.12 })
+      K.Atlas(cell.div, "common-framedivider", C.divider)
     end
     V.cells[i] = cell
   end
@@ -114,38 +139,41 @@ function ns.BuildView(card)
   -- flat black .5 band.
   V.shade = body:CreateTexture(nil, "ARTWORK", nil, 1)
   if type(CreateColor) == "function" and V.shade.SetGradient then
-    V.shade:SetColorTexture(1, 1, 1, 1)
+    V.shade:SetColorTexture(ns.WHITE[1], ns.WHITE[2], ns.WHITE[3])
     V.shade:SetGradient("VERTICAL", CreateColor(0, 0, 0, 0.8), CreateColor(0, 0, 0, 0))
   else
-    V.shade:SetColorTexture(0, 0, 0, 0.5)
+    V.shade:SetColorTexture(C.pillBg[1], C.pillBg[2], C.pillBg[3], C.pillBg[4])
   end
-  V.title = ns.Label(body, "GameFontNormalLarge")
+  V.title = ns.Label(body, T.large)
   V.square = body:CreateTexture(nil, "ARTWORK")
   V.square:SetTexture("Interface\\Buttons\\WHITE8x8")
   V.square:SetSize(8, 8)
   V.team = ns.Label(body)
   V.team:SetWordWrap(false)
-  V.you = ns.Label(body, "GameFontHighlightSmall")
+  V.you = ns.Label(body, T.highlightSmall)
   grey(V.you)
   V.you:SetText("You")
   V.pill = K.Pill(body, "", "grey")
-  V.linkLabel = ns.Label(body, "GameFontNormalSmall")
+  V.linkLabel = ns.Label(body, T.small)
   V.linkLabel:SetText("Raid-Helper")
   V.link = urlBox(body)
-  V.srLabel = ns.Label(body, "GameFontNormalSmall")
+  V.srLabel = ns.Label(body, T.small)
   V.srLabel:SetText("Soft reserve")
   V.sr = urlBox(body)
   V.share = shareButton(body)
   buildStrip(V, body)
-  V.kinds = ns.Label(body, "GameFontHighlightSmall")
+  V.kinds = ns.Label(body, T.highlightSmall)
   grey(V.kinds)
   V.kinds:SetWordWrap(false)
+  -- "You tonight: ..." under the team line (not in V.top: it shows only when a cell answers)
+  V.tonight = ns.Label(body, T.highlightSmall)
+  V.tonight:SetWordWrap(false)
   -- the empty state
-  V.pick = ns.Label(body, "GameFontNormal", "CENTER")
+  V.pick = ns.Label(body, T.normal, "CENTER")
   V.pick:SetText("Pick a raid on the left")
-  V.nextLine = ns.Label(body, "GameFontHighlightSmall", "CENTER")
+  V.nextLine = ns.Label(body, T.highlightSmall, "CENTER")
   grey(V.nextLine)
-  V.discord = ns.Label(body, "GameFontHighlightSmall", "CENTER")
+  V.discord = ns.Label(body, T.highlightSmall, "CENTER")
   grey(V.discord)
   V.discord:SetText(DISCORD_SENTENCE)
   -- Everything the chosen raid shows (the art aside), hidden together for the empty state. Nil pieces are left out.
@@ -171,9 +199,7 @@ function ns.BuildView(card)
     V.tabButtons = {}
     for _, tab in ipairs(TABS) do
       local key = tab.key
-      local b = CreateFrame("Button", nil, body, "UIPanelButtonTemplate")
-      b:SetSize(100, 22)
-      b:SetText(tabText(tab, nil))
+      local b = K.Button(body, tabText(tab, nil), 100)
       b:SetScript("OnClick", function() M.Safe(choose, key) end)
       V.tabButtons[key] = b
       V.top[#V.top + 1] = b
@@ -182,10 +208,60 @@ function ns.BuildView(card)
   if ns.BuildSignups then ns.BuildSignups(card) end
 end
 
--- The tabs at y (the team line's y + 22) on every draw: the holder re-anchored (a resize moves the banner), each label
--- set (the Sign-ups count changes), the holder hidden and shown so the template re-sizes the tabs to their text (f9),
--- and the chosen tab selected. Kit's Select runs no onSelect, so this never redraws.
-local function drawTabs(V, ev, y, chosen, on)
+-- Each tab shown or hidden (shown[key]), and the shown ones chained left to right with no gap. A kit gap: Kit.Tabs
+-- anchors each tab on the previous one once, at build (GuildSync/Kit.lua:701-702, :723), and has no piece to hide a
+-- middle tab, so the shown tabs are anchored again here on every draw with the kit's own points. The fallback row
+-- puts the n-th shown button at 12 + (n - 1) * 104. With only Sign-ups, Pulls and Ready the points equal the build's.
+-- A strip that would pass the inner width (inner = viewW - 24) shares it evenly (o72): each kit tab gets
+-- floor((inner - 4 - 2 * (n - 1)) / n) and its label that width less the template's side padding, and each fallback
+-- button floor((inner - 4 * (n - 1)) / n), stepping by w + 4. A strip that fits keeps the template's widths (the kit
+-- re-sizes them on every draw, f9) and the fallback's 100.
+local TAB_TEXT_PAD = 20 -- PanelTemplates_TabResize's side padding around the label
+local function reanchorTabs(V, shown, y, inner)
+  local list, sum = {}, 0
+  for _, tab in ipairs(TABS) do
+    local b = V.tabs and V.tabs[tab.key] or V.tabButtons[tab.key]
+    local visible = shown[tab.key] == true
+    b:SetShown(visible)
+    if visible then
+      list[#list + 1] = b
+      sum = sum + (tonumber(b:GetWidth()) or 0)
+    end
+  end
+  local n = #list
+  local w
+  if V.tabs then
+    if n > 0 and 4 + sum + 2 * (n - 1) > inner then w = math.floor((inner - 4 - 2 * (n - 1)) / n) end
+  elseif n > 0 and (n - 1) * 104 + 100 > inner then
+    w = math.floor((inner - 4 * (n - 1)) / n)
+  end
+  for k, b in ipairs(list) do
+    if V.tabs then
+      b:ClearAllPoints()
+      if k > 1 then b:SetPoint("LEFT", list[k - 1], "RIGHT", 2, 0) else b:SetPoint("TOPLEFT", V.tabs.holder, "TOPLEFT", 4, 0) end
+      if w then
+        b:SetWidth(w)
+        local fs = b.GetFontString and b:GetFontString()
+        if fs then
+          fs:SetWidth(w - TAB_TEXT_PAD)
+          fs:SetWordWrap(false)
+        end
+      end
+    elseif w then
+      b:SetWidth(w)
+      at(b, 12 + (k - 1) * (w + 4), -(y + 4))
+    else
+      b:SetWidth(100)
+      at(b, 12 + (k - 1) * 104, -(y + 4))
+    end
+  end
+end
+
+-- The tabs at y (the team line's y + 22, or 18 more under "You tonight") on every draw: the holder re-anchored (a
+-- resize moves the banner), each label set (the Sign-ups count changes), the holder hidden and shown so the template
+-- re-sizes the tabs to their text (f9), the chosen tab selected, then the shown tabs re-anchored. Kit's Select runs no
+-- onSelect, so this never redraws.
+local function drawTabs(V, ev, y, chosen, shown, inner)
   if V.tabs then
     local h = V.tabs.holder
     h:ClearAllPoints()
@@ -194,17 +270,16 @@ local function drawTabs(V, ev, y, chosen, on)
     for _, tab in ipairs(TABS) do V.tabs[tab.key]:SetText(tabText(tab, ev)) end
     h:Hide()
     h:Show()
-    V.tabs.ready:SetShown(on)
     V.tabs:Select(chosen)
+    reanchorTabs(V, shown, y, inner)
     return tonumber(h:GetHeight()) or TAB_H
   end
-  for i, tab in ipairs(TABS) do
+  for _, tab in ipairs(TABS) do
     local b = V.tabButtons[tab.key]
-    at(b, 12 + (i - 1) * 104, -(y + 4))
     b:SetText(tabText(tab, ev))
     b:SetEnabled(tab.key ~= chosen)
-    if tab.tonight then b:SetShown(on) end
   end
+  reanchorTabs(V, shown, y, inner)
   return TAB_H
 end
 
@@ -231,7 +306,7 @@ local function drawEmpty(V, view, t, L)
   at(V.art, 3, -3)
   if ns.DrawArt(V.art, ns.ArtFor(nx.title), L.viewW - 6, L.banner) then
     if V.art.SetDesaturated then V.art:SetDesaturated(true) end
-    V.art:SetVertexColor(0.45, 0.45, 0.45)
+    V.art:SetVertexColor(ns.ART_DIM[1], ns.ART_DIM[2], ns.ART_DIM[3])
   end
   local team = " (" .. esc(nx.team) .. ")"
   if ns.Tonight and ns.Tonight(nx, t, date) then
@@ -287,12 +362,14 @@ function ns.DrawView(card, ev, view, rows, t, layout)
   V.nextLine:Hide()
   V.discord:Hide()
   if V.art.SetDesaturated then V.art:SetDesaturated(false) end
-  V.art:SetVertexColor(1, 1, 1)
+  V.art:SetVertexColor(ns.WHITE[1], ns.WHITE[2], ns.WHITE[3])
   if not ev then
     -- nothing chosen, or the chosen raid dropped out of the data (f4756): the people panel and its bar hide
     if ns.DrawSignups then ns.DrawSignups(card, nil, view, rows, t, L) end
     if ns.DrawPulls then ns.DrawPulls(card, nil) end
     if ns.DrawReady then ns.DrawReady(card, nil) end
+    hideDelegates(card)
+    V.tonight:Hide()
     return drawEmpty(V, view, t, L)
   end
   for _, f in ipairs(V.top) do f:Show() end
@@ -309,7 +386,7 @@ function ns.DrawView(card, ev, view, rows, t, layout)
   local slot = ns.SLOT[tonumber(ev.colour) or 0]
   at(V.square, 12, -(y + 3))
   if slot then
-    V.square:SetVertexColor(slot[1], slot[2], slot[3], 1)
+    V.square:SetVertexColor(slot[1], slot[2], slot[3])
   else
     V.square:Hide()
   end
@@ -326,11 +403,34 @@ function ns.DrawView(card, ev, view, rows, t, layout)
     at(V.you, -12, -y, "TOPRIGHT")
   end
   y = y + 22
-  local chosen = ns.PageState.tab or "signups"
+  -- "You tonight": the cells that answer a string, each escaped; no cell, no line and no height
+  local cells = {}
+  for _, name in ipairs(YOU) do
+    local s = safe(ns[name], ev)
+    if type(s) == "string" and s ~= "" then cells[#cells + 1] = esc(s) end
+  end
+  if #cells > 0 then
+    at(V.tonight, 12, -y)
+    V.tonight:SetWidth(IW)
+    V.tonight:SetText("You tonight: " .. table.concat(cells, " \194\183 "))
+    V.tonight:Show()
+    y = y + 18
+  else
+    V.tonight:Hide()
+  end
   local on = ns.Tonight(ev, t, date) and true or false
-  if chosen == "ready" and not on then chosen = "signups" end
-  y = y + drawTabs(V, ev, y, chosen, on)
-  if chosen == "pulls" or chosen == "ready" then
+  local shown = {}
+  for _, tab in ipairs(TABS) do
+    if tab.show then
+      shown[tab.key] = safe(ns[tab.show], ev) == true
+    else
+      shown[tab.key] = (not tab.tonight) or on
+    end
+  end
+  local chosen = ns.PageState.tab or "signups"
+  if not shown[chosen] then chosen = "signups" end
+  y = y + drawTabs(V, ev, y, chosen, shown, IW)
+  if chosen ~= "signups" then
     -- the sign-up parts hide; the people panel and its bar hide through DrawSignups' own nil path
     for _, k in ipairs(SIGNUP_PARTS) do
       if V[k] then V[k]:Hide() end
@@ -340,10 +440,14 @@ function ns.DrawView(card, ev, view, rows, t, layout)
     local ready = chosen == "ready" and ev or nil
     if ns.DrawPulls then ns.DrawPulls(card, pulls, L, y, view.events) end
     if ns.DrawReady then ns.DrawReady(card, ready, L, y, view.events) end
+    for _, tab in ipairs(TABS) do
+      if tab.draw then safe(ns[tab.draw], card, tab.key == chosen and ev or nil, L, y, view) end
+    end
     return
   end
   if ns.DrawReady then ns.DrawReady(card, nil) end
   if ns.DrawPulls then ns.DrawPulls(card, nil) end
+  hideDelegates(card)
   at(V.linkLabel, 12, -(y + 6))
   if V.link then
     at(V.link, 84, -y)

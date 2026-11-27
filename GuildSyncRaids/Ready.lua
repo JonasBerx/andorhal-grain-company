@@ -120,7 +120,8 @@ function ns.ReadyCheckMine()
   return take("check")
 end
 
--- Leader or assistant: a plain true from either call.
+-- Leader or assistant: a plain true from either call. Group.lua (ns.Leads) owns this rule; this copy stays because
+-- Group.lua loads after this file and readRoster, ReadyAsk and READY_CHECK need it.
 local function leads(unit)
   return call("UnitIsGroupLeader", unit) == true or call("UnitIsGroupAssistant", unit) == true
 end
@@ -147,14 +148,6 @@ local function leaderKey()
     if call("UnitIsGroupLeader", unit) == true then return unitKey(unit) end
   end
   return nil
-end
-
--- true when from is the key of a raid unit that is the leader or an assistant (plain true).
-local function askerLeads(from)
-  for _, unit in ipairs(RAID) do
-    if leads(unit) and unitKey(unit) == from then return true end
-  end
-  return false
 end
 
 -- Only a leader or assistant (live) reads raid1-40, out of combat, through PullRules.Snapshot (d1233). A nil
@@ -269,9 +262,11 @@ local function onReport(msg)
 end
 
 -- A: answered once with a fresh read, in a raid, out of combat, when the asker leads this raid, at most once per
--- ASKHOLD.
+-- ASKHOLD. The sender rule is Group.lua's ns.LeadsMyRaid, looked up at call time (it loads after this file); with
+-- none, the asker does not lead (o83).
 local function onAsk(_, from)
-  if M.Demo() or not inRaid() or call("InCombatLockdown") ~= false or not askerLeads(from) then return end
+  if M.Demo() or not inRaid() or call("InCombatLockdown") ~= false then return end
+  if not (type(ns.LeadsMyRaid) == "function" and ns.LeadsMyRaid(from)) then return end
   local t = now()
   if type(t) ~= "number" or (lastAnswer and t - lastAnswer < ns.ReadyRules.ASKHOLD) then return end
   local read = take("ready")
@@ -325,19 +320,84 @@ function ns.ReadyState()
   return out
 end
 
+-- ---------- the raids_r router (O, W, B; plan Seams) ----------
+-- An owner sets ns.RaidsR[kind] = { unpack, handle, pack, subject, v } at load, in a file after this one in the TOC.
+-- The leading letter of the text (ReadyRules.Kind) decides the routing; with no owner a routed text answers nil (the
+-- hub counts "unpack") and never touches the ready check's drops.
+ns.RaidsR = {}
+local ROUTED = { O = true, W = true, B = true }
+
+local function entryOf(kind) return ROUTED[kind] and type(ns.RaidsR) == "table" and ns.RaidsR[kind] or nil end
+
+local function unpackDomain(logical)
+  local kind = ns.ReadyRules.Kind(logical)
+  if not ROUTED[kind] then
+    -- o69: over MAXTEXT it came past the 4-chunk hold under another header kind; nil, and not counted as bad
+    if type(logical) == "string" and #logical > ns.ReadyRules.MAXTEXT then return nil end
+    return unpackReport(logical)
+  end
+  local e = entryOf(kind)
+  if type(e) ~= "table" or type(e.unpack) ~= "function" then return nil end
+  local msg = e.unpack(logical)
+  if type(msg) ~= "table" or msg.t ~= kind then return nil end
+  return msg
+end
+
+local function routedHandle(kind)
+  return function(msg, from, t)
+    if type(msg) ~= "table" or msg.t ~= kind then return end
+    local e = entryOf(kind)
+    if type(e) == "table" and type(e.handle) == "function" then M.Safe(e.handle, msg, from, t) end
+  end
+end
+
+-- Sends one routed message as "user": true, or nil and why. Y and A never go here (their own send above).
+function ns.SendRaidsR(msg)
+  local kind = type(msg) == "table" and msg.t or nil
+  if not ROUTED[kind] then return nil, "unknown kind" end
+  local e = entryOf(kind)
+  if type(e) ~= "table" or type(e.pack) ~= "function" then return nil, "no pack for kind " .. kind end
+  local me = ns.MyKey()
+  if me == nil or msg.by ~= me then return nil, "by is not you" end
+  if M.Demo() then return nil, "demo" end
+  if call("InCombatLockdown") ~= false then return nil, "combat" end
+  if not inRaid() then return nil, "not in a raid" end
+  local open, why = M.Comm.Gate(ID)
+  if not open then return nil, tostring(why) end
+  local okSend, whySend = M.Comm.Send(ID, msg, "user")
+  if not okSend then return nil, tostring(whySend) end
+  return true
+end
+
 local pull = {}
-function pull.pack(msg) return ns.ReadyRules.Pack(msg) end
-function pull.subject(msg)
+function pull.pack(msg)
+  local kind = type(msg) == "table" and msg.t or nil
+  if not ROUTED[kind] then return ns.ReadyRules.Pack(msg) end
+  local e = entryOf(kind)
+  if type(e) ~= "table" or type(e.pack) ~= "function" then return nil end
+  return e.pack(msg)
+end
+function pull.subject(msg, t)
   if type(msg) ~= "table" then return nil end
   if msg.t == "Y" then return msg.key, msg.at end
   if msg.t == "A" then return "ask", msg.at end
-  return nil
+  local e = entryOf(msg.t)
+  if type(e) ~= "table" or type(e.subject) ~= "function" then return nil end
+  local subject, version = e.subject(msg, t)
+  return subject, version
 end
 function pull.build() return nil end -- this domain only sends: nothing is asked for or rebuilt
 function pull.stillWanted() return false end
 
 local okDomain, whyDomain = M.Comm.Register({ id = ID, prefix = "GSync", audience = "guild", owner = "self",
-  maxChunks = ns.ReadyRules.MAXCHUNKS, kinds = { Y = { rule = "put" }, A = { rule = "action" } },
-  actions = { A = { actor = "sender", field = "by" } }, unpack = unpackReport, handle = { Y = onReport, A = onAsk } })
+  maxChunks = ns.ReadyRules.DOMAINCHUNKS,
+  kinds = { Y = { rule = "put" }, A = { rule = "action" }, O = { rule = "action" }, W = { rule = "action" },
+    B = { rule = "action" } },
+  actions = { A = { actor = "sender", field = "by" }, O = { actor = "sender", field = "by" },
+    W = { actor = "sender", field = "by" }, B = { actor = "sender", field = "by" } },
+  -- f2: Y and A stay at MAXCHUNKS on receive, refused "limited" at the first chunk, before assembly
+  limit = function(_, kind, _, _, n) return ns.ReadyRules.Within(kind, n) end,
+  unpack = unpackDomain,
+  handle = { Y = onReport, A = onAsk, O = routedHandle("O"), W = routedHandle("W"), B = routedHandle("B") } })
 if okDomain then okDomain, whyDomain = M.Sync.Pull(ID, pull) end
 if not okDomain then state.domainWhy = tostring(whyDomain) end

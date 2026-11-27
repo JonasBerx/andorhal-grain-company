@@ -1,24 +1,23 @@
 local _, ns = ...
 if not ns.M then return end
 
--- The chosen raid's lower half (right card, plan Task 5): the people panel (a black .35 fill and its own ScrollFrame)
--- with the sign-ups by kind and No answer (bench included); for an officer on a raid today the two Tonight lists with
--- Whisper and Invite per row (d368); the officer's invite bar above the card's bottom rim. Everything is drawn on
--- card.body. A name is its own FontString, only ns.Escape'd, its class colour set with SetTextColor (d635); the grey
--- "(online)" / "(offline)" marker is a second FontString. Nothing runs without a click: Whisper, Invite and Invite
--- next sign-ups act only from OnClick, through ns.Whisper and ns.InviteClick (Tools.lua), looked up at call time.
+-- The chosen raid's lower half (right card, plan Task 5): the people panel (the kit's panel fill and its own ScrollFrame)
+-- with the sign-ups by kind and No answer (bench included); for a viewer (ns.SeesInvites) on a complete raid today the
+-- Tonight section first (ns.DrawInviteLists, InvitesView.lua, through P.draw); the viewer's invite bar above the card's
+-- bottom rim. Everything is drawn on card.body. A name is its own FontString, only ns.Escape'd, its class colour set
+-- with SetTextColor (d635); the grey "(online)" / "(offline)" marker is a second FontString. Nothing runs without a
+-- click: Whisper, Invite and Invite next sign-ups act only from OnClick, through ns.Whisper and ns.InviteClick
+-- (Tools.lua), looked up at call time.
 
 local M = ns.M
 local K = M.Kit
+local C, T = K.Tokens.colour, K.Tokens.text -- a text role is read in a function only (made on the first read)
+local BUTTON_H = K.Tokens.space.buttonH -- the kit's button height, read once for the per-draw row buttons
 local SB = 22 -- the scrollbar's room on the right (plan section 2)
 local KINDS = { "primary", "late", "tentative", "bench", "absence" }
 local KIND_TITLE = { primary = "Primary", late = "Late", tentative = "Tentative", bench = "Bench", absence = "Absence" }
-local ROLE_ICON = { Tank = "tank", Healer = "heal", ["Melee DPS"] = "dps", ["Ranged DPS"] = "dps" }
-local NOT_IN = "Tonight: online, not in the raid"
-local NOT_SIGNED = "Tonight: online, not signed up"
-
+local ROLE_ICON = { Tank = "tank", Healer = "heal", ["Melee DPS"] = "dps", ["Ranged DPS"] = "dps", DPS = "dps" }
 local function esc(s) return ns.Escape(tostring(s or "")) end
-local function noPipes(s) return (string.gsub(tostring(s or ""), "|", "")) end
 local function grey(fs) fs:SetTextColor(ns.GREY[1], ns.GREY[2], ns.GREY[3]) end
 
 -- A divider across its parent at y, x in from both edges (K.Divider may answer nil).
@@ -50,7 +49,7 @@ local function colour(fs, r, signupClass)
   if type(cc) == "table" and cc.r then
     fs:SetTextColor(cc.r, cc.g, cc.b)
   else
-    fs:SetTextColor(1, 1, 1)
+    fs:SetTextColor(ns.WHITE[1], ns.WHITE[2], ns.WHITE[3])
   end
 end
 
@@ -77,7 +76,7 @@ local function resetPools(P)
 end
 
 local function rowButton(parent)
-  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  local b = K.Button(parent, "")
   b:SetScript("OnClick", function(self) if self.gsClick then M.Safe(self.gsClick) end end)
   return b
 end
@@ -89,7 +88,7 @@ function ns.BuildSignups(card)
   P.panel = CreateFrame("Frame", nil, body)
   P.fill = P.panel:CreateTexture(nil, "ARTWORK")
   P.fill:SetAllPoints(P.panel)
-  P.fill:SetColorTexture(0, 0, 0, 0.35)
+  P.fill:SetColorTexture(C.panel[1], C.panel[2], C.panel[3], C.panel[4])
   P.tile = P.panel:CreateTexture(nil, "ARTWORK", nil, 1)
   P.tile:SetPoint("TOPLEFT", P.panel, "TOPLEFT", 0, 0)
   P.tile:SetPoint("TOPRIGHT", P.panel, "TOPRIGHT", 0, 0)
@@ -100,21 +99,20 @@ function ns.BuildSignups(card)
   P.scroll:SetPoint("BOTTOMRIGHT", P.panel, "BOTTOMRIGHT", -SB, 4)
   local child = P.child
   P.tonightDiv = K.Divider(child)
-  P.note = child:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+  P.note = ns.Label(child, T.highlightSmall, "CENTER") -- CENTER: the game's default, as before ns.Label
   grey(P.note)
   P.note:SetText("primary and late sign-ups")
   local function fs(font, isGrey)
     return function()
-      local f = child:CreateFontString(nil, "OVERLAY", font)
-      f:SetJustifyH("LEFT")
+      local f = ns.Label(child, font)
       f:SetWordWrap(false)
       if isGrey then grey(f) end
       return f
     end
   end
   P.make = {
-    heads = fs("GameFontNormalSmall"), names = fs("GameFontHighlightSmall"), markers = fs("GameFontHighlightSmall", true),
-    roles = fs("GameFontHighlightSmall", true),
+    heads = fs(T.small), names = fs(T.highlightSmall), markers = fs(T.highlightSmall, true),
+    roles = fs(T.highlightSmall, true),
     icons = function()
       local t = child:CreateTexture(nil, "ARTWORK")
       t:SetSize(14, 14)
@@ -126,18 +124,28 @@ function ns.BuildSignups(card)
     buttons = { n = 0 } }
   -- the officer's bar
   P.barDiv = K.Divider(body)
-  P.result = body:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-  P.result:SetJustifyH("LEFT")
+  P.result = ns.Label(body, T.highlightSmall)
   P.result:SetWordWrap(true)
   grey(P.result)
-  P.invite = CreateFrame("Button", nil, body, "UIPanelButtonTemplate")
-  P.invite:SetSize(160, 22)
-  P.invite:SetText("Invite next sign-ups")
+  P.invite = K.Button(body, "Invite next sign-ups", 160)
   P.invite:SetScript("OnClick", function()
-    M.Safe(function() if P.ev then P.first = false; P.result:SetText(ns.InviteClick(P.ev)) end end)
+    M.Safe(function()
+      local click = ns.InviteClick
+      if P.ev and type(click) == "function" then
+        -- on a raid tonight the group is read again at click time, never the draw's P.st
+        local state, st = ns.InviteState, nil
+        if P.tonight and type(state) == "function" then st = state(P.ev) end
+        P.first = false
+        P.result:SetText(click(P.ev, nil, st))
+      end
+    end)
   end)
+  -- ticket 57: the Tonight section's summary line (InvitesView.lua draws it through P.draw.line)
+  P.line = ns.Label(child, T.highlightSmall)
+  P.line:SetWordWrap(true)
+  grey(P.line)
   P.all = {}
-  for _, k in ipairs({ "panel", "tonightDiv", "note", "barDiv", "result", "invite" }) do
+  for _, k in ipairs({ "panel", "tonightDiv", "note", "line", "barDiv", "result", "invite" }) do
     if P[k] then P.all[#P.all + 1] = P[k] end
   end
   for _, f in ipairs(P.all) do f:Hide() end
@@ -193,34 +201,46 @@ end
 local function button(P, text, x, y, w, onClick)
   local b = take(P, "buttons")
   at(b, x, -y)
-  b:SetSize(w, 22)
+  b:SetSize(w, BUTTON_H)
   b:SetText(text)
   b:SetEnabled(true) -- a reused button may have been disabled by an earlier draw
   b.gsClick = onClick
   return b
 end
 
--- One Tonight list: its heading, then a row per entry (name in class colour, no marker; Whisper; Invite with s).
-local function tonightList(P, rows, py, D, title, list, words, may)
-  heading(P, title .. (#list == 0 and ": nobody" or ""), py)
-  py = py + 18
-  for _, r in ipairs(list) do
-    local s = r.s
-    if s then icon(P, s.role, py + 4) end
-    local f = nameText(P, r.name, py + 6, (D.roleShown and 150 or D.PW - 156) - 34 - 6)
-    colour(f, rowOf(rows, r.name), s and s.class)
-    roleText(P, D, s and s.role, 150, py + 6)
-    local plain = noPipes(r.name)
-    button(P, "Whisper", D.PW - 156, py, 80, function() ns.Whisper(plain, words) end)
-    if s then
-      local b = button(P, "Invite", D.PW - 70, py, 70, function()
-        if may then P.first = false; P.result:SetText(ns.InviteClick(D.ev, s)) end
-      end)
-      b:SetEnabled(may and true or false)
-    end
-    py = py + 26
-  end
-  return py
+-- The panel's pooled helpers for InvitesView.lua (the P.draw seam; y positive downwards on P.child).
+local function drawHelpers(P)
+  return {
+    heading = function(text, py) heading(P, text, py) end,
+    name = function(text, py, width) return nameText(P, text, py, width) end,
+    marker = function(fs, text)
+      local m = take(P, "markers")
+      m:ClearAllPoints()
+      m:SetPoint("LEFT", fs, "RIGHT", 4, 0)
+      m:SetText(text)
+      return m
+    end,
+    icon = function(role, py) icon(P, role, py) end,
+    role = function(D, role, x, py) roleText(P, D, role, x, py) end,
+    colour = colour,
+    button = function(text, x, py, w, onClick) return button(P, text, x, py, w, onClick) end,
+    rowOf = rowOf,
+    say = function(line) P.first = false; P.result:SetText(line) end,
+    first = function() P.first = true end,
+    note = function(text, py)
+      at(P.note, 0, -(py + 1), "TOPRIGHT")
+      P.note:SetText(text)
+      P.note:Show()
+    end,
+    line = function(text, py)
+      at(P.line, 10, -py)
+      P.line:SetWidth(P.PW - 20)
+      P.line:SetHeight(28)
+      P.line:SetText(text)
+      P.line:Show()
+      return py + 30
+    end,
+  }
 end
 
 function ns.DrawSignups(card, ev, view, rows, t, layout, top)
@@ -239,7 +259,8 @@ function ns.DrawSignups(card, ev, view, rows, t, layout, top)
   local PW = IW - SB
   local barY = L.cardH - 24 - 34
   local me = ns.MyKey()
-  local officer = (me and ns.IsOfficer(me)) and true or false
+  local sees = ns.SeesInvites
+  local viewer = type(sees) == "function" and sees() == true
   if P.key ~= ev.key then
     P.key = ev.key
     P.scroll:SetVerticalScroll(0)
@@ -247,15 +268,29 @@ function ns.DrawSignups(card, ev, view, rows, t, layout, top)
   end
   -- the panel
   local y = top or 0
-  local bottom = officer and (barY - 10) or (L.cardH - 24)
+  local bottom = viewer and (barY - 10) or (L.cardH - 24)
   P.panel:ClearAllPoints()
   P.panel:SetPoint("TOPLEFT", card.body, "TOPLEFT", 12, -y)
   P.panel:SetSize(IW, math.max(1, bottom - y))
   P.panel:Show()
   P.child:SetWidth(PW)
-  local D = { PW = PW, roleShown = PW >= 390, ev = ev }
+  P.PW = PW
+  P.draw = P.draw or drawHelpers(P)
+  local D = { PW = PW, roleShown = PW >= 390, rows = rows, me = me }
   D.nameW = (D.roleShown and PW - 180 or PW) - 34 - 70
   local py = 6
+  -- the Tonight section first (ticket 57): a viewer, a complete raid, today; InvitesView.lua draws it
+  P.tonight = (viewer and ev.complete and ns.Tonight(ev, t, date)) and true or false
+  P.st = nil
+  if P.tonight then
+    local state, lists = ns.InviteState, ns.DrawInviteLists
+    if type(state) == "function" then P.st = state(ev, t) end
+    if P.st and type(lists) == "function" then
+      py = lists(P, ev, P.st, D, py, t)
+      rule(P.tonightDiv, 4, -py)
+      py = py + 8
+    end
+  end
   for _, k in ipairs(KINDS) do
     local list = {}
     for _, s in ipairs(ev.signups or {}) do if s.kind == k then list[#list + 1] = s end end
@@ -278,22 +313,9 @@ function ns.DrawSignups(card, ev, view, rows, t, layout, top)
     py = py + 17
   end
   py = py + 4
-  -- the Tonight lists: an officer, a complete raid, today
-  if officer and ev.complete and ns.Tonight(ev, t, date) then
-    rule(P.tonightDiv, 4, -py)
-    py = py + 8
-    local lists = ns.TonightLists(ev, me, t, date)
-    local title = noPipes(ev.title)
-    at(P.note, 0, -(py + 1), "TOPRIGHT")
-    P.note:Show()
-    py = tonightList(P, rows, py, D, NOT_IN, lists.notIn,
-      "Raid tonight: " .. title .. ". You are signed up: an invite is on its way, or whisper me.", lists.mayInvite)
-    py = tonightList(P, rows, py, D, NOT_SIGNED, lists.notSigned,
-      "Raid tonight: " .. title .. ". Please sign up on Discord (Raid-Helper) or tell me if you can't come.", false)
-  end
   P.child:SetHeight(math.max(10, py))
-  -- the officer's bar
-  if not officer then return end
+  -- the viewer's bar
+  if not viewer then return end
   rule(P.barDiv, 12, -(barY - 6))
   at(P.result, 12, -(barY + 1))
   P.result:SetWidth(IW - 172)
@@ -305,7 +327,13 @@ function ns.DrawSignups(card, ev, view, rows, t, layout, top)
   end
   -- The first words follow the current batch (/gsraids batch, the Options dropdown) at every draw (f4768).
   if P.first then
-    P.result:SetText("One click invites the next " .. (ns.DB().batch or 5) .. " online primary and late sign-ups.")
+    local source = ns.InviteSource
+    local n = ns.DB().batch or 5
+    if P.tonight and type(source) == "function" and source(ev) == "roster" then
+      P.result:SetText("One click invites the next " .. n .. " online players on the roster, group 1 first.")
+    else
+      P.result:SetText("One click invites the next " .. n .. " online primary and late sign-ups.")
+    end
   end
   at(P.invite, -12, -(barY + 2), "TOPRIGHT")
   P.invite:Show()

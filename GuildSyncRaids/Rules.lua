@@ -2,7 +2,8 @@ local _, ns = ...
 if not ns.M then return end
 
 -- Pure rules (plan "Newest wins, stale guard, snapshot", "Expiry, gone, compare"): the paste plan, the held data,
--- compare, the view, status, age, weeks, selfcheck. Built on ns.Codec. No client calls; only string, table, math.
+-- compare, the view (with the rosters' lineups), status, age, weeks, selfcheck. Built on ns.Codec. No client calls;
+-- only string, table, math. A roster (g key, ROSTER-FORMAT.md) is never the held data and the paste never cancels it.
 -- records = { [key] = { rev, hash, by, body } }; gone = { [key] = { at, rev } }; now = epoch seconds.
 
 local Codec = ns.Codec
@@ -16,6 +17,7 @@ local ROLE_CODE = { Tank = "T", Healer = "H", ["Melee DPS"] = "M", ["Ranged DPS"
 local function isX(body) return string.sub(body or "", 1, 2) == "X," end
 local function live(r, now) return r and type(r.body) == "string" and not Codec.Expired(r.body, now) end
 local function count(t) local n = 0; for _ in pairs(t) do n = n + 1 end; return n end
+local function isRoster(key) return string.sub(key, 1, 1) == "g" end
 
 -- When a record stops being kept: its finish + 1 day, or (team lists and their X) its gen + 15 days.
 local function expiry(body)
@@ -38,7 +40,7 @@ Rules.Duration = duration
 function Rules.Held(records, now)
   local best, bestRev, bestKey
   for key, r in pairs(records or {}) do
-    if live(r, now) then
+    if not isRoster(key) and live(r, now) then
       local rev = tonumber(r.rev) or 0
       if not best or rev > bestRev or (rev == bestRev and key > bestKey) then
         local d = Codec.Decode(r.body)
@@ -102,7 +104,7 @@ function Rules.Plan(cal, records, now, by)
 
   -- Snapshot: every held, live, non-X key the paste does not make gets an X; an event only inside the paste's window.
   for key, r in pairs(records) do
-    if not put[key] and Codec.ValidKey(key) and live(r, now) and not isX(r.body) then
+    if not put[key] and not isRoster(key) and Codec.ValidKey(key) and live(r, now) and not isX(r.body) then
       local d = Codec.Decode(r.body)
       if d and (string.sub(key, 1, 1) == "t" or (d.finish and d.finish > gen - DAY)) then
         put[key] = Codec.Cancel(r.body, gen, at)
@@ -111,8 +113,10 @@ function Rules.Plan(cal, records, now, by)
   end
   if next(put) == nil then return nil, "empty", {} end
 
-  -- Held-set cap: the put plus every kept live held key, X included.
+  -- Held-set cap: the put plus every kept live held key, X included. Roster records count toward it but not in xCount
+  -- or oldestExpiry, which are about cancelled raids.
   local total, xCount, oldest = count(put), 0, nil
+  local rosterRecords, rosters = 0, {}
   local function seeX(body)
     if not isX(body) then return end
     xCount = xCount + 1
@@ -123,10 +127,17 @@ function Rules.Plan(cal, records, now, by)
   for key, r in pairs(records) do
     if not put[key] and Codec.ValidKey(key) and live(r, now) then
       total = total + 1
-      seeX(r.body)
+      if isRoster(key) then
+        rosterRecords = rosterRecords + 1
+        if not isX(r.body) then rosters[string.match(key, "^g%d+")] = true end
+      else
+        seeX(r.body)
+      end
     end
   end
-  if total > Rules.MAX_SHARE then return nil, "records", { xCount = xCount, oldestExpiry = oldest } end
+  if total > Rules.MAX_SHARE then
+    return nil, "records", { xCount = xCount, oldestExpiry = oldest, rosters = count(rosters), rosterRecords = rosterRecords }
+  end
 
   rb.records = count(put)
   return { put = put, readback = rb }
@@ -179,7 +190,7 @@ local function gather(records, now, letter)
       if d then
         local i = (suf == "" and 1) or (suf == "b" and 2) or (suf == "c" and 3) or 4
         groups[base] = groups[base] or {}
-        groups[base][i] = { d = d, rev = tonumber(r.rev) or 0 }
+        groups[base][i] = { d = d, rev = tonumber(r.rev) or 0, by = r.by }
       end
     end
   end
@@ -262,6 +273,55 @@ function Rules.View(records, now, keyFn)
     return idLess(a.id, b.id)
   end)
   for _, t in pairs(view.teams) do t.rev = nil end
+
+  -- Rosters: every part-1-held roster whose items keep the rules across parts is listed; complete ones get a lineup.
+  -- A name keyFn cannot key keeps key nil and is never a duplicate by key.
+  local raidOf = {}
+  for _, ev in ipairs(view.events) do raidOf[ev.id] = ev end
+  view.lineups, view.lineupOf = {}, {}
+  local newest = {}
+  for base, parts in pairs(gather(records, now, "g")) do
+    if parts[1] and parts[1].d.size then
+      local head = parts[1].d
+      local items, complete = assemble(parts)
+      local good = Codec.RosterCheck(head.size, items)
+      local seen, groups, reserve = {}, {}, {}
+      for g = 1, head.size / 5 do groups[g] = { false, false, false, false, false } end
+      for _, it in ipairs(good and items or {}) do
+        local seat = { name = it.name, key = keyFn(it.name), role = it.role, off = it.off, class = it.class }
+        if seat.key then
+          if seen[seat.key] then good = false end
+          seen[seat.key] = true
+        end
+        if it.group == 0 then reserve[#reserve + 1] = seat else groups[it.group][it.seat] = seat end
+      end
+      if good then
+        local raid = head.event and raidOf[head.event]
+        local name = head.name
+        if name == "" then name = (raid and raid.title ~= "" and raid.title) or "Roster" end
+        local l = { key = base, name = name, size = head.size, when = raid and raid.start or nil, event = head.event,
+          by = parts[1].by, at = head.gen, made = head.at, complete = complete }
+        view.lineups[#view.lineups + 1] = l
+        if complete then
+          view.lineupOf[base] = { key = base, name = name, size = head.size, when = l.when, event = head.event,
+            by = l.by, at = head.gen, made = head.at, groups = groups, reserve = reserve }
+        end
+        -- ev.lineup: the newest listed save linked to the raid (ties to the larger key), nil while it is incomplete
+        local cur = head.event and newest[head.event]
+        if head.event and (not cur or l.at > cur.at or (l.at == cur.at and idLess(cur.key, l.key))) then
+          newest[head.event] = l
+        end
+      end
+    end
+  end
+  table.sort(view.lineups, function(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    return idLess(a.key, b.key)
+  end)
+  for _, ev in ipairs(view.events) do
+    local l = newest[ev.id]
+    ev.lineup = l and view.lineupOf[l.key]
+  end
   return view
 end
 
@@ -323,7 +383,9 @@ function Rules.SelfCheck(o)
   if not o.known then return "wait", "waiting for the guild roster" end
   local view = o.view or { events = {}, incomplete = 0 }
   local n = #(view.events or {})
+  local r = #(view.lineups or {})
   local text = n .. (n == 1 and " raid" or " raids") .. ", " .. (view.incomplete or 0) .. " incomplete"
+    .. ", " .. r .. (r == 1 and " roster" or " rosters")
   if view.held then text = text .. ", " .. (Rules.Age(view.held, o.now)) else text = text .. ", no raid data yet" end
   return "pass", text
 end

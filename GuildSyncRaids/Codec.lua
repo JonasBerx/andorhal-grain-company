@@ -4,6 +4,8 @@ if not ns.M then return end
 -- Pure record body codec (plan "Record body"): caps, escapes, codes, parts, keys, expiry. No client calls.
 --   body = head *( ";" item ); head = kind,gen,at,n,finish [,f1,f2,f3] (part 1 only)
 --   E part 1: team, start, title. L part 1: team, colour. X: no items.
+--   G (roster, ROSTER-FORMAT.md) part 1: size, name, raid id; item Name,<group><seat><main><off>[class]; a later
+--   part's head is exactly 5 fields.
 
 local Codec = {}
 ns.Codec = Codec
@@ -24,6 +26,8 @@ local function invert(t)
   return out
 end
 local ROLE_OF, CLASS_OF, KIND_OF = invert(ROLE), invert(CLASS), invert(KIND)
+local SEAT_ROLE = { T = "T", H = "H", D = "D" }
+local ROSTER_NAME = 40 -- code points; a person's name keeps CAP.character bytes
 
 local ESC = { ["%"] = "%25", ["~"] = "%7E", [";"] = "%3B", [","] = "%2C", ["|"] = "%7C" }
 
@@ -40,6 +44,20 @@ local function clean(s, cap)
   return string.sub(s, 1, i - 1)
 end
 Codec.Clean = clean
+
+-- Strip C0 and DEL, then cut before the n+1-th UTF-8 lead byte (n code points).
+local function chars(s, n)
+  s = string.gsub(tostring(s or ""), "[%z\1-\31\127]", "")
+  local count = 0
+  for i = 1, #s do
+    local b = string.byte(s, i)
+    if b < 128 or b > 191 then
+      count = count + 1
+      if count > n then return string.sub(s, 1, i - 1) end
+    end
+  end
+  return s
+end
 
 local function esc(s, cap) return (string.gsub(clean(s, cap), "[%%~;,|]", ESC)) end
 
@@ -69,7 +87,7 @@ local function cell(v) if v == nil then return "" end return tostring(v) end
 
 function Codec.ValidKey(key)
   if type(key) ~= "string" then return false end
-  local digits = string.match(key, "^e(%d+)[bcd]?$")
+  local digits = string.match(key, "^[eg](%d+)[bcd]?$")
   if digits then return #digits <= 20 end
   return string.match(key, "^t[1-6][bcd]?$") ~= nil
 end
@@ -133,6 +151,50 @@ function Codec.EncodeTeam(team, n, gen, at)
   end, function(parts) return base .. parts .. "," end, items)
 end
 
+-- A roster's places and people (ROSTER-FORMAT.md "Caps"): size, then each item's place, seat taken and person twice,
+-- then the reserve count.
+function Codec.RosterCheck(size, items)
+  if size ~= 10 and size ~= 20 and size ~= 40 then return nil, "size" end
+  local seats, people, reserve = {}, {}, 0
+  for _, it in ipairs(items or {}) do
+    local g, s = tonumber(it.group) or -1, tonumber(it.seat) or -1
+    if g == 0 and s == 0 then
+      reserve = reserve + 1
+    else
+      if g < 1 or g > size / 5 or s < 1 or s > 5 then return nil, "seat" end
+      if seats[g * 10 + s] then return nil, "taken" end
+      seats[g * 10 + s] = true
+    end
+    if it.name ~= nil then
+      if people[it.name] then return nil, "person" end
+      people[it.name] = true
+    end
+  end
+  if reserve > 20 then return nil, "reserve" end
+  return true
+end
+
+-- Seats in group then seat order, then the reserve (group and seat 00). No checks beyond pack's part limit.
+function Codec.EncodeRoster(r, gen, at)
+  local items = {}
+  local function add(x, place)
+    items[#items + 1] = esc(x.name, CAP.character) .. "," .. place .. (SEAT_ROLE[x.role] or "-")
+      .. (SEAT_ROLE[x.off] or "-") .. (CLASS[x.class] or "")
+  end
+  for g, grp in ipairs(r.groups or {}) do
+    for s = 1, 5 do
+      if grp[s] then add(grp[s], g .. s) end
+    end
+  end
+  for _, x in ipairs(r.reserve or {}) do add(x, "00") end
+  local base = "G," .. cell(gen) .. "," .. cell(at) .. ","
+  local tail = "," .. cell(r.finish)
+  local name = esc(chars(r.name, ROSTER_NAME), 4 * ROSTER_NAME)
+  return pack("g" .. tostring(r.id), function(n)
+    return base .. n .. tail .. "," .. cell(r.size) .. "," .. name .. "," .. cell(r.event)
+  end, function(n) return base .. n .. tail end, items)
+end
+
 -- The head cells of a body, unparsed.
 local function head(body)
   return split(string.match(body, "^[^;]*"), ",")
@@ -158,6 +220,7 @@ function Codec.Expired(body, now)
   if finish then return finish <= now - DAY end
   local gen = num(h[2] or "")
   if not gen then return true end
+  if h[1] == "G" then return false end -- a roster with no end time is kept until cancelled
   return gen <= now - TEAM_DAYS * DAY
 end
 
@@ -173,7 +236,7 @@ function Codec.Decode(body)
   local records = split(body, ";")
   local h = split(records[1], ",")
   local kind = h[1]
-  if #h < 5 or (kind ~= "E" and kind ~= "L" and kind ~= "X") then return nil end
+  if #h < 5 or (kind ~= "E" and kind ~= "L" and kind ~= "X" and kind ~= "G") then return nil end
   local gen = num(h[2])
   local at, okAt = num(h[3])
   local n = num(h[4])
@@ -197,6 +260,16 @@ function Codec.Decode(body)
     rec.team = text(h[6], CAP.team)
     rec.colour, ok = num(h[7])
     if not rec.team or not ok then return nil end
+  elseif kind == "G" and #h >= 8 then
+    -- h[9] on are ignored (a later version's fields). The name is cut to 40 code points after the unescape.
+    local raw = unesc(h[7])
+    rec.size = num(h[6])
+    if not rec.size or not raw then return nil end
+    rec.name = clean(chars(raw, ROSTER_NAME), 4 * ROSTER_NAME)
+    if h[8] ~= "" then
+      if not string.match(h[8], "^%d+$") or #h[8] > 20 then return nil end
+      rec.event = h[8]
+    end
   elseif #h ~= 5 then
     return nil
   end
@@ -213,11 +286,21 @@ function Codec.Decode(body)
       if not discord then return nil end
       rec.items[#rec.items + 1] = { character = character, discord = discord,
         role = ROLE_OF[string.sub(code, 1, 1)] or "", class = CLASS_OF[string.sub(code, 2, 2)] or "", kind = k }
+    elseif kind == "G" then
+      -- an unknown role, off or class letter reads nil; cells after the code are ignored
+      local code = f[2]
+      local g, s = string.match(code, "^(%d)(%d)")
+      if character == "" or not g or (#code ~= 4 and #code ~= 5) then return nil end
+      rec.items[#rec.items + 1] = { name = character, group = tonumber(g), seat = tonumber(s),
+        role = SEAT_ROLE[string.sub(code, 3, 3)], off = SEAT_ROLE[string.sub(code, 4, 4)],
+        class = CLASS_OF[string.sub(code, 5, 5)] }
     else
       local k = (f[2] == "a" and "active") or (f[2] == "b" and "bench") or nil
       if not k then return nil end
       rec.items[#rec.items + 1] = { character = character, kind = k }
     end
   end
+  -- a later part has no size: its places are checked against 40
+  if kind == "G" and not Codec.RosterCheck(rec.size or 40, rec.items) then return nil end
   return rec
 end

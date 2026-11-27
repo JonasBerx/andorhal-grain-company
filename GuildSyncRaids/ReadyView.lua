@@ -10,11 +10,13 @@ if not ns.M then return end
 -- on card.body.
 
 local M = ns.M
+local K = M.Kit
+local C, T = K.Tokens.colour, K.Tokens.text -- a text role is read in a function only (made on the first read)
 local call = M.Compat.call
 local Plain = GuildSync.Compat.Plain
 local ID = "raids_r"
 local SB, ROW_H = 22, 14 -- the scrollbar's room on the right; one table row
-local GREEN = { 0.1, 1, 0.1 }
+local GREEN = C.green
 local CATS = ns.ReadyRules.CATS
 local LABEL = { flask = "Flask", elixir = "Elixirs", food = "Food", world = "World buffs" }
 local HEADS = { "Name", "Flask", "Elixirs", "Food", "World", "Fire res" }
@@ -94,7 +96,7 @@ local function redraw()
 end
 
 local function label(parent, font, c)
-  local fs = ns.Label(parent, font or "GameFontHighlightSmall")
+  local fs = ns.Label(parent, font or T.highlightSmall)
   if c then color(fs, c) end
   return fs
 end
@@ -110,9 +112,7 @@ local function place(fs, x, y, w, text, c)
 end
 
 local function button(parent, text, w, why, click)
-  local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-  b:SetSize(w, 22)
-  b:SetText(text)
+  local b = K.Button(parent, text, w)
   if b.SetMotionScriptsWhileDisabled then b:SetMotionScriptsWhileDisabled(true) end
   b:SetScript("OnEnter", function(self)
     M.Safe(function()
@@ -168,12 +168,12 @@ local function build(card)
   V.hidden = label(V.lead, nil, ns.GREY)
   V.heads = {}
   for i, h in ipairs(HEADS) do
-    V.heads[i] = label(V.lead, "GameFontNormalSmall")
+    V.heads[i] = label(V.lead, T.small)
     V.heads[i]:SetText(h)
     V.heads[i]:SetWordWrap(false)
   end
   V.rule = V.lead:CreateTexture(nil, "ARTWORK")
-  V.rule:SetColorTexture(1, 0.82, 0, 0.3)
+  V.rule:SetColorTexture(C.cardAccent[1], C.cardAccent[2], C.cardAccent[3], C.cardAccent[4])
   V.scroll, V.child = ns.ScrollArea(V.lead)
   V.hover = label(V.lead, nil, ns.GREY)
   V.summary = label(V.lead, nil, ns.WHITE)
@@ -199,7 +199,7 @@ local function build(card)
   V.ownHead = label(V.mine, nil, ns.GREY)
   V.ownGate = label(V.mine, nil, ns.ORANGE)
   V.cannot = label(V.mine, nil, ns.ORANGE)
-  for i = 1, 5 do V.own[i] = { lab = label(V.mine, "GameFontNormalSmall"), val = label(V.mine) } end
+  for i = 1, 5 do V.own[i] = { lab = label(V.mine, T.small), val = label(V.mine) } end
   V.note = label(V.mine, nil, ns.GREY)
   V.check = button(V.mine, "Check my buffs", 130, nil, function()
     if demo() then V.barText = DEMO_LINE return redraw() end
